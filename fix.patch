@@ -1,0 +1,10 @@
+--- src/components/layout/Sidebar.tsx
++++ src/components/layout/Sidebar.tsx
+@@ -448,5 +448,6 @@
+                 <span className="material-symbols-outlined text-[20px]">groups</span>
+                 <span>Customer Report</span>
+               </NavLink>
+-          </>
+             </div>
++          </>
+         )}
