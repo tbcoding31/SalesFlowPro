@@ -1,0 +1,115 @@
+name: Build & Deploy SalesFlow Pro
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  FRONTEND_IMAGE: ghcr.io/tbcoding31/salesflowpro-frontend
+  BACKEND_IMAGE: ghcr.io/tbcoding31/salesflowpro-backend
+
+jobs:
+  build-and-push:
+    name: Build & Push Docker Images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+          cache: 'npm'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend (validation)
+        run: npm run build
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set image tag
+        id: tag
+        run: echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Build & push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.FRONTEND_IMAGE }}:${{ steps.tag.outputs.sha }}
+            ${{ env.FRONTEND_IMAGE }}:latest
+
+      - name: Build & push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ env.BACKEND_IMAGE }}:${{ steps.tag.outputs.sha }}
+            ${{ env.BACKEND_IMAGE }}:latest
+
+  deploy:
+    name: Deploy to Production
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: tag
+        run: echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Deploy to server via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+
+            # Navigate to project directory
+            cd ~/salesflowpro
+
+            # Pull latest compose files
+            git pull origin main
+
+            # Set image tag
+            export IMAGE_TAG=${{ steps.tag.outputs.sha }}
+
+            # Login to GHCR (requires GHCR_TOKEN on server)
+            echo $GHCR_TOKEN | docker login ghcr.io -u tbcoding31 --password-stdin
+
+            # Pull new images and recreate containers (minimal downtime)
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+            # Wait for containers to start
+            sleep 10
+
+            # Health check
+            if wget --no-verbose --tries=3 --spider http://localhost:3100/ 2>/dev/null; then
+              echo "✅ Deployment successful — frontend is responding on port 3100"
+            else
+              echo "❌ Health check failed — frontend not responding"
+              docker compose -f docker-compose.yml -f docker-compose.prod.yml logs --tail=50
+              exit 1
+            fi

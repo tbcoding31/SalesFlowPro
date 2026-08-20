@@ -1,0 +1,47 @@
+# Dependencies (will be installed fresh in container)
+node_modules
+
+# Git
+.git
+.github
+.gitignore
+
+# Docker files (prevent recursive context)
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Environment files with secrets
+.env
+.env.local
+.env.production
+
+# Backend (separate Docker image)
+backend
+
+# Build output (built inside container)
+dist
+build
+coverage
+
+# Temporary/ad-hoc scripts
+*.cjs
+*.sh
+*.patch
+scratc
+
+# IDE and OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Misc
+FETCH_HEAD
+bun.lock
+.antigravity
+assets

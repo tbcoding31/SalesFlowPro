@@ -1,6 +1,6 @@
 import { DataService } from './dataService';
 
-const API_URL = 'http://localhost:5000/api';
+const API_URL = '/api';
 
 const fetchAndSync = async (endpoint: string, key: string) => {
   try {

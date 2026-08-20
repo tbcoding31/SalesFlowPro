@@ -61,7 +61,7 @@ function getLocal<T>(key: string, initial: T): T {
 
 
 const syncPush = (method: 'POST'|'PUT'|'DELETE', endpoint: string, data?: any) => {
-  fetch(`http://localhost:5000/api/${endpoint}`, {
+  fetch(`/api/${endpoint}`, {
     method,
     headers: { 'Content-Type': 'application/json' },
     body: data ? JSON.stringify(data) : undefined

@@ -51,7 +51,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (email: string, password: string): Promise<boolean> => {
     setIsLoading(true);
     try {
-      const res = await fetch('http://localhost:5000/api/auth/login', {
+      const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -78,7 +78,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
       // HYDRATION: Fetch all DB data and store to localStorage before navigating
       try {
-        const syncRes = await fetch(`http://localhost:5000/api/sync/all?tenantId=${data.tenantId}`);
+        const syncRes = await fetch(`/api/sync/all?tenantId=${data.tenantId}`);
         if (syncRes.ok) {
           const syncData = await syncRes.json();
           localStorage.setItem('sfp_tenants_v1', JSON.stringify(syncData.tenants || []));

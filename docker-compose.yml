@@ -1,0 +1,31 @@
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: salesflowpro-frontend
+    ports:
+      - "3100:3100"
+    depends_on:
+      backend:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - salesflow-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: salesflowpro-backend
+    ports:
+      - "5000:5000"
+    env_file:
+      - ./backend/.env
+    restart: unless-stopped
+    networks:
+      - salesflow-network
+
+networks:
+  salesflow-network:
+    driver: bridge

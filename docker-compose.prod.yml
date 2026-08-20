@@ -1,0 +1,21 @@
+# Production override — uses pre-built images from GHCR
+#
+# Usage:
+#   IMAGE_TAG=abc1234 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# IMAGE_TAG should be the short commit SHA from the CI/CD pipeline.
+# Falls back to 'latest' if not specified.
+#
+# When 'image' is specified alongside 'build', Docker Compose will use the
+# pre-built image from the registry rather than building locally.
+
+services:
+  frontend:
+    image: ghcr.io/tbcoding31/salesflowpro-frontend:${IMAGE_TAG:-latest}
+    restart: always
+
+  backend:
+    image: ghcr.io/tbcoding31/salesflowpro-backend:${IMAGE_TAG:-latest}
+    ports:
+      - "127.0.0.1:5000:5000"
+    restart: always
