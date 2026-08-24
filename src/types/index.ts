@@ -341,14 +341,29 @@ export interface AuditLog {
   timestamp: string;
 }
 
+export interface PermissionDefinition {
+  id: string;
+  code: string;
+  name: string;
+  description: string;
+  module: string;
+  category: string;
+  isSystem: boolean | number;
+  isTenantAssignable: boolean | number;
+  status: string;
+}
+
 export interface RolePermissions {
   role: UserRole;
   roleName: string;
   scope?: 'SYSTEM' | 'TEMPLATE' | 'TENANT' | string;
   isSystem?: boolean | number;
   tenantId?: string | null;
+  description?: string;
+  memberCount?: number;
   dataScope: 'OWN' | 'TEAM' | 'DEPARTMENT' | 'ORGANIZATION' | 'SYSTEM';
-  permissions: {
+  assignedPermissions?: string[];
+  permissions?: {
     module: string;
     view: boolean;
     create: boolean;

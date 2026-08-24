@@ -469,6 +469,22 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => 
                       <span className="material-symbols-outlined text-[20px]">manage_accounts</span>
                       <span>User Management</span>
                     </NavLink>
+
+                    {(hasPermission('MANAGE_ROLES') || hasPermission('ALL')) && (
+                      <NavLink
+                        to="/admin/roles"
+                        className={({ isActive }) =>
+                          `flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
+                            isActive
+                              ? 'bg-[#e1dfff] text-[#09006b] font-semibold border-l-4 border-[#4744e5]'
+                              : 'text-[#464555] hover:bg-[#f3f3f3] hover:text-[#1a1c1c]'
+                          }`
+                        }
+                      >
+                        <span className="material-symbols-outlined text-[20px]">security</span>
+                        <span>Roles & Permissions</span>
+                      </NavLink>
+                    )}
                   </div>
                 )}
               </div>

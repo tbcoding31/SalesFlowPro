@@ -774,10 +774,35 @@ const tables = [
   'customers', 'projects', 'tasks', 'visits', 'activities', 'sales_targets', 'audit_logs',
   'task_priorities', 'task_statuses', 'project_stages', 'visit_purposes', 'visit_statuses',
   'activity_types', 'customer_types', 'customer_statuses', 'departments', 'positions',
-  'roles', 'permissions', 'role_permissions', 'role_data_scopes'
+  'permissions', 'role_permissions', 'role_data_scopes'
 ];
 
 
+
+// Explicit GET /api/roles Endpoint
+app.get('/api/roles', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  let query = `SELECT * FROM roles`;
+  const params: any[] = [];
+
+  if (actorTenant && actorTenant !== 'SYSTEM') {
+    query += ' WHERE tenantId = ? AND scope = "TENANT"';
+    params.push(actorTenant);
+  } else {
+    const { tenantId } = req.query;
+    if (tenantId && tenantId !== 'ALL' && tenantId !== 'SYSTEM') {
+      query += ' WHERE tenantId = ?';
+      params.push(tenantId);
+    }
+  }
+
+  sendRes(res, pool.query(query, params).then(([rows]) => rows));
+});
 
 // Advanced Tenants Endpoint (Overrides generic GET /api/tenants)
 app.get('/api/tenants', async (req, res) => {
@@ -1408,6 +1433,141 @@ tables.forEach(table => setupEndpoint(table));
       res.status(500).json({ error: 'Internal Server Error' });
     } finally {
       connection.release();
+    }
+  });
+
+  // Dedicated POST /api/roles: Create custom tenant role
+  app.post('/api/roles', async (req, res) => {
+    const actorRole = (req as any).userRole;
+    const actorTenant = (req as any).userTenantId;
+    const actorPermissions = (req as any).userPermissions || [];
+    const isPlatformUser = (req as any).isPlatformUser;
+
+    if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+    if (!actorPermissions.includes('ALL') && !actorPermissions.includes('MANAGE_ROLES')) {
+      return res.status(403).json({ error: 'Forbidden. Requires MANAGE_ROLES capability.' });
+    }
+
+    try {
+      const { id, name, description, scope, isSystem } = req.body;
+      if (!name || !name.trim()) {
+        return res.status(400).json({ error: 'Role name is required.' });
+      }
+
+      const roleId = id || `ROLE-${actorTenant}-${Date.now()}`;
+      const roleTenant = isPlatformUser ? (req.body.tenantId || null) : actorTenant;
+      const roleScope = isPlatformUser ? (scope || 'TENANT') : 'TENANT';
+      const roleIsSystem = isPlatformUser ? Boolean(isSystem) : false;
+
+      // Duplicate check within tenant
+      const [existing]: any = await pool.query(
+        'SELECT id FROM roles WHERE name = ? AND ((tenantId = ? AND scope = "TENANT") OR (tenantId IS NULL AND scope = "TEMPLATE"))',
+        [name.trim(), roleTenant]
+      );
+      if (existing.length > 0) {
+        return res.status(400).json({ error: `A role named "${name.trim()}" already exists in this organization.` });
+      }
+
+      await pool.query(
+        'INSERT INTO roles (id, tenantId, name, description, isSystem, scope) VALUES (?, ?, ?, ?, ?, ?)',
+        [roleId, roleTenant, name.trim(), description || '', roleIsSystem, roleScope]
+      );
+
+      res.json({ success: true, id: roleId });
+    } catch (err: any) {
+      console.error('Error creating role:', err);
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
+
+  // Dedicated PUT /api/roles/:id: Update role name/description
+  app.put('/api/roles/:id', async (req, res) => {
+    const targetRoleId = req.params.id;
+    const actorRole = (req as any).userRole;
+    const actorTenant = (req as any).userTenantId;
+    const actorPermissions = (req as any).userPermissions || [];
+    const isPlatformUser = (req as any).isPlatformUser;
+
+    if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+    if (!actorPermissions.includes('ALL') && !actorPermissions.includes('MANAGE_ROLES')) {
+      return res.status(403).json({ error: 'Forbidden. Requires MANAGE_ROLES capability.' });
+    }
+
+    try {
+      const [roleRows]: any = await pool.query('SELECT * FROM roles WHERE id = ?', [targetRoleId]);
+      if (roleRows.length === 0) return res.status(404).json({ error: 'Role not found.' });
+
+      const targetRole = roleRows[0];
+      if (targetRole.tenantId !== actorTenant && !actorPermissions.includes('ALL')) {
+        return res.status(403).json({ error: 'Forbidden. Cannot edit another tenant role.' });
+      }
+
+      const { name, description } = req.body;
+      const updates: string[] = [];
+      const params: any[] = [];
+
+      if (name && name.trim()) {
+        updates.push('name = ?');
+        params.push(name.trim());
+      }
+      if (description !== undefined) {
+        updates.push('description = ?');
+        params.push(description);
+      }
+
+      if (updates.length > 0) {
+        params.push(targetRoleId);
+        await pool.query(`UPDATE roles SET ${updates.join(', ')} WHERE id = ?`, params);
+      }
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Error updating role:', err);
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
+
+  // Dedicated DELETE /api/roles/:id: Delete custom tenant role
+  app.delete('/api/roles/:id', async (req, res) => {
+    const targetRoleId = req.params.id;
+    const actorRole = (req as any).userRole;
+    const actorTenant = (req as any).userTenantId;
+    const actorPermissions = (req as any).userPermissions || [];
+    const isPlatformUser = (req as any).isPlatformUser;
+
+    if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+    if (!actorPermissions.includes('ALL') && !actorPermissions.includes('MANAGE_ROLES')) {
+      return res.status(403).json({ error: 'Forbidden. Requires MANAGE_ROLES capability.' });
+    }
+
+    try {
+      const [roleRows]: any = await pool.query('SELECT * FROM roles WHERE id = ?', [targetRoleId]);
+      if (roleRows.length === 0) return res.status(404).json({ error: 'Role not found.' });
+
+      const targetRole = roleRows[0];
+      if (targetRole.tenantId !== actorTenant && !actorPermissions.includes('ALL')) {
+        return res.status(403).json({ error: 'Forbidden. Cannot delete another tenant role.' });
+      }
+
+      // Safety check: Cannot delete system/protected roles
+      if (targetRole.isSystem || targetRole.scope === 'SYSTEM' || targetRole.scope === 'TEMPLATE' || targetRoleId === 'SUPER_ADMIN' || targetRoleId === 'TENANT_ADMIN') {
+        return res.status(403).json({ error: 'Forbidden. System default and platform roles cannot be deleted.' });
+      }
+
+      // Check assigned members
+      const [memberRows]: any = await pool.query('SELECT id FROM tenant_user_roles WHERE roleId = ?', [targetRoleId]);
+      if (memberRows.length > 0) {
+        return res.status(400).json({ error: `Cannot delete role: ${memberRows.length} user(s) are currently assigned to this role.` });
+      }
+
+      await pool.query('DELETE FROM role_permissions WHERE roleId = ?', [targetRoleId]);
+      await pool.query('DELETE FROM role_data_scopes WHERE roleId = ?', [targetRoleId]);
+      await pool.query('DELETE FROM roles WHERE id = ?', [targetRoleId]);
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Error deleting role:', err);
+      res.status(500).json({ error: 'Internal Server Error' });
     }
   });
 
