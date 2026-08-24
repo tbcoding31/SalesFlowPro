@@ -25,6 +25,74 @@ export const getAssignableRoles = async (pool: any, actorRoleId: string) => {
   }
 };
 
+/**
+ * Authoritative user access context resolution.
+ * Supports both platform users (global roles with no tenant membership)
+ * and tenant users (scoped roles through tenant_users).
+ */
+export const resolveUserAccessContext = async (pool: any, userId: string) => {
+  // 1. Check if user has tenant membership
+  const [membershipRows]: any = await pool.query(`
+    SELECT tu.tenantId, tu.status as tenantUserStatus, tur.roleId, r.name as roleName, r.scope
+    FROM tenant_users tu
+    LEFT JOIN tenant_user_roles tur ON tur.tenantUserId = tu.id
+    LEFT JOIN roles r ON r.id = tur.roleId
+    WHERE tu.userId = ? AND tu.isPrimary = true
+  `, [userId]);
+
+  let tenantId: string | null = null;
+  let roleId: string | null = null;
+  let roleName: string | null = null;
+  let isPlatformUser = false;
+
+  if (membershipRows.length > 0 && membershipRows[0].tenantId && membershipRows[0].tenantId !== 'SYSTEM') {
+    tenantId = membershipRows[0].tenantId;
+    roleId = membershipRows[0].roleId;
+    roleName = membershipRows[0].roleName;
+  } else if (membershipRows.length > 0 && membershipRows[0].tenantId === 'SYSTEM') {
+    // Legacy mapping support: treat SYSTEM tenant membership as platform user
+    isPlatformUser = true;
+    roleId = membershipRows[0].roleId || 'SUPER_ADMIN';
+    roleName = membershipRows[0].roleName || 'Super Admin';
+    tenantId = null;
+  } else {
+    // 2. User has no tenant membership: Check for system-wide platform role
+    const [systemRoleRows]: any = await pool.query(`
+      SELECT r.id as roleId, r.name as roleName
+      FROM roles r
+      WHERE (r.scope = 'SYSTEM' OR r.tenantId IS NULL OR r.tenantId = 'SYSTEM')
+        AND r.id = 'SUPER_ADMIN'
+      LIMIT 1
+    `);
+
+    if (systemRoleRows.length > 0) {
+      isPlatformUser = true;
+      roleId = systemRoleRows[0].roleId;
+      roleName = systemRoleRows[0].roleName;
+      tenantId = null;
+    }
+  }
+
+  // 3. Resolve permissions
+  let permissions: string[] = [];
+  if (roleId) {
+    try {
+      const [permRows]: any = await pool.query('SELECT permission FROM role_permissions WHERE roleId = ?', [roleId]);
+      permissions = permRows.map((r: any) => r.permission);
+    } catch (e) {
+      console.error('[AUTH] DB Error when loading permissions for role:', roleId, e);
+    }
+  }
+
+  return {
+    tenantId,
+    roleId,
+    roleName,
+    permissions,
+    isPlatformUser
+  };
+};
+
 app.use(helmet({
   // Keep CSP off — frontend uses inline scripts/styles (Vite bundled)
   contentSecurityPolicy: false,
@@ -89,69 +157,28 @@ app.use(async (req, res, next) => {
 
     const session = sessions[0];
 
-    // Hydrate User Context (Tenant, Role, Permissions)
-    const [userRows]: any = await pool.query(`
-      SELECT tu.tenantId, tur.roleId
-      FROM users u
-      LEFT JOIN tenant_users tu ON tu.userId = u.id AND tu.isPrimary = true
-      LEFT JOIN tenant_user_roles tur ON tur.tenantUserId = tu.id
-      WHERE u.id = ?
-    `, [session.userId]);
+    // Hydrate User Context (Tenant, Role, Permissions) via authoritative helper
+    const userContext = await resolveUserAccessContext(pool, session.userId);
 
-    let roleId = null;
-    let permissions = [];
-    
-    if (userRows.length > 0) {
-      const tenantId = userRows[0].tenantId;
-      roleId = userRows[0].roleId;
-      
-      // Load permissions
-      try {
-        if (roleId) {
-          const [permRows]: any = await pool.query('SELECT permission FROM role_permissions WHERE roleId = ?', [roleId]);
-          permissions = permRows.map((r: any) => r.permission);
-        }
-      } catch (e) {
-        console.error('[AUTH] DB Error when loading permissions:', e);
-        return res.status(500).json({ error: 'Internal Server Error during authorization' });
-      }
-
-      if (tenantId && tenantId !== 'SYSTEM') {
-        const [tenantRows]: any = await pool.query('SELECT status FROM tenants WHERE id = ?', [tenantId]);
-        if (tenantRows.length > 0) {
-          const tenantStatus = tenantRows[0].status;
-          if (tenantStatus === 'SUSPENDED') {
-            return res.status(403).json({ error: 'Tenant is suspended', code: 'TENANT_SUSPENDED' });
-          }
-        }
+    // Tenant Suspension Check for tenant-scoped users
+    if (userContext.tenantId && userContext.tenantId !== 'SYSTEM') {
+      const [tenantRows]: any = await pool.query('SELECT status FROM tenants WHERE id = ?', [userContext.tenantId]);
+      if (tenantRows.length > 0 && tenantRows[0].status === 'SUSPENDED') {
+        return res.status(403).json({ error: 'Tenant is suspended', code: 'TENANT_SUSPENDED' });
       }
     }
 
     (req as any).userId = session.userId;
-    (req as any).userRole = roleId;
-    (req as any).userTenantId = userRows.length > 0 ? userRows[0].tenantId : null;
-    (req as any).userPermissions = permissions;
+    (req as any).userRole = userContext.roleId;
+    (req as any).userTenantId = userContext.tenantId;
+    (req as any).userPermissions = userContext.permissions;
+    (req as any).isPlatformUser = userContext.isPlatformUser;
 
-    if (userRows.length > 0) {
-      const tenantId = userRows[0].tenantId;
-      if (tenantId && tenantId !== 'SYSTEM') {
-        const [tenantRows]: any = await pool.query('SELECT status FROM tenants WHERE id = ?', [tenantId]);
-        if (tenantRows.length > 0) {
-          const tenantStatus = tenantRows[0].status;
-          if (tenantStatus === 'SUSPENDED') {
-            return res.status(403).json({ error: 'Tenant is suspended', code: 'TENANT_SUSPENDED' });
-          }
-        }
-      }
-    }
-    
-    // Now check expiration, so suspended tenants always get 403 instead of 401
+    // Check session expiration
     if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
       return res.status(401).json({ error: 'Unauthorized: Session has expired' });
     }
 
-    // Pass session/user info if needed by routes later
-    (req as any).userId = session.userId;
     next();
   } catch (err: any) {
     console.error('Auth middleware error:', err.message);
@@ -167,7 +194,8 @@ app.get('/api/sync/all', async (req, res) => {
   try {
     const actorTenant = (req as any).userTenantId;
     const actorRole = (req as any).userRole;
-    if (!actorTenant || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+    const isPlatformUser = (req as any).isPlatformUser;
+    if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
     // Pagination (bounded, no unbounded fetch)
     const rawPage = parseInt(req.query.page as string, 10);
@@ -178,19 +206,19 @@ app.get('/api/sync/all', async (req, res) => {
 
     let tenantFilter = '';
     let queryArgs: any[] = [];
-    if (actorTenant !== 'SYSTEM') {
+    if (actorTenant && actorTenant !== 'SYSTEM') {
       tenantFilter = ' WHERE tenantId = ?';
       queryArgs.push(actorTenant);
     } else {
       const requestedTenantId = req.query.tenantId;
-      if (requestedTenantId && requestedTenantId !== 'ALL') {
+      if (requestedTenantId && requestedTenantId !== 'ALL' && requestedTenantId !== 'SYSTEM') {
         tenantFilter = ' WHERE tenantId = ?';
         queryArgs.push(requestedTenantId);
       }
     }
 
     // Reference tables (small, always fetch all)
-    const [dbTenants] = await pool.query('SELECT * FROM tenants' + (actorTenant !== 'SYSTEM' ? ' WHERE id = ?' : tenantFilter ? ' WHERE id = ?' : ''), queryArgs) as any[];
+    const [dbTenants] = await pool.query('SELECT * FROM tenants' + (actorTenant && actorTenant !== 'SYSTEM' ? ' WHERE id = ?' : tenantFilter ? ' WHERE id = ?' : ''), queryArgs) as any[];
     
     let userQuery = 'SELECT u.* FROM users u';
     if (tenantFilter) {
@@ -205,10 +233,10 @@ app.get('/api/sync/all', async (req, res) => {
     }
     const [dbTenantUserRoles] = await pool.query(turQuery, queryArgs) as any[];
     let roleQuery = 'SELECT * FROM roles';
-    if (actorTenant !== 'SYSTEM') {
-      roleQuery += ' WHERE tenantId = ? OR tenantId = "SYSTEM"';
+    if (actorTenant && actorTenant !== 'SYSTEM') {
+      roleQuery += ' WHERE tenantId = ? OR tenantId IS NULL OR tenantId = "SYSTEM"';
     } else if (tenantFilter) {
-      roleQuery += ' WHERE tenantId = ? OR tenantId = "SYSTEM"';
+      roleQuery += ' WHERE tenantId = ? OR tenantId IS NULL OR tenantId = "SYSTEM"';
     }
     const [dbRoles] = await pool.query(roleQuery, queryArgs) as any[];
 
@@ -429,17 +457,17 @@ const setupEndpoint = (table: string) => {
       return;
     }
 
-    // Special handling for roles table: system roles (tenantId = 'SYSTEM') like TENANT_ADMIN should always be included
+    // Special handling for roles table: system roles (tenantId IS NULL or tenantId = 'SYSTEM') like TENANT_ADMIN should always be included
     if (table === 'roles') {
       let query = `SELECT * FROM roles`;
       const params: any[] = [];
-      if (actorTenant !== 'SYSTEM') {
-        query += ' WHERE tenantId = ? OR tenantId = "SYSTEM"';
+      if (actorTenant && actorTenant !== 'SYSTEM') {
+        query += ' WHERE tenantId = ? OR tenantId IS NULL OR tenantId = "SYSTEM"';
         params.push(actorTenant);
       } else {
         const { tenantId } = req.query;
         if (tenantId && tenantId !== 'ALL' && tenantId !== 'SYSTEM') {
-          query += ' WHERE tenantId = ? OR tenantId = "SYSTEM"';
+          query += ' WHERE tenantId = ? OR tenantId IS NULL OR tenantId = "SYSTEM"';
           params.push(tenantId);
         }
       }
@@ -571,16 +599,17 @@ const setupEndpoint = (table: string) => {
     }
 
     const actorTenant = (req as any).userTenantId;
+    const actorRole = (req as any).userRole;
     try {
       const id = req.params.id;
       const data = req.body;
       
       // Ownership check for BOLA protection
-      if (table === 'tenants' && actorTenant !== 'SYSTEM') {
+      if (table === 'tenants' && actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM') {
         if (id !== actorTenant) {
           return res.status(403).json({ error: 'Cross-tenant mutation forbidden (BOLA).' });
         }
-      } else if (tenantSpecificTables.includes(table) && actorTenant !== 'SYSTEM') {
+      } else if (tenantSpecificTables.includes(table) && actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM') {
         const [existing]: any = await pool.query(`SELECT tenantId FROM ${table} WHERE id = ?`, [id]);
         if (existing.length === 0) {
           return res.status(404).json({ error: 'Record not found' });
@@ -605,7 +634,7 @@ const setupEndpoint = (table: string) => {
       const queryValues = [...values, id];
       
       const actorUserId = (req as any).userId;
-      if (tenantSpecificTables.includes(table) && actorTenant !== 'SYSTEM') {
+      if (tenantSpecificTables.includes(table) && actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM') {
          query += ' AND tenantId = ?';
          queryValues.push(actorTenant);
       }
@@ -654,11 +683,12 @@ const setupEndpoint = (table: string) => {
     }
 
     const actorTenant = (req as any).userTenantId;
+    const actorRole = (req as any).userRole;
     try {
       const id = req.params.id;
       
       // Ownership check for BOLA protection
-      if (tenantSpecificTables.includes(table) && actorTenant !== 'SYSTEM') {
+      if (tenantSpecificTables.includes(table) && actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM') {
         const [existing]: any = await pool.query(`SELECT tenantId FROM ${table} WHERE id = ?`, [id]);
         if (existing.length === 0) {
           return res.status(404).json({ error: 'Record not found' });
@@ -671,7 +701,7 @@ const setupEndpoint = (table: string) => {
       let query = `DELETE FROM ${table} WHERE id = ?`;
       const values = [id];
       const actorUserId = (req as any).userId;
-      if (tenantSpecificTables.includes(table) && actorTenant !== 'SYSTEM') {
+      if (tenantSpecificTables.includes(table) && actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM') {
          query += ' AND tenantId = ?';
          values.push(actorTenant);
       }
@@ -708,12 +738,13 @@ app.get('/api/tenants', async (req, res) => {
   const actorRole = (req as any).userRole;
   const actorTenant = (req as any).userTenantId;
   const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
   
-  if (!actorRole || !actorTenant) return res.status(401).json({ error: 'Unauthorized' });
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
-  // A global tenant listing requires global capability (e.g. SYSTEM with ALL)
+  // A global tenant listing requires global capability (e.g. SUPER_ADMIN or ALL)
   // If the actor is TENANT_ADMIN (tenant-scoped), they should only see their own tenant.
-  if (actorTenant !== 'SYSTEM' && !actorPermissions.includes('ALL')) {
+  if (actorRole !== 'SUPER_ADMIN' && !actorPermissions.includes('ALL')) {
     // Force them to only query their own tenant
     req.query.search = '';
     req.query.type = 'ALL';
@@ -730,7 +761,7 @@ app.get('/api/tenants', async (req, res) => {
     let queryArgs: any[] = [];
     let whereClauses: string[] = ['1=1'];
     
-    if (actorTenant !== 'SYSTEM' && !actorPermissions.includes('ALL')) {
+    if (actorRole !== 'SUPER_ADMIN' && !actorPermissions.includes('ALL')) {
        whereClauses.push('id = ?');
        queryArgs.push(actorTenant);
     } else {
@@ -791,11 +822,12 @@ app.get('/api/tenants/stats', async (req, res) => {
   const actorRole = (req as any).userRole;
   const actorTenant = (req as any).userTenantId;
   const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
   
-  if (!actorRole || !actorTenant) return res.status(401).json({ error: 'Unauthorized' });
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
   
-  // Global stats are strictly for actors with ALL capability
-  if (actorTenant !== 'SYSTEM' && !actorPermissions.includes('ALL')) {
+  // Global stats are strictly for actors with ALL capability or SUPER_ADMIN role
+  if (actorRole !== 'SUPER_ADMIN' && !actorPermissions.includes('ALL')) {
      return res.status(403).json({ error: 'Global statistics require global capabilities.' });
   }
 
@@ -870,12 +902,13 @@ app.get('/api/tenants/:id', async (req, res) => {
   const actorRole = (req as any).userRole;
   const actorTenant = (req as any).userTenantId;
   const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
   const targetId = req.params.id;
 
-  if (!actorRole || !actorTenant) return res.status(401).json({ error: 'Unauthorized' });
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
   // Tenant Isolation / BOLA check: Ordinary tenant users can only access their own tenant
-  if (actorTenant !== 'SYSTEM' && !actorPermissions.includes('ALL') && actorTenant !== targetId) {
+  if (actorRole !== 'SUPER_ADMIN' && !actorPermissions.includes('ALL') && actorTenant !== targetId) {
     return res.status(403).json({ error: 'Cross-tenant access forbidden (BOLA).' });
   }
 
@@ -907,7 +940,7 @@ app.get('/api/tenants/:id', async (req, res) => {
     // Tenant-scoped Organization Statistics
     const [deptRows]: any = await pool.query('SELECT COUNT(*) as count FROM departments WHERE tenantId = ?', [targetId]);
     const [teamRows]: any = await pool.query('SELECT COUNT(*) as count FROM teams WHERE tenantId = ?', [targetId]);
-    const [roleRows]: any = await pool.query('SELECT COUNT(*) as count FROM roles WHERE tenantId = ? OR tenantId = "SYSTEM"', [targetId]);
+    const [roleRows]: any = await pool.query('SELECT COUNT(*) as count FROM roles WHERE tenantId = ? OR tenantId IS NULL OR tenantId = "SYSTEM"', [targetId]);
     const [salesRepRows]: any = await pool.query(`
       SELECT COUNT(DISTINCT tu.userId) as count 
       FROM tenant_users tu 
@@ -1016,13 +1049,14 @@ app.get('/api/roles/assignable', async (req, res) => {
 app.post('/api/tenant/users', async (req, res) => {
   const actorRole = (req as any).userRole;
   const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
   const { email, password, name, roleId } = req.body;
   
-  if (!actorRole || !actorTenant) return res.status(401).json({ error: 'Unauthorized' });
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
   
   // Enforce Tenant Isolation (if actor is TENANT scoped, target tenant must be actor's tenant)
   let targetTenant = req.body.tenantId || actorTenant;
-  if (actorTenant !== 'SYSTEM' && targetTenant !== actorTenant) {
+  if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && targetTenant !== actorTenant) {
      return res.status(403).json({ error: 'Cross-tenant user creation forbidden.' });
   }
 
@@ -1066,8 +1100,8 @@ app.put('/api/tenant/users/:id/roles', async (req, res) => {
     return res.status(403).json({ error: 'Role assignment not permitted by policy.' });
   }
 
-  // Cross tenant check for actor (Super Admin can do it, others restricted)
-  if (actorTenant !== 'SYSTEM') {
+  // Cross tenant check for actor (Super Admin can do it across all tenants, others restricted to their own tenant)
+  if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM') {
     const [targetRows]: any = await pool.query('SELECT tenantId FROM tenant_users WHERE userId = ?', [targetUserId]);
     if (targetRows.length === 0 || targetRows[0].tenantId !== actorTenant) {
       return res.status(403).json({ error: 'Cross-tenant role modification forbidden.' });
@@ -1203,7 +1237,7 @@ tables.forEach(table => setupEndpoint(table));
       }
       const targetRoleTenant = roleRows[0].tenantId;
       if (targetRoleTenant !== actorTenant) {
-         if (actorTenant !== 'SYSTEM' || !actorPermissions.includes('ALL')) {
+         if (actorRole !== 'SUPER_ADMIN' && !actorPermissions.includes('ALL')) {
            await connection.rollback();
            return res.status(403).json({ error: 'Forbidden. Cross-tenant or global role modification requires ALL capability.' });
          }
@@ -1254,15 +1288,7 @@ app.post('/api/auth/login', async (req, res) => {
       });
     }
     
-    const query = `
-      SELECT u.*, tu.tenantId, r.id as role, r.name as roleName
-      FROM users u
-      LEFT JOIN tenant_users tu ON tu.userId = u.id AND tu.isPrimary = true
-      LEFT JOIN tenant_user_roles tur ON tur.tenantUserId = tu.id
-      LEFT JOIN roles r ON r.id = tur.roleId
-      WHERE u.email = ?
-    `;
-    const [userRows]: any = await pool.query(query, [email.trim()]);
+    const [userRows]: any = await pool.query('SELECT * FROM users WHERE email = ?', [email.trim()]);
     if (userRows.length === 0) {
       return res.status(401).json({
         success: false,
@@ -1281,9 +1307,13 @@ app.post('/api/auth/login', async (req, res) => {
         code: 'INVALID_CREDENTIALS'
       });
     }
-    // Check tenant status before session creation
-    if (user.tenantId && user.tenantId !== 'SYSTEM') {
-      const [tenantRows]: any = await pool.query('SELECT status FROM tenants WHERE id = ?', [user.tenantId]);
+
+    // Resolve authoritative user context (role, tenantId, permissions)
+    const userContext = await resolveUserAccessContext(pool, user.id);
+
+    // Check tenant status before session creation for tenant-scoped users
+    if (userContext.tenantId && userContext.tenantId !== 'SYSTEM') {
+      const [tenantRows]: any = await pool.query('SELECT status FROM tenants WHERE id = ?', [userContext.tenantId]);
       if (tenantRows.length > 0 && tenantRows[0].status === 'SUSPENDED') {
         return res.status(403).json({
           success: false,
@@ -1309,13 +1339,11 @@ app.post('/api/auth/login', async (req, res) => {
       [`LOG-${Date.now()}`, user.id, 'LOGIN', 'Auth', `User ${user.email} logged in`]
     );
     
-    // Fetch user permissions
-    let permissions: string[] = [];
-    if (user.role) {
-       const [permRows]: any = await pool.query('SELECT permission FROM role_permissions WHERE roleId = ?', [user.role]);
-       permissions = permRows.map((r: any) => r.permission);
-    }
-    user.permissions = permissions;
+    // Hydrate user payload with resolved access context
+    user.role = userContext.roleId;
+    user.roleName = userContext.roleName;
+    user.tenantId = userContext.tenantId;
+    user.permissions = userContext.permissions;
 
     res.json({ success: true, token, user });
   } catch (err: any) {

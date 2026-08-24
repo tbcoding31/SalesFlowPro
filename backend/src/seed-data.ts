@@ -18,17 +18,15 @@ async function seedData() {
 
   // Seed Tenants
   await pool.query(`INSERT IGNORE INTO tenants (id, code, name, status) VALUES (?, ?, ?, ?)`, 
-    ['SYSTEM', 'SYS-001', 'System Administrator', 'ACTIVE']);
-  await pool.query(`INSERT IGNORE INTO tenants (id, code, name, status) VALUES (?, ?, ?, ?)`, 
     [tenantId, 'T001', 'TechNova Corp', 'ACTIVE']);
 
   // Seed Roles
-  await pool.query(`INSERT IGNORE INTO roles (id, tenantId, name, description, isSystem) VALUES (?, ?, ?, ?, ?)`, 
-    ['SUPER_ADMIN', 'SYSTEM', 'SUPER_ADMIN', 'System Administrator', true]);
-  await pool.query(`INSERT IGNORE INTO roles (id, tenantId, name, description, isSystem) VALUES (?, ?, ?, ?, ?)`, 
-    ['TENANT_ADMIN', tenantId, 'TENANT_ADMIN', 'Tenant Administrator', true]);
-  await pool.query(`INSERT IGNORE INTO roles (id, tenantId, name, description, isSystem) VALUES (?, ?, ?, ?, ?)`, 
-    ['SALES_REPRESENTATIVE', tenantId, 'SALES_REPRESENTATIVE', 'Sales Representative', true]);
+  await pool.query(`INSERT IGNORE INTO roles (id, tenantId, name, description, isSystem, scope) VALUES (?, ?, ?, ?, ?, ?)`, 
+    ['SUPER_ADMIN', null, 'SUPER_ADMIN', 'System Administrator', true, 'SYSTEM']);
+  await pool.query(`INSERT IGNORE INTO roles (id, tenantId, name, description, isSystem, scope) VALUES (?, ?, ?, ?, ?, ?)`, 
+    ['TENANT_ADMIN', tenantId, 'TENANT_ADMIN', 'Tenant Administrator', true, 'TENANT']);
+  await pool.query(`INSERT IGNORE INTO roles (id, tenantId, name, description, isSystem, scope) VALUES (?, ?, ?, ?, ?, ?)`, 
+    ['SALES_REPRESENTATIVE', tenantId, 'SALES_REPRESENTATIVE', 'Sales Representative', true, 'TENANT']);
 
   // Seed Users
   await pool.query(`INSERT IGNORE INTO users (id, email, name, passwordHash, status) VALUES (?, ?, ?, ?, ?)`, 
@@ -38,15 +36,12 @@ async function seedData() {
   await pool.query(`INSERT IGNORE INTO users (id, email, name, passwordHash, status) VALUES (?, ?, ?, ?, ?)`, 
     ['USR-002', 'sales1@technova.com', 'Sales Rep 1', 'Password123', 'ACTIVE']);
 
-  await pool.query(`INSERT IGNORE INTO tenant_users (id, tenantId, userId, isPrimary, status) VALUES (?, ?, ?, ?, ?)`,
-    ['TU-000', 'SYSTEM', 'USR-000', true, 'ACTIVE']);
+  // Tenant users (Super Admin has no tenant membership)
   await pool.query(`INSERT IGNORE INTO tenant_users (id, tenantId, userId, isPrimary, status) VALUES (?, ?, ?, ?, ?)`,
     ['TU-001', tenantId, 'USR-001', true, 'ACTIVE']);
   await pool.query(`INSERT IGNORE INTO tenant_users (id, tenantId, userId, isPrimary, status) VALUES (?, ?, ?, ?, ?)`,
     ['TU-002', tenantId, 'USR-002', true, 'ACTIVE']);
 
-  await pool.query(`INSERT IGNORE INTO tenant_user_roles (id, tenantUserId, roleId) VALUES (?, ?, ?)`,
-    ['TUR-000', 'TU-000', 'SUPER_ADMIN']);
   await pool.query(`INSERT IGNORE INTO tenant_user_roles (id, tenantUserId, roleId) VALUES (?, ?, ?)`,
     ['TUR-001', 'TU-001', 'TENANT_ADMIN']);
   await pool.query(`INSERT IGNORE INTO tenant_user_roles (id, tenantUserId, roleId) VALUES (?, ?, ?)`,
