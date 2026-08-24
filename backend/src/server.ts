@@ -45,6 +45,10 @@ export const resolveUserAccessContext = async (pool: any, userId: string) => {
   let roleName: string | null = null;
   let isPlatformUser = false;
 
+  if (membershipRows.length > 1) {
+    console.error(`[RBAC_INTEGRITY_ERROR] RBAC_ROLE_CARDINALITY_VIOLATION: User ${userId} has ${membershipRows.length} role assignments in primary tenant.`);
+  }
+
   if (membershipRows.length > 0 && membershipRows[0].tenantId && membershipRows[0].tenantId !== 'SYSTEM') {
     tenantId = membershipRows[0].tenantId;
     roleId = membershipRows[0].roleId;
@@ -1131,9 +1135,21 @@ app.put('/api/tenant/users/:id/roles', async (req, res) => {
   const connection = await pool.getConnection();
   await connection.beginTransaction();
   try {
-    const [tuRows]: any = await pool.query('SELECT id FROM tenant_users WHERE userId = ?', [targetUserId]);
+    const [tuRows]: any = await connection.query('SELECT id, tenantId FROM tenant_users WHERE userId = ?', [targetUserId]);
     if (tuRows.length > 0) {
-       await connection.query('UPDATE tenant_user_roles SET roleId = ? WHERE tenantUserId = ?', [roleId, tuRows[0].id]);
+      const tuId = tuRows[0].id;
+      const [oldRoleRows]: any = await connection.query('SELECT roleId FROM tenant_user_roles WHERE tenantUserId = ?', [tuId]);
+      const oldRoleId = oldRoleRows.length > 0 ? oldRoleRows[0].roleId : null;
+
+      // Upsert: replace/update assignment ensuring single-role invariant
+      await connection.query('DELETE FROM tenant_user_roles WHERE tenantUserId = ?', [tuId]);
+      await connection.query('INSERT INTO tenant_user_roles (id, tenantUserId, roleId) VALUES (?, ?, ?)', [`TUR-${Date.now()}`, tuId, roleId]);
+
+      // Audit Log for role change
+      await connection.query(
+        'INSERT INTO audit_logs (id, tenantId, userId, action, module, description) VALUES (?, ?, ?, ?, ?, ?)',
+        [`LOG-${Date.now()}`, tuRows[0].tenantId, (req as any).userId, 'ROLE_CHANGE', 'RBAC', `Reassigned user ${targetUserId} role from ${oldRoleId || 'NONE'} to ${roleId}`]
+      );
     }
     await connection.commit();
     res.json({ success: true });

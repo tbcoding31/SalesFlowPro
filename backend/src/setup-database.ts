@@ -45,7 +45,7 @@ async function setupDatabase() {
     `CREATE TABLE IF NOT EXISTS permissions (id VARCHAR(50) PRIMARY KEY, code VARCHAR(100), description TEXT, category VARCHAR(50))`,
     `CREATE TABLE IF NOT EXISTS role_permissions (id VARCHAR(50) PRIMARY KEY, roleId VARCHAR(50), permissionId VARCHAR(50))`,
     `CREATE TABLE IF NOT EXISTS role_data_scopes (id VARCHAR(50) PRIMARY KEY, roleId VARCHAR(50), scope VARCHAR(50))`,
-    `CREATE TABLE IF NOT EXISTS tenant_user_roles (id VARCHAR(50) PRIMARY KEY, tenantUserId VARCHAR(50), roleId VARCHAR(50))`,
+    `CREATE TABLE IF NOT EXISTS tenant_user_roles (id VARCHAR(50) PRIMARY KEY, tenantUserId VARCHAR(50) NOT NULL, roleId VARCHAR(50) NOT NULL, UNIQUE KEY uq_tenant_user (tenantUserId))`,
     `CREATE TABLE IF NOT EXISTS global_user_roles (id VARCHAR(50) PRIMARY KEY, userId VARCHAR(50) NOT NULL, roleId VARCHAR(50) NOT NULL, createdAt DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_user_role (userId, roleId))`,
     
     // AUTH & SECURITY
