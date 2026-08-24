@@ -3,7 +3,12 @@ import { useAuth } from '../../context/AuthContext';
 import { DataService } from '../../services/dataService';
 import { Link } from 'react-router-dom';
 
-export const Topbar: React.FC = () => {
+interface TopbarProps {
+  onToggleSidebar?: () => void;
+  isSidebarOpen?: boolean;
+}
+
+export const Topbar: React.FC<TopbarProps> = ({ onToggleSidebar, isSidebarOpen = false }) => {
   const { currentUser, currentTenant, switchUser, switchTenant } = useAuth();
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -13,9 +18,22 @@ export const Topbar: React.FC = () => {
   const unreadNotifications = DataService.getNotifications(currentUser?.id).filter((n) => !n.isRead);
 
   return (
-    <header className="fixed top-0 right-0 left-64 h-16 bg-white border-b border-[#E1E1E1] px-8 flex items-center justify-between z-20">
-      {/* Search Bar */}
-      <div className="flex items-center gap-4 flex-1 max-w-md">
+    <header className="fixed top-0 right-0 left-0 lg:left-64 h-16 bg-white border-b border-[#E1E1E1] px-4 lg:px-8 flex items-center justify-between z-20 transition-all duration-300">
+      {/* Left: Hamburger Button (Mobile/Tablet) + Search Bar */}
+      <div className="flex items-center gap-3 flex-1 max-w-md">
+        <button
+          type="button"
+          onClick={onToggleSidebar}
+          aria-label={isSidebarOpen ? 'Close navigation menu' : 'Open navigation menu'}
+          aria-expanded={isSidebarOpen}
+          aria-controls="sidebar-navigation"
+          className="p-2 text-[#464555] hover:text-[#1a1c1c] hover:bg-[#f3f3f3] rounded-lg lg:hidden transition-colors shrink-0"
+        >
+          <span className="material-symbols-outlined text-[24px]">
+            {isSidebarOpen ? 'close' : 'menu'}
+          </span>
+        </button>
+
         <div className="relative w-full">
           <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[#767587] text-[18px]">
             search

@@ -1,5 +1,5 @@
-import React from 'react';
-import { Outlet, Navigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { Outlet, Navigate, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 import { useAuth } from '../../context/AuthContext';
@@ -12,6 +12,24 @@ interface LayoutProps {
 
 export const Layout: React.FC<LayoutProps> = ({ children }) => {
   const { isAuthenticated, isLoading, currentUser, currentTenant, logout } = useAuth();
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const location = useLocation();
+
+  // Automatically close mobile sidebar drawer upon route changes
+  useEffect(() => {
+    setIsSidebarOpen(false);
+  }, [location.pathname]);
+
+  // Handle ESC key to close sidebar on mobile/tablet
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isSidebarOpen) {
+        setIsSidebarOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isSidebarOpen]);
 
   if (isLoading) {
     return (
@@ -50,16 +68,19 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
         />
       )}
 
-      {/* Fixed Left Sidebar */}
-      <Sidebar />
+      {/* Responsive Left Sidebar */}
+      <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
 
       {/* Main Right Workspace */}
-      <div className="flex-1 ml-64 flex flex-col min-h-screen min-w-0">
+      <div className="flex-1 lg:ml-64 flex flex-col min-h-screen min-w-0 transition-all duration-300">
         {/* Fixed Topbar */}
-        <Topbar />
+        <Topbar
+          isSidebarOpen={isSidebarOpen}
+          onToggleSidebar={() => setIsSidebarOpen(prev => !prev)}
+        />
 
-        {/* Scrollable Content View */}
-        <main className="flex-1 mt-16 p-8 overflow-y-auto max-w-[1440px] w-full mx-auto relative">
+        {/* Scrollable Content View with Responsive Padding */}
+        <main className="flex-1 mt-16 p-4 sm:p-6 lg:p-8 overflow-y-auto max-w-[1440px] w-full mx-auto relative">
           {children || <Outlet />}
         </main>
       </div>

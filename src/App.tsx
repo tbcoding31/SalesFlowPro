@@ -59,30 +59,52 @@ import { SystemSettingsPage } from './pages/settings/SystemSettingsPage';
 
 // Dynamic Dashboard Resolver component based on user role
 const DashboardResolver: React.FC = () => {
-  const { currentUser, currentTenant, isLoading } = useAuth();
-  const isSuperAdmin = currentUser?.tenantId === 'SYSTEM' || currentUser?.tenantId === 'SYSTEM';
+  const { currentUser, currentTenant, isLoading, hasPermission } = useAuth();
+  const isSuperAdmin = currentUser?.tenantId === 'SYSTEM' || hasPermission('MANAGE_TENANT');
+  const isManagerOrSupervisor = hasPermission('VIEW_TEAM_TASKS');
 
   const [isDataSynced, setIsDataSynced] = React.useState(false);
 
   React.useEffect(() => {
-    // Sync with backend on startup
-    const tenantId = currentTenant?.id || 'TEN-00001';
+    // Super Admin loads data directly from API in SuperAdminDashboard
+    if (isSuperAdmin) {
+      setIsDataSynced(true);
+      return;
+    }
+
+    // Sync with backend on startup for tenant users
+    const tenantId = currentTenant?.id || currentUser?.tenantId || 'TEN-00001';
     SyncService.syncAll(tenantId).then(() => {
       setIsDataSynced(true);
+    }).catch(() => {
+      setIsDataSynced(true); // Proceed even if offline
     });
 
     // Listen for sync events
     const handleSync = () => setIsDataSynced(true);
     window.addEventListener('sfp_data_synced', handleSync);
     return () => window.removeEventListener('sfp_data_synced', handleSync);
-  }, [currentTenant?.id]);
+  }, [currentTenant?.id, currentUser?.tenantId, isSuperAdmin]);
 
-  if (isLoading || !isDataSynced) {
-    return <SuperAdminDashboard />;
+  if (isLoading || (!isDataSynced && !isSuperAdmin)) {
+    return (
+      <div className="min-h-[400px] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <span className="material-symbols-outlined text-4xl text-[#4744e5] animate-spin">
+            progress_activity
+          </span>
+          <span className="text-xs font-semibold text-[#464555]">Loading Dashboard...</span>
+        </div>
+      </div>
+    );
   }
 
   if (isSuperAdmin) {
     return <SuperAdminDashboard />;
+  }
+
+  if (isManagerOrSupervisor) {
+    return <TeamDashboard />;
   }
 
   return <SalesDashboard />;

@@ -2,7 +2,12 @@ import React, { useState } from 'react';
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 
-export const Sidebar: React.FC = () => {
+interface SidebarProps {
+  isOpen?: boolean;
+  onClose?: () => void;
+}
+
+export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => {
   const { currentUser, currentTenant, hasPermission, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -32,24 +37,52 @@ export const Sidebar: React.FC = () => {
   };
 
   const handleLogout = () => {
+    if (onClose) onClose();
     logout();
     navigate('/login');
   };
 
+  const handleNavClick = () => {
+    if (onClose) onClose();
+  };
+
   return (
-    <aside className="fixed left-0 top-0 h-screen w-64 bg-white border-r border-[#E1E1E1] flex flex-col py-6 z-30 shrink-0 select-none">
-      {/* Brand Header */}
-      <div className="px-6 mb-6">
-        <div className="flex items-center gap-3">
-          <img src="/logo.png" alt="SalesFlow Logo" className="w-9 h-9 object-contain rounded shadow-sm" />
-          <div>
-            <h1 className="font-bold text-xl text-[#4744e5] leading-tight font-['Hanken_Grotesk']">SalesFlow Pro</h1>
-            <p className="text-[11px] text-[#464555] font-medium">
-              {isSuperAdmin ? 'Enterprise CRM Console' : (currentTenant?.name || 'Enterprise CRM')}
-            </p>
+    <>
+      {/* Mobile / Tablet Backdrop Overlay */}
+      {isOpen && (
+        <div
+          onClick={onClose}
+          className="fixed inset-0 bg-black/50 z-40 lg:hidden transition-opacity"
+          aria-hidden="true"
+        />
+      )}
+
+      <aside
+        className={`fixed left-0 top-0 h-screen w-64 bg-white border-r border-[#E1E1E1] flex flex-col py-6 z-50 shrink-0 select-none transition-transform duration-300 ease-in-out ${
+          isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+        }`}
+      >
+        {/* Brand Header */}
+        <div className="px-6 mb-6 flex items-center justify-between">
+          <div className="flex items-center gap-3 min-w-0">
+            <img src="/logo.png" alt="SalesFlow Logo" className="w-9 h-9 object-contain rounded shadow-sm shrink-0" />
+            <div className="min-w-0">
+              <h1 className="font-bold text-xl text-[#4744e5] leading-tight font-['Hanken_Grotesk'] truncate">SalesFlow Pro</h1>
+              <p className="text-[11px] text-[#464555] font-medium truncate">
+                {isSuperAdmin ? 'Enterprise CRM Console' : (currentTenant?.name || 'Enterprise CRM')}
+              </p>
+            </div>
           </div>
+
+          {/* Close button on mobile/tablet */}
+          <button
+            onClick={onClose}
+            aria-label="Close sidebar"
+            className="p-1 text-[#767587] hover:text-[#1a1c1c] rounded-lg lg:hidden hover:bg-[#f3f3f3] transition-colors"
+          >
+            <span className="material-symbols-outlined text-[22px]">close</span>
+          </button>
         </div>
-      </div>
 
       {/* Navigation Scrollable Area */}
       <div className="flex-1 overflow-y-auto px-3 space-y-4">
@@ -621,6 +654,7 @@ export const Sidebar: React.FC = () => {
           </button>
         </div>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 };
