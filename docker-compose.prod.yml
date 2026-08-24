@@ -16,6 +16,4 @@ services:
 
   backend:
     image: ghcr.io/tbcoding31/salesflowpro-backend:${IMAGE_TAG:-latest}
-    ports:
-      - "127.0.0.1:5000:5000"
     restart: always

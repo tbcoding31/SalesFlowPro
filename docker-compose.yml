@@ -18,8 +18,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: salesflowpro-backend
-    ports:
-      - "5000:5000"
+    expose:
+      - "5000"
     env_file:
       - ./backend/.env
     restart: unless-stopped
