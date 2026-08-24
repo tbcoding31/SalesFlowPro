@@ -165,7 +165,7 @@ export const CreateTenantUserPage: React.FC = () => {
           <nav className="flex items-center gap-1.5 text-xs text-[#767587] font-medium mb-1">
             <span className="text-[#767587]">Administration</span>
             <span>&rsaquo;</span>
-            {currentUser?.tenantId === 'SYSTEM' && (
+            {currentUser?.role === 'SUPER_ADMIN' && (
               <>
                 <Link to="/admin/tenants" className="hover:text-[#4744e5] transition-colors">
                   Tenants
@@ -198,7 +198,7 @@ export const CreateTenantUserPage: React.FC = () => {
             <span className="material-symbols-outlined text-[22px]">apartment</span>
           </div>
           <div>
-            {currentUser?.tenantId === 'SYSTEM' && tenants.length > 1 ? (
+            {currentUser?.role === 'SUPER_ADMIN' && tenants.length > 1 ? (
               <select
                 value={selectedTenantId}
                 onChange={(e) => setSelectedTenantId(e.target.value)}

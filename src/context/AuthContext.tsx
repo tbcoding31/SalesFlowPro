@@ -46,10 +46,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const user = JSON.parse(savedUserStr);
         setCurrentUser(user);
         setToken(savedToken);
-        if (user.tenantId && user.tenantId !== 'SYSTEM') {
-          setCurrentTenant({ id: user.tenantId, name: 'Active Tenant', status: 'ACTIVE' } as any);
+        if (user.role === 'SUPER_ADMIN' || !user.tenantId || user.tenantId === 'SYSTEM') {
+          setCurrentTenant(null);
         } else {
-          setCurrentTenant({ id: 'SYSTEM', name: 'Platform Administration', status: 'ACTIVE' } as any);
+          setCurrentTenant({ id: user.tenantId, name: 'Active Tenant', status: 'ACTIVE' } as any);
         }
         // Restore session from localStorage. NOTE: This uses stateful database-backed session tokens,
         // NOT JSON Web Tokens (JWT). The token is a cryptographically random 256-bit session identifier
@@ -231,13 +231,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.error('Failed to sync data during login:', err);
       }
 
-      // We rely on the backend API calls doing the real check instead of DataService mock.
-      // However, we still need to set currentTenant to something for the UI to not break if it expects it.
-      if (user.tenantId && user.tenantId !== 'SYSTEM') {
-        setCurrentTenant({ id: user.tenantId, name: 'Active Tenant', status: 'ACTIVE' } as any);
+      if (user.role === 'SUPER_ADMIN' || !user.tenantId || user.tenantId === 'SYSTEM') {
+        setCurrentTenant(null);
       } else {
-        // Super Admin uses SYSTEM tenant as active context or platform context
-        setCurrentTenant({ id: 'SYSTEM', name: 'Platform Administration', status: 'ACTIVE' } as any);
+        setCurrentTenant({ id: user.tenantId, name: 'Active Tenant', status: 'ACTIVE' } as any);
       }
 
       setIsLoading(false);
@@ -257,7 +254,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = () => {
     if (currentUser) {
       DataService.addAuditLog({
-        tenantId: currentUser.tenantId === 'SYSTEM' ? 'TEN-00001' : currentUser.tenantId,
+        tenantId: currentUser.tenantId || 'SYSTEM',
         userId: currentUser.id,
         userName: currentUser.name,
         action: 'LOGOUT',
@@ -291,7 +288,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (user) {
       setCurrentUser(user);
       localStorage.setItem(AUTH_USER_KEY, user.id);
-      if (user.tenantId && user.tenantId !== 'SYSTEM') {
+      if (user.role === 'SUPER_ADMIN' || !user.tenantId || user.tenantId === 'SYSTEM') {
+        setCurrentTenant(null);
+      } else {
         const tenant = DataService.getTenantById(user.tenantId);
         setCurrentTenant(tenant || DataService.getTenants()[0]);
       }

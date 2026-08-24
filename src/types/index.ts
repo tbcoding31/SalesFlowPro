@@ -65,7 +65,7 @@ export interface Tenant {
 
 export interface User {
   id: string;
-  tenantId: string; // 'SYSTEM' for Super Admin
+  tenantId?: string | null; // null for platform Super Admin
   firstName: string;
   lastName: string;
   name: string;

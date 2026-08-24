@@ -68,7 +68,7 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleSidebar, isSidebarOpen =
           </select>
 
           {/* Tenant Switcher */}
-          {currentUser?.tenantId !== 'SYSTEM' && (
+          {currentUser?.role !== 'SUPER_ADMIN' && currentUser?.tenantId && (
             <select
               value={currentTenant?.id}
               onChange={(e) => switchTenant(e.target.value)}

@@ -24,7 +24,7 @@ interface TenantStats {
 
 export const SuperAdminDashboard: React.FC = () => {
   const { currentUser, hasPermission } = useAuth();
-  const isSuperAdmin = currentUser?.tenantId === 'SYSTEM' || hasPermission('MANAGE_TENANT');
+  const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN' || hasPermission('MANAGE_TENANT');
 
   const [stats, setStats] = useState<TenantStats>({
     total: 0,

@@ -5,7 +5,7 @@ import { RolePermissions, UserRole } from '../../types';
 
 export const RolesPermissionsPage: React.FC = () => {
   const { currentTenant, currentUser } = useAuth();
-  const tenantId = currentUser?.tenantId === 'SYSTEM' ? 'SYSTEM' : (currentTenant?.id || 'TEN-00001');
+  const tenantId = currentUser?.role === 'SUPER_ADMIN' ? 'SYSTEM' : (currentTenant?.id || currentUser?.tenantId || 'TEN-00001');
 
   const [permissionsState, setPermissionsState] = useState<RolePermissions[]>([]);
   const [isLoading, setIsLoading] = useState(true);

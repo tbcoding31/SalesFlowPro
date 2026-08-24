@@ -60,7 +60,7 @@ import { SystemSettingsPage } from './pages/settings/SystemSettingsPage';
 // Dynamic Dashboard Resolver component based on user role
 const DashboardResolver: React.FC = () => {
   const { currentUser, currentTenant, isLoading, hasPermission } = useAuth();
-  const isSuperAdmin = currentUser?.tenantId === 'SYSTEM' || hasPermission('MANAGE_TENANT');
+  const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN' || hasPermission('MANAGE_TENANT');
   const isManagerOrSupervisor = hasPermission('VIEW_TEAM_TASKS');
 
   const [isDataSynced, setIsDataSynced] = React.useState(false);
