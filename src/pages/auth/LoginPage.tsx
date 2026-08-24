@@ -6,7 +6,7 @@ export const LoginPage: React.FC = () => {
   const { login, currentUser } = useAuth();
   const navigate = useNavigate();
 
-  const [email, setEmail] = useState('sarah.j@salesflow.co');
+  const [email, setEmail] = useState('admin@technova.com');
   const [password, setPassword] = useState('Password123');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
@@ -60,7 +60,7 @@ export const LoginPage: React.FC = () => {
     } else if (state === 'network-error') {
       setErrorDetails({ status: 0, message: 'Unable to connect to the server. Please check your connection.', code: 'NETWORK_ERROR' });
     } else if (state === 'default') {
-      setEmail('sarah.j@salesflow.co');
+      setEmail('admin@technova.com');
       setPassword('Password123');
       setErrorDetails(null);
     }
@@ -155,7 +155,7 @@ export const LoginPage: React.FC = () => {
             <div className="flex flex-wrap gap-1">
               <button
                 type="button"
-                onClick={() => { setEmail('sarah.j@salesflow.co'); setPassword('Password123'); }}
+                onClick={() => { setEmail('admin@technova.com'); setPassword('Password123'); }}
                 className="px-2 py-0.5 bg-white border border-[#c7c4d8] rounded text-[10px] hover:border-[#4744e5] hover:text-[#4744e5]"
               >
                 Tenant Admin
