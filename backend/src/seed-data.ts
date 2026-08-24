@@ -36,6 +36,10 @@ async function seedData() {
   await pool.query(`INSERT IGNORE INTO users (id, email, name, passwordHash, status) VALUES (?, ?, ?, ?, ?)`, 
     ['USR-002', 'sales1@technova.com', 'Sales Rep 1', 'Password123', 'ACTIVE']);
 
+  // Global role assignment (Super Admin explicit platform role)
+  await pool.query(`INSERT IGNORE INTO global_user_roles (id, userId, roleId) VALUES (?, ?, ?)`,
+    ['GUR-000', 'USR-000', 'SUPER_ADMIN']);
+
   // Tenant users (Super Admin has no tenant membership)
   await pool.query(`INSERT IGNORE INTO tenant_users (id, tenantId, userId, isPrimary, status) VALUES (?, ?, ?, ?, ?)`,
     ['TU-001', tenantId, 'USR-001', true, 'ACTIVE']);

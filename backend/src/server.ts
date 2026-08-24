@@ -56,20 +56,25 @@ export const resolveUserAccessContext = async (pool: any, userId: string) => {
     roleName = membershipRows[0].roleName || 'Super Admin';
     tenantId = null;
   } else {
-    // 2. User has no tenant membership: Check for system-wide platform role
-    const [systemRoleRows]: any = await pool.query(`
-      SELECT r.id as roleId, r.name as roleName
-      FROM roles r
-      WHERE (r.scope = 'SYSTEM' OR r.tenantId IS NULL OR r.tenantId = 'SYSTEM')
-        AND r.id = 'SUPER_ADMIN'
-      LIMIT 1
-    `);
+    // 2. User has no tenant membership: Check for EXPLICIT global role assignment in global_user_roles
+    try {
+      const [globalUserRoleRows]: any = await pool.query(`
+        SELECT gur.roleId, r.name as roleName, r.scope
+        FROM global_user_roles gur
+        JOIN roles r ON r.id = gur.roleId
+        WHERE gur.userId = ?
+        LIMIT 1
+      `, [userId]);
 
-    if (systemRoleRows.length > 0) {
-      isPlatformUser = true;
-      roleId = systemRoleRows[0].roleId;
-      roleName = systemRoleRows[0].roleName;
-      tenantId = null;
+      if (globalUserRoleRows.length > 0) {
+        isPlatformUser = true;
+        roleId = globalUserRoleRows[0].roleId;
+        roleName = globalUserRoleRows[0].roleName;
+        tenantId = null;
+      }
+    } catch (err: any) {
+      // Table might not exist in old schemas during transition
+      console.warn('[AUTH] global_user_roles query skipped:', err.message);
     }
   }
 
