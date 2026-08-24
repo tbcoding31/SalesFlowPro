@@ -41,10 +41,10 @@ async function setupDatabase() {
     `CREATE TABLE IF NOT EXISTS team_members (id VARCHAR(50) PRIMARY KEY, teamId VARCHAR(50), userId VARCHAR(50), role VARCHAR(50))`,
     
     // ROLES & PERMISSIONS
-    `CREATE TABLE IF NOT EXISTS roles (id VARCHAR(50) PRIMARY KEY, tenantId VARCHAR(50), name VARCHAR(100), description TEXT, isSystem BOOLEAN)`,
-    `CREATE TABLE IF NOT EXISTS permissions (id VARCHAR(50) PRIMARY KEY, code VARCHAR(100), description TEXT, category VARCHAR(50))`,
-    `CREATE TABLE IF NOT EXISTS role_permissions (id VARCHAR(50) PRIMARY KEY, roleId VARCHAR(50), permissionId VARCHAR(50))`,
-    `CREATE TABLE IF NOT EXISTS role_data_scopes (id VARCHAR(50) PRIMARY KEY, roleId VARCHAR(50), scope VARCHAR(50))`,
+    `CREATE TABLE IF NOT EXISTS roles (id VARCHAR(50) PRIMARY KEY, tenantId VARCHAR(50), name VARCHAR(100), description TEXT, isSystem BOOLEAN, scope VARCHAR(20) DEFAULT 'TENANT')`,
+    `CREATE TABLE IF NOT EXISTS permissions (id VARCHAR(50) PRIMARY KEY, code VARCHAR(100) NOT NULL UNIQUE, name VARCHAR(100), description TEXT, module VARCHAR(50), category VARCHAR(50), isSystem BOOLEAN DEFAULT TRUE, isTenantAssignable BOOLEAN DEFAULT TRUE, status VARCHAR(20) DEFAULT 'ACTIVE')`,
+    `CREATE TABLE IF NOT EXISTS role_permissions (id VARCHAR(50) PRIMARY KEY, roleId VARCHAR(50), permission VARCHAR(100), UNIQUE KEY uq_role_perm (roleId, permission))`,
+    `CREATE TABLE IF NOT EXISTS role_data_scopes (id VARCHAR(50) PRIMARY KEY, roleId VARCHAR(50), scope VARCHAR(50), UNIQUE KEY uq_role_scope (roleId))`,
     `CREATE TABLE IF NOT EXISTS tenant_user_roles (id VARCHAR(50) PRIMARY KEY, tenantUserId VARCHAR(50) NOT NULL, roleId VARCHAR(50) NOT NULL, UNIQUE KEY uq_tenant_user (tenantUserId))`,
     `CREATE TABLE IF NOT EXISTS global_user_roles (id VARCHAR(50) PRIMARY KEY, userId VARCHAR(50) NOT NULL, roleId VARCHAR(50) NOT NULL, createdAt DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uq_user_role (userId, roleId))`,
     

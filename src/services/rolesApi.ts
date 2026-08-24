@@ -58,7 +58,7 @@ export const rolesApi = {
     const moduleNames = ['Customers', 'Visits', 'Tasks', 'Projects', 'Reports', 'Settings'];
 
     return roles.map(role => {
-      const rolePermissionIds = rolePerms.filter(rp => rp.roleId === role.id).map(rp => rp.permissionId);
+      const rolePermissionIds = rolePerms.filter(rp => rp.roleId === role.id).map(rp => rp.permission || rp.permissionId);
       const roleScope = dataScopes.find(ds => ds.roleId === role.id);
       
       const permissionsMap = moduleNames.map(moduleName => {

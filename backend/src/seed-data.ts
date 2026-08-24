@@ -20,6 +20,36 @@ async function seedData() {
   await pool.query(`INSERT IGNORE INTO tenants (id, code, name, status) VALUES (?, ?, ?, ?)`, 
     [tenantId, 'T001', 'TechNova Corp', 'ACTIVE']);
 
+  // Seed Authoritative Permission Master Catalog
+  const permissionCatalog = [
+    { code: 'ALL', name: 'Full Platform Access', desc: 'Unrestricted superuser access across all tenants and platform modules.', module: 'PLATFORM', category: 'PLATFORM', isSystem: true, isTenantAssignable: false },
+    { code: 'MANAGE_TENANT', name: 'Manage Tenant', desc: 'Configure organization settings, branding, profile, and subscription.', module: 'TENANT', category: 'TENANT_ADMINISTRATION', isSystem: true, isTenantAssignable: true },
+    { code: 'MANAGE_USERS', name: 'Manage Users', desc: 'Create, invite, update, suspend, and manage organization team members.', module: 'USERS', category: 'TENANT_ADMINISTRATION', isSystem: true, isTenantAssignable: true },
+    { code: 'MANAGE_ROLES', name: 'Manage Roles', desc: 'Define and customize organization role permissions and data scopes.', module: 'ROLES', category: 'TENANT_ADMINISTRATION', isSystem: true, isTenantAssignable: true },
+    { code: 'MANAGE_CUSTOMERS', name: 'Manage Customers', desc: 'Create, update, and manage customer accounts and contacts.', module: 'CUSTOMERS', category: 'CUSTOMERS', isSystem: true, isTenantAssignable: true },
+    { code: 'VIEW_ALL_CUSTOMERS', name: 'View All Customers', desc: 'View all customers within the organization regardless of assigned PIC.', module: 'CUSTOMERS', category: 'CUSTOMERS', isSystem: true, isTenantAssignable: true },
+    { code: 'MANAGE_OWN_CUSTOMERS', name: 'Manage Own Customers', desc: 'Create, update, and manage personally assigned customers.', module: 'CUSTOMERS', category: 'CUSTOMERS', isSystem: true, isTenantAssignable: true },
+    { code: 'MANAGE_PROJECTS', name: 'Manage Projects', desc: 'Create, update, and manage deals, stages, and project pipelines.', module: 'PROJECTS', category: 'PROJECTS', isSystem: true, isTenantAssignable: true },
+    { code: 'VIEW_ALL_PROJECTS', name: 'View All Projects', desc: 'View all projects and deal pipelines across the entire organization.', module: 'PROJECTS', category: 'PROJECTS', isSystem: true, isTenantAssignable: true },
+    { code: 'MANAGE_OWN_PROJECTS', name: 'Manage Own Projects', desc: 'Create and update personally assigned projects and deals.', module: 'PROJECTS', category: 'PROJECTS', isSystem: true, isTenantAssignable: true },
+    { code: 'MANAGE_TASKS', name: 'Manage Tasks', desc: 'Create, edit, complete, and manage all organization tasks.', module: 'TASKS', category: 'TASKS', isSystem: true, isTenantAssignable: true },
+    { code: 'ASSIGN_TASKS', name: 'Assign Tasks', desc: 'Delegate and assign tasks and visit schedules to sales representatives.', module: 'TASKS', category: 'TASKS', isSystem: true, isTenantAssignable: true },
+    { code: 'VIEW_ALL_TASKS', name: 'View All Tasks', desc: 'View all operational tasks across the entire organization.', module: 'TASKS', category: 'TASKS', isSystem: true, isTenantAssignable: true },
+    { code: 'VIEW_TEAM_TASKS', name: 'View Team Tasks', desc: 'View tasks and activities of sales representatives within the same team.', module: 'TASKS', category: 'TASKS', isSystem: true, isTenantAssignable: true },
+    { code: 'MANAGE_OWN_TASKS', name: 'Manage Own Tasks', desc: 'Create, update, and complete personally assigned tasks.', module: 'TASKS', category: 'TASKS', isSystem: true, isTenantAssignable: true },
+    { code: 'VIEW_REPORTS', name: 'View Reports', desc: 'View analytics, pipeline metrics, conversion rates, and sales performance.', module: 'REPORTS', category: 'REPORTS', isSystem: true, isTenantAssignable: true },
+    { code: 'VIEW_FINANCE', name: 'View Finance', desc: 'Access revenue metrics, deal values, and financial summary dashboards.', module: 'FINANCE', category: 'FINANCE', isSystem: true, isTenantAssignable: true },
+    { code: 'MANAGE_BILLS', name: 'Manage Invoices & Billing', desc: 'Manage payment records, invoices, and billing history.', module: 'FINANCE', category: 'FINANCE', isSystem: true, isTenantAssignable: true }
+  ];
+
+  for (const perm of permissionCatalog) {
+    await pool.query(`
+      INSERT INTO permissions (id, code, name, description, module, category, isSystem, isTenantAssignable, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+      ON DUPLICATE KEY UPDATE name = VALUES(name), description = VALUES(description), module = VALUES(module), category = VALUES(category), isTenantAssignable = VALUES(isTenantAssignable)
+    `, [`PERM-${perm.code}`, perm.code, perm.name, perm.desc, perm.module, perm.category, perm.isSystem, perm.isTenantAssignable]);
+  }
+
   // Seed Platform Role
   await pool.query(`INSERT IGNORE INTO roles (id, tenantId, name, description, isSystem, scope) VALUES (?, ?, ?, ?, ?, ?)`, 
     ['SUPER_ADMIN', null, 'Super Admin', 'Platform System Administrator', true, 'SYSTEM']);
@@ -35,7 +65,7 @@ async function seedData() {
   for (const tmpl of defaultTemplates) {
     await pool.query(`INSERT IGNORE INTO roles (id, tenantId, name, description, isSystem, scope) VALUES (?, NULL, ?, ?, true, 'TEMPLATE')`, [tmpl.id, tmpl.name, tmpl.desc]);
     for (const p of tmpl.perms) {
-      await pool.query(`INSERT IGNORE INTO role_permissions (roleId, permission) VALUES (?, ?)`, [tmpl.id, p]);
+      await pool.query(`INSERT IGNORE INTO role_permissions (id, roleId, permission) VALUES (?, ?, ?)`, [`RP-${tmpl.id}-${p}`, tmpl.id, p]);
     }
     await pool.query(`INSERT IGNORE INTO role_data_scopes (id, roleId, scope) VALUES (?, ?, ?)`, [`RDS-${tmpl.id}`, tmpl.id, tmpl.scope]);
   }

@@ -508,6 +508,20 @@ const setupEndpoint = (table: string) => {
       return;
     }
 
+    // Special handling for permissions table:
+    // - Platform user (Super Admin): see full catalog
+    // - Tenant user: see tenant-assignable permissions
+    if (table === 'permissions') {
+      let query = `SELECT * FROM permissions`;
+      const params: any[] = [];
+      if (actorTenant && actorTenant !== 'SYSTEM') {
+        query += ' WHERE isTenantAssignable = 1 AND status = "ACTIVE"';
+      }
+      query += ' ORDER BY category, module, name';
+      sendRes(res, pool.query(query, params).then(([rows]) => rows));
+      return;
+    }
+
     let query = `SELECT * FROM ${table}`;
     const params: any[] = [];
     if (tenantSpecificTables.includes(table)) {
@@ -1304,9 +1318,36 @@ tables.forEach(table => setupEndpoint(table));
       return res.status(403).json({ error: 'Forbidden. Cannot modify own role permissions.' });
     }
 
-    // Capability Delegation Enforcement (ACTOR AUTHORITY >= DELEGATED AUTHORITY)
-    const sensitiveCapabilities = ['ALL', 'MANAGE_TENANT', 'MANAGE_ROLES', 'MANAGE_USERS', 'MANAGE_CUSTOMERS', 'MANAGE_PROJECTS', 'MANAGE_TASKS'];
+    // Authoritative Permission Catalog Validation
     if (permissions && Array.isArray(permissions)) {
+      if (permissions.length > 0) {
+        const placeholders = permissions.map(() => '?').join(',');
+        const [validRows]: any = await pool.query(
+          `SELECT code, isTenantAssignable FROM permissions WHERE code IN (${placeholders})`,
+          permissions
+        );
+        const validCodes = validRows.map((r: any) => r.code);
+        const unknownCodes = permissions.filter(p => !validCodes.includes(p));
+
+        if (unknownCodes.length > 0) {
+          return res.status(400).json({
+            error: `Invalid permission code(s): ${unknownCodes.join(', ')}. All permissions must exist in the authoritative catalog.`
+          });
+        }
+
+        // Data-driven Privilege Ceiling: Check if tenant admin is assigning platform-only (isTenantAssignable = false) permissions
+        if (actorRole !== 'SUPER_ADMIN' && !actorPermissions.includes('ALL')) {
+          const nonAssignable = validRows.filter((r: any) => !r.isTenantAssignable).map((r: any) => r.code);
+          if (nonAssignable.length > 0) {
+            return res.status(403).json({
+              error: `Forbidden. The following permissions are platform-only and cannot be assigned to tenant roles: ${nonAssignable.join(', ')}`
+            });
+          }
+        }
+      }
+
+      // Capability Delegation Enforcement (ACTOR AUTHORITY >= DELEGATED AUTHORITY)
+      const sensitiveCapabilities = ['ALL', 'MANAGE_TENANT', 'MANAGE_ROLES', 'MANAGE_USERS', 'MANAGE_CUSTOMERS', 'MANAGE_PROJECTS', 'MANAGE_TASKS'];
       for (const p of permissions) {
         if (p === 'ALL' && actorRole !== 'SUPER_ADMIN') {
           return res.status(403).json({ error: 'Forbidden. ALL permission can only be assigned by Super Admin.' });
