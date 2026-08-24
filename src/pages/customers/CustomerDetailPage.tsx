@@ -158,7 +158,7 @@ const renderVisitStatusBadge = (status: string) => {
 export const CustomerDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { currentTenant, currentUser } = useAuth();
+  const { currentTenant, currentUser, hasPermission } = useAuth();
   const tenantId = currentTenant?.id || 'TEN-00001';
 
   const [customer, setCustomer] = useState<Customer | undefined>(
@@ -574,10 +574,10 @@ export const CustomerDetailPage: React.FC = () => {
 
   // Role Scope Filter for Activities
   const scopedCustomerActivities = sortedCustomerActivities.filter((act) => {
-    if (currentUser?.role === 'SALES_REPRESENTATIVE') {
+    if (!hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS')) {
       return act.userId === currentUser.id || customer.assignedPicId === currentUser.id;
     }
-    if (currentUser?.role === 'SUPERVISOR' && currentUser.teamId) {
+    if (hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS') && currentUser.teamId) {
       const actUser = tenantUsers.find((u) => u.id === act.userId);
       return act.userId === currentUser.id || actUser?.teamId === currentUser.teamId || customer.teamId === currentUser.teamId;
     }
@@ -639,10 +639,10 @@ export const CustomerDetailPage: React.FC = () => {
 
   // Role Scope logic for Visits
   const scopedVisits = visits.filter((v) => {
-    if (currentUser?.role === 'SALES_REPRESENTATIVE') {
+    if (!hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS')) {
       return v.picId === currentUser.id;
     }
-    if (currentUser?.role === 'SUPERVISOR' && currentUser.teamId) {
+    if (hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS') && currentUser.teamId) {
       const picUser = tenantUsers.find((u) => u.id === v.picId);
       return v.picId === currentUser.id || picUser?.teamId === currentUser.teamId;
     }
@@ -704,10 +704,10 @@ export const CustomerDetailPage: React.FC = () => {
 
   // Role Scope logic for Tasks
   const scopedTasks = tasks.filter((t) => {
-    if (currentUser?.role === 'SALES_REPRESENTATIVE') {
+    if (!hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS')) {
       return t.picId === currentUser.id;
     }
-    if (currentUser?.role === 'SUPERVISOR' && currentUser.teamId) {
+    if (hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS') && currentUser.teamId) {
       const picUser = tenantUsers.find((u) => u.id === t.picId);
       return t.picId === currentUser.id || picUser?.teamId === currentUser.teamId;
     }
@@ -777,10 +777,10 @@ export const CustomerDetailPage: React.FC = () => {
 
   // Role Scope logic for Follow-ups
   const scopedFollowups = followups.filter((f) => {
-    if (currentUser?.role === 'SALES_REPRESENTATIVE') {
+    if (!hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS')) {
       return f.picId === currentUser.id;
     }
-    if (currentUser?.role === 'SUPERVISOR' && currentUser.teamId) {
+    if (hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS') && currentUser.teamId) {
       const picUser = tenantUsers.find((u) => u.id === f.picId);
       return f.picId === currentUser.id || picUser?.teamId === currentUser.teamId;
     }
@@ -1143,10 +1143,10 @@ export const CustomerDetailPage: React.FC = () => {
 
   // Role Scope logic for Projects
   const scopedOpps = projects.filter((o) => {
-    if (currentUser?.role === 'SALES_REPRESENTATIVE') {
+    if (!hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS')) {
       return o.picId === currentUser.id;
     }
-    if (currentUser?.role === 'SUPERVISOR' && currentUser.teamId) {
+    if (hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS') && currentUser.teamId) {
       const picUser = tenantUsers.find((u) => u.id === o.picId);
       return o.picId === currentUser.id || picUser?.teamId === currentUser.teamId;
     }
@@ -1376,12 +1376,7 @@ export const CustomerDetailPage: React.FC = () => {
   const activeOpps = projects.filter((o) => o.stage !== 'WON' && o.stage !== 'LOST');
   const pipelineValue = activeOpps.reduce((sum, o) => sum + o.estimatedValue, 0);
 
-  // Permission helper: Manager/Supervisor/Admin can reassign PIC
-  const canReassignPic =
-    currentUser?.role === 'SUPER_ADMIN' ||
-    currentUser?.role === 'TENANT_ADMIN' ||
-    currentUser?.role === 'SALES_MANAGER' ||
-    currentUser?.role === 'SUPERVISOR';
+  const canReassignPic = hasPermission('MANAGE_CUSTOMERS') || hasPermission('ASSIGN_TASKS');
 
   // Handlers
   const handleSaveCustomer = (e: React.FormEvent) => {
@@ -2439,7 +2434,7 @@ export const CustomerDetailPage: React.FC = () => {
                 Showing {filteredVisits.length} of {scopedVisits.length} visits
               </span>
               <span className="text-[11px] text-[#767587]">
-                Scope: {currentUser?.role === 'SALES_REPRESENTATIVE' ? 'Own Visits' : currentUser?.role === 'SUPERVISOR' ? 'Team Scope' : 'Organization Scope'}
+                Scope: {!hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS') ? 'Own Visits' : hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS') ? 'Team Scope' : 'Organization Scope'}
               </span>
             </div>
 
@@ -2752,7 +2747,7 @@ export const CustomerDetailPage: React.FC = () => {
                 Showing {filteredTasks.length} of {scopedTasks.length} tasks
               </span>
               <span className="text-[11px] text-[#767587]">
-                Scope: {currentUser?.role === 'SALES_REPRESENTATIVE' ? 'Own Tasks' : currentUser?.role === 'SUPERVISOR' ? 'Team Scope' : 'Organization Scope'}
+                Scope: {!hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS') ? 'Own Tasks' : hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS') ? 'Team Scope' : 'Organization Scope'}
               </span>
             </div>
 
@@ -5764,7 +5759,7 @@ export const CustomerDetailPage: React.FC = () => {
                 <div>
                   <span className="text-[10px] text-[#767587] uppercase font-bold block">Deal Value</span>
                   <span className="text-sm font-extrabold text-[#008f53]">
-                    Rp {viewing(opp.estimatedValue || 0).toLocaleString('id-ID')}
+                    Rp {(viewingOpp.estimatedValue || 0).toLocaleString('id-ID')}
                   </span>
                 </div>
                 <div>

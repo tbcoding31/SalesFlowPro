@@ -33,7 +33,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
   // Check if active tenant has an expired Trial 3 Bulan plan for client users
   const isTrialExpired =
     currentUser &&
-    currentUser.role !== 'SUPER_ADMIN' &&
+    currentUser?.tenantId !== 'SYSTEM' &&
     currentTenant &&
     currentTenant.type === 'Trial 3 Bulan' &&
     (currentTenant.isTrialExpired ||

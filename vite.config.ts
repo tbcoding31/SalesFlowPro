@@ -11,12 +11,23 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      chunkSizeWarningLimit: 1000,
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+            'vendor-icons': ['lucide-react']
+          }
+        }
+      }
+    },
     server: {
       host: '0.0.0.0',
       port: 3100,
       proxy: {
         '/api': {
-          target: 'http://localhost:5000',
+          target: process.env.VITE_API_TARGET || (process.env.APP_ENV === 'test' ? 'http://localhost:5001' : (process.env.PORT ? `http://localhost:${process.env.PORT}` : 'http://localhost:5000')),
           changeOrigin: true,
           secure: false,
         }

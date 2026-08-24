@@ -48,11 +48,15 @@ const STORAGE_KEYS = {
 function getLocal<T>(key: string, initial: T): T {
   try {
     const item = localStorage.getItem(key);
-    if (!item) {
+    if (!item || item === 'undefined' || item === 'null') {
       localStorage.setItem(key, JSON.stringify(initial));
       return initial;
     }
-    return JSON.parse(item);
+    const parsed = JSON.parse(item);
+    if (!parsed || (Array.isArray(initial) && !Array.isArray(parsed))) {
+      return initial;
+    }
+    return parsed;
   } catch (e) {
     console.error('Error reading localStorage key', key, e);
     return initial;
@@ -60,12 +64,25 @@ function getLocal<T>(key: string, initial: T): T {
 }
 
 
-const syncPush = (method: 'POST'|'PUT'|'DELETE', endpoint: string, data?: any) => {
-  fetch(`/api/${endpoint}`, {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-    body: data ? JSON.stringify(data) : undefined
-  }).catch(e => console.error('Sync Error', e));
+const syncPush = async (method: 'POST'|'PUT'|'DELETE', endpoint: string, data?: any, onRollback?: () => void) => {
+  try {
+    const res = await fetch(`/api/${endpoint}`, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: data ? JSON.stringify(data) : undefined
+    });
+    if (!res.ok) {
+      console.warn(`[Sync Error] ${method} /api/${endpoint} returned ${res.status}. Rolling back local cache state.`);
+      if (onRollback) {
+        onRollback();
+      }
+    }
+  } catch (e) {
+    console.error(`[Sync Network Error] ${method} /api/${endpoint}`, e);
+    if (onRollback) {
+      onRollback();
+    }
+  }
 };
 
 function setLocal<T>(key: string, value: T): void {
@@ -81,6 +98,16 @@ export const DataService = {
   getTenants: (): Tenant[] => getLocal(STORAGE_KEYS.TENANTS, INITIAL_TENANTS),
   getTenantById: (id: string): Tenant | undefined => {
     return DataService.getTenants().find((t) => t.id === id);
+  },
+  cacheTenant: (tenant: Tenant): void => {
+    const tenants = DataService.getTenants();
+    const idx = tenants.findIndex((t) => t.id === tenant.id);
+    if (idx >= 0) {
+      tenants[idx] = tenant;
+    } else {
+      tenants.unshift(tenant);
+    }
+    setLocal(STORAGE_KEYS.TENANTS, tenants);
   },
   saveTenant: (tenant: Tenant): Tenant => {
     const tenants = DataService.getTenants();
@@ -161,7 +188,8 @@ export const DataService = {
     return getLocal(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS).find((c) => c.id === id);
   },
   saveCustomer: (customer: Customer): Customer => {
-    const customers = getLocal(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
+    const previousCustomers = getLocal(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
+    const customers = [...previousCustomers];
     const idx = customers.findIndex((c) => c.id === customer.id);
     if (idx >= 0) {
       customers[idx] = customer;
@@ -169,6 +197,33 @@ export const DataService = {
       customers.unshift(customer);
     }
     setLocal(STORAGE_KEYS.CUSTOMERS, customers);
+    
+    // Map to DB Schema columns: title/name, assignedPicId -> picId, etc.
+    const cAny = customer as any;
+    const dbPayload: any = {
+      id: customer.id,
+      tenantId: customer.tenantId,
+      code: customer.code,
+      name: customer.name,
+      typeId: customer.type,
+      statusId: customer.status,
+      industry: customer.industry,
+      tier: cAny.tier,
+      creditLimit: cAny.creditLimit,
+      taxId: cAny.taxId,
+      picId: customer.assignedPicId || 'USR-005'
+    };
+
+    syncPush(
+      idx >= 0 ? 'PUT' : 'POST',
+      idx >= 0 ? `customers/${customer.id}` : 'customers',
+      dbPayload,
+      () => {
+        // Rollback on failure
+        setLocal(STORAGE_KEYS.CUSTOMERS, previousCustomers);
+      }
+    );
+
     DataService.addActivity({
       tenantId: customer.tenantId,
       customerId: customer.id,
@@ -183,9 +238,13 @@ export const DataService = {
     return customer;
   },
   deleteCustomer: (id: string): void => {
-    const customers = getLocal(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
-    const filtered = customers.filter((c) => c.id !== id);
+    const previousCustomers = getLocal(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
+    const filtered = previousCustomers.filter((c) => c.id !== id);
     setLocal(STORAGE_KEYS.CUSTOMERS, filtered);
+    syncPush('DELETE', `customers/${id}`, undefined, () => {
+      // Rollback on failure
+      setLocal(STORAGE_KEYS.CUSTOMERS, previousCustomers);
+    });
   },
 
   // VISITS
@@ -290,7 +349,8 @@ export const DataService = {
     return filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   },
   saveTask: (task: Task): Task => {
-    const tasks = getLocal(STORAGE_KEYS.TASKS, INITIAL_TASKS);
+    const previousTasks = getLocal(STORAGE_KEYS.TASKS, INITIAL_TASKS);
+    const tasks = [...previousTasks];
     const idx = tasks.findIndex((t) => t.id === task.id);
     if (idx >= 0) {
       tasks[idx] = task;
@@ -298,7 +358,29 @@ export const DataService = {
       tasks.unshift(task);
     }
     setLocal(STORAGE_KEYS.TASKS, tasks);
-    syncPush(idx >= 0 ? 'PUT' : 'POST', idx >= 0 ? `tasks/${task.id}` : 'tasks', task);
+    
+    // DB Schema payload mapping
+    const dbPayload: any = {
+      id: task.id,
+      tenantId: task.tenantId,
+      customerId: task.customerId,
+      title: task.title,
+      description: task.description,
+      priorityId: task.priority,
+      statusId: task.status,
+      dueDate: task.dueDate,
+      assigneeId: task.picId || 'USR-005',
+      createdAt: task.createdAt
+    };
+
+    syncPush(
+      idx >= 0 ? 'PUT' : 'POST',
+      idx >= 0 ? `tasks/${task.id}` : 'tasks',
+      dbPayload,
+      () => {
+        setLocal(STORAGE_KEYS.TASKS, previousTasks);
+      }
+    );
     return task;
   },
 
@@ -312,7 +394,8 @@ export const DataService = {
     return filtered;
   },
   saveFollowUp: (followUp: FollowUp): FollowUp => {
-    const followups = getLocal(STORAGE_KEYS.FOLLOWUPS, INITIAL_FOLLOWUPS);
+    const previousFollowups = getLocal(STORAGE_KEYS.FOLLOWUPS, INITIAL_FOLLOWUPS);
+    const followups = [...previousFollowups];
     const idx = followups.findIndex((f) => f.id === followUp.id);
     if (idx >= 0) {
       followups[idx] = followUp;
@@ -320,7 +403,14 @@ export const DataService = {
       followups.unshift(followUp);
     }
     setLocal(STORAGE_KEYS.FOLLOWUPS, followups);
-    syncPush(idx >= 0 ? 'PUT' : 'POST', idx >= 0 ? `follow_ups/${followUp.id}` : 'follow_ups', followUp);
+    syncPush(
+      idx >= 0 ? 'PUT' : 'POST',
+      idx >= 0 ? `follow_ups/${followUp.id}` : 'follow_ups',
+      followUp,
+      () => {
+        setLocal(STORAGE_KEYS.FOLLOWUPS, previousFollowups);
+      }
+    );
     return followUp;
   },
   deleteFollowUpsByProjectId: (projectId: string): void => {
@@ -339,7 +429,8 @@ export const DataService = {
     return filtered;
   },
   saveProject: (project: Project): Project => {
-    const opps = getLocal(STORAGE_KEYS.PROJECTS, INITIAL_PROJECTS);
+    const previousProjects = getLocal(STORAGE_KEYS.PROJECTS, INITIAL_PROJECTS);
+    const opps = [...previousProjects];
     const idx = opps.findIndex((o) => o.id === project.id);
     if (idx >= 0) {
       opps[idx] = project;
@@ -347,7 +438,31 @@ export const DataService = {
       opps.unshift(project);
     }
     setLocal(STORAGE_KEYS.PROJECTS, opps);
-    syncPush(idx >= 0 ? 'PUT' : 'POST', idx >= 0 ? `projects/${project.id}` : 'projects', project);
+
+    // Map to DB Schema: title, value, probability, stageId, picId, etc.
+    const dbPayload: any = {
+      id: project.id,
+      tenantId: project.tenantId,
+      customerId: project.customerId,
+      title: project.name,
+      value: project.estimatedValue,
+      probability: project.probability,
+      expectedCloseDate: project.expectedCloseDate,
+      stageId: project.stage,
+      source: project.source,
+      description: project.description,
+      picId: project.picId || 'USR-005'
+    };
+
+    syncPush(
+      idx >= 0 ? 'PUT' : 'POST',
+      idx >= 0 ? `projects/${project.id}` : 'projects',
+      dbPayload,
+      () => {
+        setLocal(STORAGE_KEYS.PROJECTS, previousProjects);
+      }
+    );
+
     DataService.addActivity({
       tenantId: project.tenantId,
       customerId: project.customerId,
@@ -372,14 +487,17 @@ export const DataService = {
     return filtered.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
   },
   addActivity: (activityData: Omit<Activity, 'id'>): Activity => {
-    const activities = getLocal(STORAGE_KEYS.ACTIVITIES, INITIAL_ACTIVITIES);
+    const previousActivities = getLocal(STORAGE_KEYS.ACTIVITIES, INITIAL_ACTIVITIES);
+    const activities = [...previousActivities];
     const newAct: Activity = {
       ...activityData,
       id: `ACT-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`
     };
     activities.unshift(newAct);
     setLocal(STORAGE_KEYS.ACTIVITIES, activities);
-    syncPush('POST', 'activities', newAct);
+    syncPush('POST', 'activities', newAct, () => {
+      setLocal(STORAGE_KEYS.ACTIVITIES, previousActivities);
+    });
     return newAct;
   },
 
@@ -390,7 +508,8 @@ export const DataService = {
     return targets.filter((t) => t.tenantId === tenantId);
   },
   saveTarget: (target: SalesTarget): SalesTarget => {
-    const targets = getLocal(STORAGE_KEYS.TARGETS, INITIAL_TARGETS);
+    const previousTargets = getLocal(STORAGE_KEYS.TARGETS, INITIAL_TARGETS);
+    const targets = [...previousTargets];
     const idx = targets.findIndex((t) => t.id === target.id);
     if (idx >= 0) {
       targets[idx] = target;
@@ -398,7 +517,14 @@ export const DataService = {
       targets.unshift(target);
     }
     setLocal(STORAGE_KEYS.TARGETS, targets);
-    syncPush(idx >= 0 ? 'PUT' : 'POST', idx >= 0 ? `sales_targets/${target.id}` : 'sales_targets', target);
+    syncPush(
+      idx >= 0 ? 'PUT' : 'POST',
+      idx >= 0 ? `sales_targets/${target.id}` : 'sales_targets',
+      target,
+      () => {
+        setLocal(STORAGE_KEYS.TARGETS, previousTargets);
+      }
+    );
     return target;
   },
 

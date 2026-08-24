@@ -7,24 +7,47 @@ export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
 
   const [email, setEmail] = useState('sarah.j@salesflow.co');
-  const [password, setPassword] = useState('password123');
+  const [password, setPassword] = useState('Password123');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [uiState, setUiState] = useState<'default' | 'error' | 'network-error' | 'loading'>('default');
+  const [errorDetails, setErrorDetails] = useState<{ status?: number; message?: string; code?: string } | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setUiState('loading');
-    const success = await login(email, password);
-    if (success) {
+    setErrorDetails(null);
+
+    const result = await login(email, password);
+    const isSuccess = typeof result === 'boolean' ? result : result.success;
+
+    if (isSuccess) {
       setUiState('default');
-      if (currentUser?.role === 'SUPER_ADMIN') {
+      // Read user from localStorage to avoid stale state closure
+      const savedUserStr = localStorage.getItem('sfp_currentUser');
+      const savedUser = savedUserStr ? JSON.parse(savedUserStr) : null;
+      if (savedUser?.tenantId === 'SYSTEM') {
         navigate('/admin/dashboard');
       } else {
         navigate('/dashboard');
       }
     } else {
-      setUiState('error');
+      const loginRes = typeof result === 'object' ? result : null;
+      if (loginRes?.status === 0 || loginRes?.code === 'NETWORK_ERROR') {
+        setUiState('network-error');
+        setErrorDetails({
+          status: 0,
+          message: loginRes.message || 'Unable to connect to the server. Please check your internet connection.',
+          code: 'NETWORK_ERROR'
+        });
+      } else {
+        setUiState('error');
+        setErrorDetails({
+          status: loginRes?.status || 401,
+          message: loginRes?.message || 'Invalid credentials',
+          code: loginRes?.code || 'INVALID_CREDENTIALS'
+        });
+      }
     }
   };
 
@@ -33,9 +56,13 @@ export const LoginPage: React.FC = () => {
     if (state === 'error') {
       setEmail('invalid@email');
       setPassword('wrongpass');
+      setErrorDetails({ status: 401, message: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
+    } else if (state === 'network-error') {
+      setErrorDetails({ status: 0, message: 'Unable to connect to the server. Please check your connection.', code: 'NETWORK_ERROR' });
     } else if (state === 'default') {
       setEmail('sarah.j@salesflow.co');
-      setPassword('password123');
+      setPassword('Password123');
+      setErrorDetails(null);
     }
   };
 
@@ -128,28 +155,28 @@ export const LoginPage: React.FC = () => {
             <div className="flex flex-wrap gap-1">
               <button
                 type="button"
-                onClick={() => { setEmail('sarah.j@salesflow.co'); setPassword('password123'); }}
+                onClick={() => { setEmail('sarah.j@salesflow.co'); setPassword('Password123'); }}
                 className="px-2 py-0.5 bg-white border border-[#c7c4d8] rounded text-[10px] hover:border-[#4744e5] hover:text-[#4744e5]"
               >
                 Tenant Admin
               </button>
               <button
                 type="button"
-                onClick={() => { setEmail('m.rodriguez@salesflow.co'); setPassword('password123'); }}
+                onClick={() => { setEmail('m.rodriguez@salesflow.co'); setPassword('Password123'); }}
                 className="px-2 py-0.5 bg-white border border-[#c7c4d8] rounded text-[10px] hover:border-[#4744e5] hover:text-[#4744e5]"
               >
                 Sales Manager
               </button>
               <button
                 type="button"
-                onClick={() => { setEmail('budi.s@salesflow.co'); setPassword('password123'); }}
+                onClick={() => { setEmail('budi.s@salesflow.co'); setPassword('Password123'); }}
                 className="px-2 py-0.5 bg-white border border-[#c7c4d8] rounded text-[10px] hover:border-[#4744e5] hover:text-[#4744e5]"
               >
                 Sales Rep
               </button>
               <button
                 type="button"
-                onClick={() => { setEmail('ahmad.ricky@salesflow.pro'); setPassword('password123'); }}
+                onClick={() => { setEmail('superadmin@system.com'); setPassword('Password123'); }}
                 className="px-2 py-0.5 bg-white border border-[#c7c4d8] rounded text-[10px] hover:border-[#4744e5] hover:text-[#4744e5]"
               >
                 Super Admin
@@ -162,9 +189,11 @@ export const LoginPage: React.FC = () => {
             <div className="bg-[#ffdad6]/40 border border-[#ba1a1a]/30 rounded-lg p-3.5 flex items-start gap-3">
               <span className="material-symbols-outlined text-[#ba1a1a] text-xl shrink-0">error</span>
               <div className="flex flex-col text-xs">
-                <span className="font-bold text-[#93000a]">Invalid credentials</span>
-                <span className="text-[#93000a]/80 text-[11px] mt-0.5">
-                  The email or password provided is incorrect. Please verify and try again.
+                <span className="font-bold text-[#93000a]">
+                  Login Failed {errorDetails?.status ? `(${errorDetails.status})` : ''}
+                </span>
+                <span className="text-[#93000a]/90 text-[11px] mt-0.5 font-medium">
+                  {errorDetails?.message || 'Invalid credentials'}
                 </span>
               </div>
             </div>
@@ -175,9 +204,9 @@ export const LoginPage: React.FC = () => {
             <div className="bg-[#ffdbc9]/40 border border-[#9a4600]/30 rounded-lg p-3.5 flex items-start gap-3">
               <span className="material-symbols-outlined text-[#9a4600] text-xl shrink-0">wifi_off</span>
               <div className="flex flex-col text-xs">
-                <span className="font-bold text-[#0d0300]">Network error</span>
+                <span className="font-bold text-[#0d0300]">Network Error</span>
                 <span className="text-[#0d0300]/80 text-[11px] mt-0.5">
-                  Please check your internet connection and try again.
+                  {errorDetails?.message || 'Unable to connect to the server. Please check your internet connection and try again.'}
                 </span>
               </div>
             </div>

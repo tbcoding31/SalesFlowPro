@@ -14,7 +14,8 @@ export const SalesDashboard: React.FC = () => {
   const [projects] = useState<Project[]>(DataService.getProjects(tenantId));
   const [activities] = useState<Activity[]>(DataService.getActivities(tenantId));
 
-  const isSalesRep = currentUser?.role === 'SALES_REPRESENTATIVE';
+  const { hasPermission } = useAuth();
+  const isSalesRep = !hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS');
 
   // Metrics
   const myCustomers = isSalesRep

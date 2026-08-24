@@ -54,9 +54,9 @@ export const CreateVisitPage: React.FC = () => {
   useEffect(() => {
     masterDataApi.fetchMasterData('visit_purposes', tenantId).then(data => {
       setVisitPurposes(data);
-      const def = data.find(d => d.is_default);
-      if (def) setPurpose(def.code_value);
-      else if (data.length > 0) setPurpose(data[0].code_value);
+      const def = data.find(d => d.isDefault);
+      if (def) setPurpose(def.codeValue);
+      else if (data.length > 0) setPurpose(data[0].codeValue);
     });
   }, [tenantId]);
 

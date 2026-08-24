@@ -29,10 +29,38 @@ export interface Tenant {
   primaryAdminName?: string;
   primaryAdminEmail?: string;
   createdAt: string;
-  updatedAt: string;
+  updatedAt?: string;
   lastActivityAt?: string;
   userCount?: number;
   activeUserCount?: number;
+  userStats?: {
+    total: number;
+    active: number;
+    suspended: number;
+    inactive: number;
+  };
+  organizationStats?: {
+    departments: number;
+    teams: number;
+    roles: number;
+    salesReps: number;
+  };
+  primaryAdmin?: {
+    id: string;
+    name: string;
+    email: string;
+    role?: string;
+    status?: string;
+    lastLoginAt?: string;
+  } | null;
+  recentActivity?: Array<{
+    id: string;
+    action: string;
+    entity?: string;
+    description?: string;
+    userName?: string;
+    timestamp?: string;
+  }>;
 }
 
 export interface User {
@@ -45,6 +73,7 @@ export interface User {
   username: string;
   phone?: string;
   avatarUrl?: string;
+  avatar?: string;
   role: UserRole;
   roleName: string;
   department: string;
@@ -54,6 +83,7 @@ export interface User {
   status: UserStatus;
   activeTasksCount?: number;
   lastLoginAt?: string;
+  permissions?: string[];
   createdAt: string;
 }
 
@@ -128,6 +158,7 @@ export interface Visit {
   taskType?: string;
   purpose: string;
   visitDate: string;
+  date?: string;
   startTime: string;
   endTime: string;
   location: string;
@@ -161,6 +192,7 @@ export interface Task {
   relatedProjectId?: string;
   relatedTaskId?: string;
   relatedVisitId?: string;
+  assignedToName?: string;
 }
 
 export type FollowUpType =
@@ -209,6 +241,7 @@ export interface Project {
   id: string;
   tenantId: string;
   name: string;
+  title?: string;
   customerId: string;
   customerName: string;
   customerCode: string;
@@ -269,11 +302,13 @@ export interface SalesTarget {
 export interface MasterDataItem {
   id: string;
   tenantId?: string; // empty if global
-  category: 'customer_types' | 'customer_status' | 'visit_purposes' | 'task_priorities' | 'task_statuses' | 'project_stages' | 'departments' | 'positions' | 'task_types';
+  category: 'customer_types' | 'customer_status' | 'customer_statuses' | 'visit_purposes' | 'task_priorities' | 'task_statuses' | 'project_stages' | 'departments' | 'positions' | 'task_types';
   label: string;
   codeValue: string;
+  code_value?: string;
   indicator?: string;
   isDefault: boolean;
+  is_default?: boolean;
   displayOrder: number;
 }
 

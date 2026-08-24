@@ -8,8 +8,10 @@ export const UserProfilePage: React.FC = () => {
   // Use current user data if available, otherwise fallback to the requested mock data
   const user = {
     name: currentUser?.name || 'Ahmad Ricky',
-    role: currentUser?.role === 'SUPER_ADMIN' ? 'System Administrator' : 
-          currentUser?.role === 'ADMIN' ? 'Administrator' : 
+    role: currentUser?.tenantId === 'SYSTEM' ? 'System Administrator' : 
+          currentUser?.role === 'TENANT_ADMIN' ? 'Tenant Administrator' : 
+          currentUser?.role === 'SALES_MANAGER' ? 'Sales Manager' :
+          currentUser?.role === 'SUPERVISOR' ? 'Supervisor' :
           'Sales Representative',
     department: 'Sales Department',
     email: currentUser?.email || 'ahmadricky90909@gmail.com',
@@ -33,7 +35,7 @@ export const UserProfilePage: React.FC = () => {
   const activities = myAuditLogs.slice(0, 4).map(log => ({
     id: log.id,
     action: `${log.action} ${log.entity}`,
-    time: log.createdAt?.substring(0, 10) || 'Recent',
+    time: (log.timestamp || (log as any).createdAt)?.substring(0, 10) || 'Recent',
     icon: 'history',
     color: 'text-emerald-600',
     bg: 'bg-emerald-50'

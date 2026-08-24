@@ -27,13 +27,12 @@ export const CreateTenantPage: React.FC = () => {
 
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
 
-    setTimeout(() => {
-      const adminId = `USR-${Date.now().toString().slice(-4)}`;
-      const newAdmin: User = {
+    const adminId = `USR-${Date.now().toString().slice(-4)}`;
+    const newAdmin: User = {
         id: adminId,
         tenantId: tenantCode,
         firstName: adminFirstName,
@@ -80,12 +79,36 @@ export const CreateTenantPage: React.FC = () => {
         activeUserCount: 1,
       };
 
-      DataService.saveUser(newAdmin);
-      DataService.saveTenant(newTenant);
+      try {
+        const token = localStorage.getItem('sfp_auth_token') || '';
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json'
+        };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      setIsLoading(false);
-      navigate(`/admin/tenants/${newTenant.id}`);
-    }, 600);
+        const res = await fetch('/api/onboarding/tenant', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            tenant: newTenant,
+            user: newAdmin,
+            adminPassword
+          })
+        });
+
+        if (!res.ok) {
+          throw new Error(`Failed to onboard tenant: HTTP ${res.status}`);
+        }
+
+        // Simpan ke local cache untuk optimisme UI (non-mutating)
+        DataService.cacheTenant(newTenant);
+
+        setIsLoading(false);
+        navigate(`/admin/tenants/${newTenant.id}`);
+      } catch (e) {
+        console.error('Error saving tenant & admin', e);
+        setIsLoading(false);
+      }
   };
 
   return (

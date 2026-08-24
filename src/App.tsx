@@ -60,7 +60,7 @@ import { SystemSettingsPage } from './pages/settings/SystemSettingsPage';
 // Dynamic Dashboard Resolver component based on user role
 const DashboardResolver: React.FC = () => {
   const { currentUser, currentTenant, isLoading } = useAuth();
-  const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN' || currentUser?.tenantId === 'SYSTEM';
+  const isSuperAdmin = currentUser?.tenantId === 'SYSTEM' || currentUser?.tenantId === 'SYSTEM';
 
   const [isDataSynced, setIsDataSynced] = React.useState(false);
 
@@ -89,29 +89,30 @@ const DashboardResolver: React.FC = () => {
 };
 
 // Protected Route Guard Wrapper
-const ProtectedRoute: React.FC<{ children: React.ReactNode; requiredRole?: string; allowedRoles?: string[] }> = ({
-  children,
-  requiredRole,
-  allowedRoles,
-}) => {
-  const { isAuthenticated, currentUser } = useAuth();
+function ProtectedRoute({ children, requiredPermission }: { children: React.ReactNode; requiredPermission?: string }) {
+  const { isAuthenticated, isLoading, hasPermission } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-gray-500 font-medium">Loading Application...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
 
-  const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN' || currentUser?.tenantId === 'SYSTEM';
-
-  if (requiredRole === 'SUPER_ADMIN' && !isSuperAdmin) {
-    return <Navigate to="/dashboard" replace />;
-  }
-  
-  if (allowedRoles && currentUser && !allowedRoles.includes(currentUser.role)) {
+  if (requiredPermission && !hasPermission(requiredPermission)) {
     return <Navigate to="/dashboard" replace />;
   }
 
   return <Layout>{children}</Layout>;
-};
+}
 
 export default function App() {
   return (
@@ -152,7 +153,7 @@ export default function App() {
           <Route
             path="/admin/dashboard"
             element={
-              <ProtectedRoute requiredRole="SUPER_ADMIN">
+              <ProtectedRoute requiredPermission="MANAGE_TENANT">
                 <SuperAdminDashboard />
               </ProtectedRoute>
             }
@@ -160,7 +161,7 @@ export default function App() {
           <Route
             path="/admin/tenants"
             element={
-              <ProtectedRoute requiredRole="SUPER_ADMIN">
+              <ProtectedRoute requiredPermission="MANAGE_TENANT">
                 <TenantsListPage />
               </ProtectedRoute>
             }
@@ -168,7 +169,7 @@ export default function App() {
           <Route
             path="/admin/tenants/create"
             element={
-              <ProtectedRoute requiredRole="SUPER_ADMIN">
+              <ProtectedRoute requiredPermission="MANAGE_TENANT">
                 <CreateTenantPage />
               </ProtectedRoute>
             }
@@ -176,7 +177,7 @@ export default function App() {
           <Route
             path="/admin/tenants/:id"
             element={
-              <ProtectedRoute requiredRole="SUPER_ADMIN">
+              <ProtectedRoute requiredPermission="MANAGE_TENANT">
                 <TenantDetailPage />
               </ProtectedRoute>
             }
@@ -184,7 +185,7 @@ export default function App() {
           <Route
             path="/admin/tenant-users"
             element={
-              <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'TENANT_ADMIN']}>
+              <ProtectedRoute requiredPermission="MANAGE_USERS">
                 <TenantUsersPage />
               </ProtectedRoute>
             }
@@ -192,7 +193,7 @@ export default function App() {
           <Route
             path="/admin/tenant-users/create"
             element={
-              <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'TENANT_ADMIN']}>
+              <ProtectedRoute requiredPermission="MANAGE_USERS">
                 <CreateTenantUserPage />
               </ProtectedRoute>
             }
@@ -200,7 +201,7 @@ export default function App() {
           <Route
             path="/admin/tenant-users/new"
             element={
-              <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'TENANT_ADMIN']}>
+              <ProtectedRoute requiredPermission="MANAGE_USERS">
                 <CreateTenantUserPage />
               </ProtectedRoute>
             }
@@ -208,7 +209,7 @@ export default function App() {
           <Route
             path="/admin/roles"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute requiredPermission="MANAGE_ROLES">
                 <RolesPermissionsPage />
               </ProtectedRoute>
             }
@@ -216,7 +217,7 @@ export default function App() {
           <Route
             path="/admin/master-data"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute requiredPermission="MANAGE_TENANT">
                 <MasterDataPage />
               </ProtectedRoute>
             }
@@ -354,7 +355,7 @@ export default function App() {
           <Route
             path="/team-tasks"
             element={
-              <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'TENANT_ADMIN', 'SALES_MANAGER', 'SUPERVISOR']}>
+              <ProtectedRoute requiredPermission="VIEW_TEAM_TASKS">
                 <TeamTasksPage />
               </ProtectedRoute>
             }
@@ -499,7 +500,7 @@ export default function App() {
           <Route
             path="/admin/audit-logs"
             element={
-              <ProtectedRoute allowedRoles={['SUPER_ADMIN']}>
+              <ProtectedRoute requiredPermission="MANAGE_TENANT">
                 <AuditLogsPage />
               </ProtectedRoute>
             }

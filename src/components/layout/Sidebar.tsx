@@ -3,13 +3,14 @@ import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 
 export const Sidebar: React.FC = () => {
-  const { currentUser, currentTenant, logout } = useAuth();
+  const { currentUser, currentTenant, hasPermission, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
-  const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
-  const isSalesRep = currentUser?.role === 'SALES_REPRESENTATIVE';
-  const isManagerOrSupervisor = ['SUPER_ADMIN', 'TENANT_ADMIN', 'SALES_MANAGER', 'SUPERVISOR'].includes(currentUser?.role || '');
+  const isSuperAdmin = hasPermission('MANAGE_TENANT');
+  const isManagerOrSupervisor = hasPermission('VIEW_TEAM_TASKS');
+  const canViewReports = hasPermission('VIEW_REPORTS') || hasPermission('VIEW_FINANCE');
+  const isSalesRep = !hasPermission('VIEW_ALL_CUSTOMERS');
 
   // State to manage open/closed accordion sections
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
@@ -409,7 +410,7 @@ export const Sidebar: React.FC = () => {
               )}
             </div>
 
-            {(currentUser?.role === 'TENANT_ADMIN' || currentUser?.role === 'SUPERVISOR') && (
+            {(hasPermission('MANAGE_USERS') || hasPermission('MANAGE_ROLES') || hasPermission('MANAGE_TENANT')) && (
               <div>
                 <div 
                   className="px-3 mb-2 flex items-center justify-between cursor-pointer group"

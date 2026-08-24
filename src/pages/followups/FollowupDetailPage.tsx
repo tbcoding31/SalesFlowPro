@@ -304,7 +304,7 @@ export const FollowupDetailPage: React.FC = () => {
                         {relatedVisit?.title || followup.relatedVisitId}
                       </div>
                       <div className="text-[11px] text-slate-500 mt-0.5">
-                        {relatedVisit?.date ? new Date(relatedVisit.date).toLocaleDateString() : 'View visit details'}
+                        {(relatedVisit?.visitDate || relatedVisit?.date) ? new Date(relatedVisit.visitDate || relatedVisit.date!).toLocaleDateString() : 'View visit details'}
                       </div>
                     </div>
                     <span className="material-symbols-outlined text-slate-300 group-hover:text-indigo-600 text-[16px] transition-colors">open_in_new</span>

@@ -50,7 +50,7 @@ export const Topbar: React.FC = () => {
           </select>
 
           {/* Tenant Switcher */}
-          {currentUser?.role !== 'SUPER_ADMIN' && (
+          {currentUser?.tenantId !== 'SYSTEM' && (
             <select
               value={currentTenant?.id}
               onChange={(e) => switchTenant(e.target.value)}

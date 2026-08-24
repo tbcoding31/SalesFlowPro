@@ -29,12 +29,16 @@ export const TeamDashboard: React.FC = () => {
     const data = users.map(user => {
       // Generate some deterministic mock stats for the real users to keep the UI rich
       const idNum = parseInt((user.id || '').replace(/\D/g, ''), 10) || 1;
+      const workloadScore = 40 + ((idNum * 17) % 60);
       return {
         ...user,
         activeTasks: (idNum * 3) % 15,
         overdue: (idNum * 2) % 5,
         visitsToday: (idNum * 5) % 4,
-        workloadScore: 40 + ((idNum * 17) % 60),
+        followups: (idNum * 2) % 6,
+        projects: (idNum * 3) % 8,
+        workload: workloadScore >= 80 ? 'High' : workloadScore >= 60 ? 'Medium' : 'Normal',
+        workloadScore,
       };
     });
 

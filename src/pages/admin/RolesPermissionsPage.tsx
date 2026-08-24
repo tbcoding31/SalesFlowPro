@@ -4,12 +4,12 @@ import { useAuth } from '../../context/AuthContext';
 import { RolePermissions, UserRole } from '../../types';
 
 export const RolesPermissionsPage: React.FC = () => {
-  const { currentTenant } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const { currentTenant, currentUser } = useAuth();
+  const tenantId = currentUser?.tenantId === 'SYSTEM' ? 'SYSTEM' : (currentTenant?.id || 'TEN-00001');
 
   const [permissionsState, setPermissionsState] = useState<RolePermissions[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [selectedRole, setSelectedRole] = useState<UserRole>('SALES_MANAGER');
+  const [selectedRole, setSelectedRole] = useState<UserRole>('TENANT_ADMIN');
   const [savedSuccess, setSavedSuccess] = useState<string | null>(null);
 
   // Modals state
@@ -344,7 +344,7 @@ export const RolesPermissionsPage: React.FC = () => {
                       ? 'Team-level approval rights for field visits and task allocations.'
                       : r.role === 'SALES_REPRESENTATIVE'
                       ? 'Isolated access to personally assigned customers and activities.'
-                      : r.role === 'TENANT_ADMIN' || r.role === 'SUPER_ADMIN' || r.role === 'ADMINISTRATOR'
+                      : r.role === 'TENANT_ADMIN' || r.role === 'SUPER_ADMIN'
                       ? 'System administrator with full organizational privileges.'
                       : `Custom system role for ${r.roleName.toLowerCase()} authorization.`}
                   </p>

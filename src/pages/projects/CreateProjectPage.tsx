@@ -39,9 +39,9 @@ export const CreateProjectPage: React.FC = () => {
     }
     masterDataApi.fetchMasterData('project_stages', tenantId).then(data => {
       setProjectStages(data);
-      const def = data.find(d => d.is_default);
-      if (def) setStage(def.code_value);
-      else if (data.length > 0) setStage(data[0].code_value);
+      const def = data.find(d => d.isDefault);
+      if (def) setStage(def.codeValue);
+      else if (data.length > 0) setStage(data[0].codeValue);
     });
   }, [tenantId, currentUser]);
 

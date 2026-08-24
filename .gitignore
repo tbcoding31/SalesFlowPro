@@ -29,9 +29,16 @@ pnpm-debug.log*
 *.cjs
 *.patch
 FETCH_HEAD
+scratch/
+docs/
+*.txt
+backend/*.sql
 
 # Lock files (bun — project uses npm)
 bun.lock
 
 # Local dev
 *.local
+backend/.env
+backend/.env.*
+!backend/.env.example

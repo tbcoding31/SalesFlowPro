@@ -28,7 +28,10 @@ coverage
 *.cjs
 *.sh
 *.patch
-scratc
+scratch/
+docs/
+*.txt
+*.sql
 
 # IDE and OS
 .vscode

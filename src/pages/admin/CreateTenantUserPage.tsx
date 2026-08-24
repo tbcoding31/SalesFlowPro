@@ -9,6 +9,16 @@ export const CreateTenantUserPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const { currentTenant: authTenant, currentUser } = useAuth();
 
+
+  const [roleOptions, setRoleOptions] = useState<{id: string, name: string, scope: string}[]>([]);
+  useEffect(() => {
+    fetch('/api/roles/assignable', {
+      headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('sfp_auth_token') || '') }
+    }).then(r => r.json()).then(data => {
+      if (Array.isArray(data)) setRoleOptions(data);
+    }).catch(e => console.error(e));
+  }, []);
+
   // Selected Tenant context
   const tenants: Tenant[] = DataService.getTenants();
   const paramTenantId = searchParams.get('tenantId');
@@ -114,13 +124,10 @@ export const CreateTenantUserPage: React.FC = () => {
       return;
     }
 
-    const roleNameMap: Record<UserRole, string> = {
-      SUPER_ADMIN: 'Super Administrator',
-      TENANT_ADMIN: 'Tenant Administrator',
-      SALES_MANAGER: 'Sales Manager',
-      SUPERVISOR: 'Sales Supervisor',
-      SALES_REPRESENTATIVE: 'Sales Representative',
-    };
+    const roleNameMap: Record<string, string> = roleOptions.reduce((acc: any, r) => {
+      acc[r.id] = r.name;
+      return acc;
+    }, {});
 
     const newUser: User = {
       id: `USR-${Date.now().toString().slice(-4)}`,
@@ -158,7 +165,7 @@ export const CreateTenantUserPage: React.FC = () => {
           <nav className="flex items-center gap-1.5 text-xs text-[#767587] font-medium mb-1">
             <span className="text-[#767587]">Administration</span>
             <span>&rsaquo;</span>
-            {currentUser?.role === 'SUPER_ADMIN' && (
+            {currentUser?.tenantId === 'SYSTEM' && (
               <>
                 <Link to="/admin/tenants" className="hover:text-[#4744e5] transition-colors">
                   Tenants
@@ -191,7 +198,7 @@ export const CreateTenantUserPage: React.FC = () => {
             <span className="material-symbols-outlined text-[22px]">apartment</span>
           </div>
           <div>
-            {currentUser?.role === 'SUPER_ADMIN' && tenants.length > 1 ? (
+            {currentUser?.tenantId === 'SYSTEM' && tenants.length > 1 ? (
               <select
                 value={selectedTenantId}
                 onChange={(e) => setSelectedTenantId(e.target.value)}
@@ -357,12 +364,10 @@ export const CreateTenantUserPage: React.FC = () => {
                 className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs bg-white text-[#1a1c1c] focus:outline-none focus:border-[#4744e5]"
               >
                 <option value="" disabled>Select a role...</option>
-                {currentUser?.role === 'SUPER_ADMIN' && (
-                  <option value="TENANT_ADMIN">Tenant Administrator</option>
-                )}
-                <option value="SALES_MANAGER">Sales Manager</option>
-                <option value="SUPERVISOR">Sales Supervisor</option>
-                <option value="SALES_REPRESENTATIVE">Sales Representative</option>
+                {roleOptions.length === 0 && <option value="" disabled>Loading roles...</option>}
+                {roleOptions.map(r => (
+                  <option key={r.id} value={r.id}>{r.name}</option>
+                ))}
               </select>
             </div>
 

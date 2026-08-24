@@ -24,15 +24,15 @@ export const CreateCustomerPage: React.FC = () => {
   React.useEffect(() => {
     masterDataApi.fetchMasterData('customer_types', tenantId).then(data => {
       setMasterTypes(data);
-      const def = data.find(d => d.is_default);
-      if (def) setCustomerType(def.code_value);
-      else if (data.length > 0) setCustomerType(data[0].code_value);
+      const def = data.find(d => d.isDefault);
+      if (def) setCustomerType(def.codeValue);
+      else if (data.length > 0) setCustomerType(data[0].codeValue);
     });
     masterDataApi.fetchMasterData('customer_statuses', tenantId).then(data => {
       setMasterStatuses(data);
-      const def = data.find(d => d.is_default);
-      if (def) setCustomerStatus(def.code_value);
-      else if (data.length > 0) setCustomerStatus(data[0].code_value);
+      const def = data.find(d => d.isDefault);
+      if (def) setCustomerStatus(def.codeValue);
+      else if (data.length > 0) setCustomerStatus(data[0].codeValue);
     });
   }, [tenantId]);
 

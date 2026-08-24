@@ -38,9 +38,9 @@ export const CreateTaskPage: React.FC = () => {
     masterDataApi.fetchMasterData('task_types', tenantId).then(setTaskTypes);
     masterDataApi.fetchMasterData('task_priorities', tenantId).then(data => {
       setTaskPriorities(data);
-      const defaultPri = data.find(d => d.is_default);
-      if (defaultPri) setPriority(defaultPri.code_value);
-      else if (data.length > 0) setPriority(data[0].code_value);
+      const defaultPri = data.find(d => d.isDefault);
+      if (defaultPri) setPriority(defaultPri.codeValue);
+      else if (data.length > 0) setPriority(data[0].codeValue);
     });
   }, [tenantId]);
 

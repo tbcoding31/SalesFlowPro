@@ -9,11 +9,19 @@ export const TenantUsersPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant, currentUser } = useAuth();
   const [selectedTenantId, setSelectedTenantId] = useState<string>(
-    currentUser?.role === 'SUPER_ADMIN' ? 'ALL' : (currentTenant?.id || 'TEN-00001')
+    currentUser?.tenantId === 'SYSTEM' ? 'ALL' : (currentTenant?.id || 'TEN-00001')
   );
   const [users, setUsers] = useState<User[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('ALL');
+  const [roleOptions, setRoleOptions] = useState<{id: string, name: string}[]>([]);
+  useEffect(() => {
+    fetch('/api/roles/assignable', {
+      headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('sfp_auth_token') || '') }
+    }).then(r => r.json()).then(data => {
+      if (Array.isArray(data)) setRoleOptions(data);
+    }).catch(e => console.error(e));
+  }, []);
   const [showAddModal, setShowAddModal] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -69,14 +77,7 @@ export const TenantUsersPage: React.FC = () => {
       phone: '+62 812 0000 1111',
       avatarUrl: `https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80`,
       role,
-      roleName:
-        role === 'TENANT_ADMIN'
-          ? 'Tenant Administrator'
-          : role === 'SALES_MANAGER'
-          ? 'Sales Manager'
-          : role === 'SUPERVISOR'
-          ? 'Sales Supervisor'
-          : 'Sales Representative',
+      roleName: roleOptions.find(r => r.id === role)?.name || role,
       department,
       position,
       status: 'ACTIVE',
@@ -149,7 +150,7 @@ export const TenantUsersPage: React.FC = () => {
             />
           </div>
 
-          {currentUser?.role === 'SUPER_ADMIN' && (
+          {currentUser?.tenantId === 'SYSTEM' && (
             <div className="flex items-center gap-2">
               <label className="text-xs font-bold text-[#464555]">Tenant:</label>
               <select
@@ -175,10 +176,9 @@ export const TenantUsersPage: React.FC = () => {
               className="border border-[#E1E1E1] rounded-lg text-xs px-2.5 py-1.5 bg-white text-[#1a1c1c] focus:outline-none focus:border-[#4744e5]"
             >
               <option value="ALL">All Roles</option>
-              <option value="TENANT_ADMIN">Tenant Administrator</option>
-              <option value="SALES_MANAGER">Sales Manager</option>
-              <option value="SUPERVISOR">Supervisor</option>
-              <option value="SALES_REPRESENTATIVE">Sales Representative</option>
+              {roleOptions.map(r => (
+                <option key={r.id} value={r.id}>{r.name}</option>
+              ))}
             </select>
           </div>
         </div>
@@ -329,7 +329,7 @@ export const TenantUsersPage: React.FC = () => {
                 />
               </div>
 
-              {currentUser?.role === 'SUPER_ADMIN' && (
+              {currentUser?.tenantId === 'SYSTEM' && (
                 <div>
                   <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Organization Tenant</label>
                   <select
@@ -353,12 +353,11 @@ export const TenantUsersPage: React.FC = () => {
                   onChange={(e) => setRole(e.target.value as any)}
                   className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded text-xs bg-white font-semibold"
                 >
-                  {currentUser?.role === 'SUPER_ADMIN' && (
-                    <option value="TENANT_ADMIN">Tenant Administrator</option>
-                  )}
-                  <option value="SALES_MANAGER">Sales Manager</option>
-                  <option value="SUPERVISOR">Sales Supervisor</option>
-                  <option value="SALES_REPRESENTATIVE">Sales Representative</option>
+                  <option value="" disabled>Select Role...</option>
+                  {roleOptions.length === 0 && <option value="" disabled>Loading roles...</option>}
+                  {roleOptions.map(r => (
+                    <option key={r.id} value={r.id}>{r.name}</option>
+                  ))}
                 </select>
               </div>
 
