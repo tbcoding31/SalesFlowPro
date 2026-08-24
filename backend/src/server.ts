@@ -78,14 +78,22 @@ export const resolveUserAccessContext = async (pool: any, userId: string) => {
     }
   }
 
-  // 3. Resolve permissions
+  // 3. Resolve permissions & data scope
   let permissions: string[] = [];
+  let dataScope: string = 'OWN';
   if (roleId) {
     try {
       const [permRows]: any = await pool.query('SELECT permission FROM role_permissions WHERE roleId = ?', [roleId]);
       permissions = permRows.map((r: any) => r.permission);
+
+      const [scopeRows]: any = await pool.query('SELECT scope FROM role_data_scopes WHERE roleId = ?', [roleId]);
+      if (scopeRows.length > 0) {
+        dataScope = scopeRows[0].scope;
+      } else {
+        dataScope = isPlatformUser ? 'SYSTEM' : 'OWN';
+      }
     } catch (e) {
-      console.error('[AUTH] DB Error when loading permissions for role:', roleId, e);
+      console.error('[AUTH] DB Error when loading permissions/scope for role:', roleId, e);
     }
   }
 
@@ -94,6 +102,7 @@ export const resolveUserAccessContext = async (pool: any, userId: string) => {
     roleId,
     roleName,
     permissions,
+    dataScope,
     isPlatformUser
   };
 };
@@ -177,6 +186,7 @@ app.use(async (req, res, next) => {
     (req as any).userRole = userContext.roleId;
     (req as any).userTenantId = userContext.tenantId;
     (req as any).userPermissions = userContext.permissions;
+    (req as any).userDataScope = userContext.dataScope;
     (req as any).isPlatformUser = userContext.isPlatformUser;
 
     // Check session expiration
@@ -1208,8 +1218,9 @@ tables.forEach(table => setupEndpoint(table));
     const actorRole = (req as any).userRole;
     const actorTenant = (req as any).userTenantId;
     const actorPermissions = (req as any).userPermissions || [];
+    const isPlatformUser = (req as any).isPlatformUser;
     
-    if (!actorRole || !actorTenant) return res.status(401).json({ error: 'Unauthorized' });
+    if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
     
     // Privilege Escalation Protection
     if (!actorPermissions.includes('ALL') && !actorPermissions.includes('MANAGE_ROLES')) {
@@ -1225,10 +1236,18 @@ tables.forEach(table => setupEndpoint(table));
     const sensitiveCapabilities = ['ALL', 'MANAGE_TENANT', 'MANAGE_ROLES', 'MANAGE_USERS', 'MANAGE_CUSTOMERS', 'MANAGE_PROJECTS', 'MANAGE_TASKS'];
     if (permissions && Array.isArray(permissions)) {
       for (const p of permissions) {
+        if (p === 'ALL' && actorRole !== 'SUPER_ADMIN') {
+          return res.status(403).json({ error: 'Forbidden. ALL permission can only be assigned by Super Admin.' });
+        }
         if (sensitiveCapabilities.includes(p) && !actorPermissions.includes('ALL') && !actorPermissions.includes(p)) {
           return res.status(403).json({ error: `Forbidden. Cannot delegate capability: ${p} which actor does not possess.` });
         }
       }
+    }
+
+    // Data Scope Ceiling: Only Super Admin can assign SYSTEM data scope
+    if (dataScope === 'SYSTEM' && actorRole !== 'SUPER_ADMIN') {
+      return res.status(403).json({ error: 'Forbidden. SYSTEM data scope is restricted to platform roles.' });
     }
     
     const connection = await pool.getConnection();
@@ -1349,6 +1368,7 @@ app.post('/api/auth/login', async (req, res) => {
     user.roleName = userContext.roleName;
     user.tenantId = userContext.tenantId;
     user.permissions = userContext.permissions;
+    user.dataScope = userContext.dataScope;
 
     res.json({ success: true, token, user });
   } catch (err: any) {

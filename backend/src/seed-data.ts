@@ -40,6 +40,26 @@ async function seedData() {
   await pool.query(`INSERT IGNORE INTO global_user_roles (id, userId, roleId) VALUES (?, ?, ?)`,
     ['GUR-000', 'USR-000', 'SUPER_ADMIN']);
 
+  // Role Permissions & Data Scopes
+  await pool.query(`INSERT IGNORE INTO role_permissions (roleId, permission) VALUES 
+    ('SUPER_ADMIN', 'ALL'),
+    ('TENANT_ADMIN', 'MANAGE_TENANT'),
+    ('TENANT_ADMIN', 'MANAGE_USERS'),
+    ('TENANT_ADMIN', 'MANAGE_ROLES'),
+    ('TENANT_ADMIN', 'MANAGE_CUSTOMERS'),
+    ('TENANT_ADMIN', 'MANAGE_PROJECTS'),
+    ('TENANT_ADMIN', 'MANAGE_TASKS'),
+    ('SALES_REPRESENTATIVE', 'MANAGE_OWN_CUSTOMERS'),
+    ('SALES_REPRESENTATIVE', 'MANAGE_OWN_PROJECTS'),
+    ('SALES_REPRESENTATIVE', 'MANAGE_OWN_TASKS')
+  `);
+
+  await pool.query(`INSERT IGNORE INTO role_data_scopes (id, roleId, scope) VALUES 
+    ('RDS-SUPER_ADMIN', 'SUPER_ADMIN', 'SYSTEM'),
+    ('RDS-TENANT_ADMIN', 'TENANT_ADMIN', 'ORGANIZATION'),
+    ('RDS-SALES_REP', 'SALES_REPRESENTATIVE', 'OWN')
+  `);
+
   // Tenant users (Super Admin has no tenant membership)
   await pool.query(`INSERT IGNORE INTO tenant_users (id, tenantId, userId, isPrimary, status) VALUES (?, ?, ?, ?, ?)`,
     ['TU-001', tenantId, 'USR-001', true, 'ACTIVE']);

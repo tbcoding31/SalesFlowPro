@@ -84,6 +84,7 @@ export interface User {
   activeTasksCount?: number;
   lastLoginAt?: string;
   permissions?: string[];
+  dataScope?: string;
   createdAt: string;
 }
 
