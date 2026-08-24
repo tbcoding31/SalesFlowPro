@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Tenant } from '../../types';
+import { useAuth } from '../../context/AuthContext';
 
 interface TenantStats {
   total: number;
@@ -22,6 +23,9 @@ interface TenantStats {
 }
 
 export const SuperAdminDashboard: React.FC = () => {
+  const { currentUser, hasPermission } = useAuth();
+  const isSuperAdmin = currentUser?.tenantId === 'SYSTEM' || hasPermission('MANAGE_TENANT');
+
   const [stats, setStats] = useState<TenantStats>({
     total: 0,
     active: 0,
@@ -46,6 +50,12 @@ export const SuperAdminDashboard: React.FC = () => {
 
   useEffect(() => {
     let isMounted = true;
+
+    // Defense-in-depth: if not Super Admin, do not attempt to fetch platform-wide stats
+    if (!isSuperAdmin) {
+      setIsLoading(false);
+      return;
+    }
 
     const loadDashboardData = async () => {
       setIsLoading(true);

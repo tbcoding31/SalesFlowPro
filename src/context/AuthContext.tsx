@@ -46,6 +46,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const user = JSON.parse(savedUserStr);
         setCurrentUser(user);
         setToken(savedToken);
+        if (user.tenantId && user.tenantId !== 'SYSTEM') {
+          setCurrentTenant({ id: user.tenantId, name: 'Active Tenant', status: 'ACTIVE' } as any);
+        } else {
+          setCurrentTenant({ id: 'SYSTEM', name: 'Platform Administration', status: 'ACTIVE' } as any);
+        }
         // Restore session from localStorage. NOTE: This uses stateful database-backed session tokens,
         // NOT JSON Web Tokens (JWT). The token is a cryptographically random 256-bit session identifier
         // verified on every request against the auth_sessions table. The server is the source of truth.
