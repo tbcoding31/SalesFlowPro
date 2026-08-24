@@ -14,13 +14,25 @@ export const can = (permissions: string[], action: string) => {
   return permissions.includes(action);
 };
 
-export const getAssignableRoles = async (pool: any, actorRoleId: string) => {
+export const getAssignableRoles = async (pool: any, actorRoleId: string, actorTenantId?: string | null) => {
   try {
+    // 1. Direct match on role_assignment_policies
     const [rows]: any = await pool.query('SELECT assignableRoleId as roleId FROM role_assignment_policies WHERE assignerRoleId = ?', [actorRoleId]);
-    return rows.map((r: any) => r.roleId);
+    let assignableIds = rows.map((r: any) => r.roleId);
+
+    // 2. If actor is Tenant Admin (or has MANAGE_ROLES / MANAGE_USERS capability in tenant), they can assign all TENANT scoped roles in their tenant
+    if (actorTenantId && (actorRoleId === 'TENANT_ADMIN' || actorRoleId.endsWith('-TENANT_ADMIN') || actorRoleId.startsWith('ROLE-'))) {
+      const [tenantRoleRows]: any = await pool.query(
+        "SELECT id FROM roles WHERE tenantId = ? AND scope = 'TENANT'",
+        [actorTenantId]
+      );
+      const tenantRoleIds = tenantRoleRows.map((r: any) => r.id);
+      assignableIds = Array.from(new Set([...assignableIds, ...tenantRoleIds]));
+    }
+
+    return assignableIds;
   } catch (e) {
-    console.warn('[AUTH FALLBACK] role_assignment_policies missing. Using fallback logic.');
-    // FALLBACK REMOVED
+    console.warn('[AUTH FALLBACK] role_assignment_policies query error:', e);
     return [];
   }
 };
@@ -476,17 +488,19 @@ const setupEndpoint = (table: string) => {
       return;
     }
 
-    // Special handling for roles table: system roles (tenantId IS NULL or tenantId = 'SYSTEM') like TENANT_ADMIN should always be included
+    // Special handling for roles table:
+    // - Platform user (Super Admin): see platform roles + templates + (optionally specific tenant roles)
+    // - Tenant user: see strictly their own tenant-owned roles (WHERE tenantId = actorTenant AND scope = 'TENANT')
     if (table === 'roles') {
       let query = `SELECT * FROM roles`;
       const params: any[] = [];
       if (actorTenant && actorTenant !== 'SYSTEM') {
-        query += ' WHERE tenantId = ? OR tenantId IS NULL OR tenantId = "SYSTEM"';
+        query += ' WHERE tenantId = ? AND scope = "TENANT"';
         params.push(actorTenant);
       } else {
         const { tenantId } = req.query;
         if (tenantId && tenantId !== 'ALL' && tenantId !== 'SYSTEM') {
-          query += ' WHERE tenantId = ? OR tenantId IS NULL OR tenantId = "SYSTEM"';
+          query += ' WHERE tenantId = ?';
           params.push(tenantId);
         }
       }
@@ -1043,9 +1057,10 @@ app.get('/api/tenants/:id', async (req, res) => {
 
 app.get('/api/roles/assignable', async (req, res) => {
   const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
   if (!actorRole) return res.status(403).json({ error: 'Unauthorized' });
 
-  const assignableRoleIds = await getAssignableRoles(pool, actorRole);
+  const assignableRoleIds = await getAssignableRoles(pool, actorRole, actorTenant);
   if (assignableRoleIds.length === 0) return res.json([]);
   
   const placeholders = assignableRoleIds.map(() => '?').join(',');
@@ -1079,7 +1094,7 @@ app.post('/api/tenant/users', async (req, res) => {
      return res.status(403).json({ error: 'Cross-tenant user creation forbidden.' });
   }
 
-  const assignable = await getAssignableRoles(pool, actorRole);
+  const assignable = await getAssignableRoles(pool, actorRole, actorTenant);
   if (!assignable.includes(roleId)) {
     return res.status(403).json({ error: 'Role assignment not permitted by policy.' });
   }
@@ -1114,7 +1129,7 @@ app.put('/api/tenant/users/:id/roles', async (req, res) => {
 
   if (!actorRole || !actorTenant) return res.status(401).json({ error: 'Unauthorized' });
 
-  const assignable = await getAssignableRoles(pool, actorRole);
+  const assignable = await getAssignableRoles(pool, actorRole, actorTenant);
   if (!assignable.includes(roleId)) {
     return res.status(403).json({ error: 'Role assignment not permitted by policy.' });
   }
@@ -1179,38 +1194,79 @@ tables.forEach(table => setupEndpoint(table));
       try {
         // 1. Insert Tenant
         const t = tenant;
+        const now = new Date();
+        const formatDate = (d: any) => {
+          if (!d) return null;
+          const dt = new Date(d);
+          return isNaN(dt.getTime()) ? null : dt.toISOString().slice(0, 19).replace('T', ' ');
+        };
+        const tCreatedAt = formatDate(t.createdAt) || formatDate(now);
+        const tTrialEndDate = formatDate(t.trialEndDate);
+
         await connection.query(
           `INSERT INTO tenants (id, name, code, status, createdAt, type, trialEndDate, email, industry, phone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [t.id, t.name, t.code, t.status, t.createdAt, t.type, t.trialEndDate || null, t.email, t.industry, t.phone]
+          [t.id, t.name, t.code, t.status, tCreatedAt, t.type || 'Professional', tTrialEndDate, t.email || null, t.industry || null, t.phone || null]
         );
 
         // 2. Hash Password & Insert User
         const salt = await bcrypt.genSalt(10);
         const passwordHash = await bcrypt.hash(adminPassword, salt);
         const u = user;
+        const uCreatedAt = formatDate(u.createdAt) || formatDate(now);
         await connection.query(
           `INSERT INTO users (id, email, name, passwordHash, avatar, status, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [u.id, u.email, u.name, passwordHash, u.avatarUrl || null, 'ACTIVE', u.createdAt]
+          [u.id, u.email, u.name, passwordHash, u.avatarUrl || null, 'ACTIVE', uCreatedAt]
         );
 
         // 3. Insert Tenant_User
         const tuId = `TU-${Date.now()}`;
         await connection.query(
           `INSERT INTO tenant_users (id, tenantId, userId, isPrimary, status, joinedAt) VALUES (?, ?, ?, ?, ?, ?)`,
-          [tuId, t.id, u.id, true, 'ACTIVE', u.createdAt]
+          [tuId, t.id, u.id, true, 'ACTIVE', uCreatedAt]
         );
 
-        // 4. Use Canonical Role
-        const roleId = 'TENANT_ADMIN';
-        const [existingRole]: any = await connection.query('SELECT id FROM roles WHERE id = ?', [roleId]);
-        if (existingRole.length === 0) {
-          await connection.query('INSERT INTO roles (id, tenantId, name, description, isSystem) VALUES (?, ?, ?, ?)', [roleId, 'SYSTEM', 'Tenant Administrator', 'System Default', true]);
+        // 4. Clone all enabled Tenant Role Templates into tenant-owned roles
+        const [templates]: any = await connection.query(`
+          SELECT * FROM roles WHERE scope = 'TEMPLATE' AND isSystem = 1
+        `);
+
+        let adminRoleId = `ROLE-${t.id}-TENANT_ADMIN`;
+
+        for (const tmpl of templates) {
+          const shortTmpl = tmpl.id.replace('TEMPLATE_', '').replace('REPRESENTATIVE', 'REP');
+          const clonedRoleId = `ROLE-${t.id}-${shortTmpl}`;
+          await connection.query(`
+            INSERT INTO roles (id, tenantId, name, description, isSystem, scope)
+            VALUES (?, ?, ?, ?, 1, 'TENANT')
+            ON DUPLICATE KEY UPDATE name = VALUES(name), description = VALUES(description)
+          `, [clonedRoleId, t.id, tmpl.name, tmpl.description]);
+
+          // Copy permissions from template
+          const [tmplPerms]: any = await connection.query('SELECT permission FROM role_permissions WHERE roleId = ?', [tmpl.id]);
+          await connection.query('DELETE FROM role_permissions WHERE roleId = ?', [clonedRoleId]);
+          for (const tp of tmplPerms) {
+            await connection.query('INSERT IGNORE INTO role_permissions (roleId, permission) VALUES (?, ?)', [clonedRoleId, tp.permission]);
+          }
+
+          // Copy data scope from template
+          const [tmplScopes]: any = await connection.query('SELECT scope FROM role_data_scopes WHERE roleId = ?', [tmpl.id]);
+          const scopeVal = tmplScopes.length > 0 ? tmplScopes[0].scope : 'ORGANIZATION';
+          const rdsId = `RDS-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+          await connection.query(`
+            INSERT INTO role_data_scopes (id, roleId, scope)
+            VALUES (?, ?, ?)
+            ON DUPLICATE KEY UPDATE scope = VALUES(scope)
+          `, [rdsId, clonedRoleId, scopeVal]);
+
+          if (tmpl.id === 'TEMPLATE_TENANT_ADMIN') {
+            adminRoleId = clonedRoleId;
+          }
         }
 
-        // 5. Assign Role to User
+        // 5. Assign Cloned Tenant Administrator Role to Initial User
         await connection.query(
           `INSERT INTO tenant_user_roles (id, tenantUserId, roleId) VALUES (?, ?, ?)`,
-          [`TUR-${Date.now()}`, tuId, roleId]
+          [`TUR-${Date.now()}`, tuId, adminRoleId]
         );
 
         await connection.commit();
@@ -1223,7 +1279,7 @@ tables.forEach(table => setupEndpoint(table));
       }
     } catch (err: any) {
       console.error('Error onboarding tenant:', err);
-      res.status(500).json({ error: 'Tenant onboarding failed. Please try again.' });
+      res.status(500).json({ error: 'Tenant onboarding failed. Please try again.', details: err.message });
     }
   });
 

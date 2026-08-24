@@ -293,64 +293,155 @@ export const RolesPermissionsPage: React.FC = () => {
             </span>
           </div>
 
-          <div className="space-y-2.5">
-            {permissionsState.map((r) => {
-              const isSelected = r.role === selectedRole;
-              return (
-                <div
-                  key={r.role}
-                  onClick={() => setSelectedRole(r.role)}
-                  className={`p-4 rounded-xl border cursor-pointer transition-all relative group ${
-                    isSelected
-                      ? 'bg-white border-[#4744e5] ring-2 ring-[#4744e5]/10 shadow-sm'
-                      : 'bg-white border-[#E1E1E1] hover:border-[#c7c4d8]'
-                  }`}
-                >
-                  <div className="flex justify-between items-start gap-2">
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-bold text-sm text-[#1a1c1c] font-['Hanken_Grotesk']">
-                        {r.roleName}
-                      </h3>
-
-                      {/* EDIT ROLE NAME BUTTON */}
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setEditingRole({ role: r.role, roleName: r.roleName });
-                          setEditRoleNameInput(r.roleName);
-                          setEditErrorMsg('');
-                        }}
-                        className="p-1 text-[#767587] hover:text-[#4744e5] hover:bg-[#4744e5]/10 rounded transition-all opacity-80 group-hover:opacity-100"
-                        title="Edit Role Name"
-                      >
-                        <span className="material-symbols-outlined text-[16px]">edit</span>
-                      </button>
-                    </div>
-
-                    <span
-                      className={`text-[10px] font-bold px-2 py-0.5 rounded shrink-0 ${
-                        isSelected ? 'bg-[#4744e5] text-white' : 'bg-[#f3f3f3] text-[#464555]'
-                      }`}
-                    >
-                      Scope: {r.dataScope}
+          <div className="space-y-4">
+            {currentUser?.role === 'SUPER_ADMIN' ? (
+              <>
+                {/* SECTION 1: PLATFORM ROLES */}
+                <div>
+                  <div className="flex items-center gap-1.5 mb-2 px-1">
+                    <span className="material-symbols-outlined text-[15px] text-[#4744e5]">shield_person</span>
+                    <span className="text-[11px] font-bold text-[#4744e5] uppercase tracking-wider">
+                      Platform Roles
                     </span>
                   </div>
-
-                  <p className="text-[11px] text-[#767587] mt-1 line-clamp-2">
-                    {r.role === 'SALES_MANAGER'
-                      ? 'Full visibility over departmental sales reps, targets, and pipelines.'
-                      : r.role === 'SUPERVISOR'
-                      ? 'Team-level approval rights for field visits and task allocations.'
-                      : r.role === 'SALES_REPRESENTATIVE'
-                      ? 'Isolated access to personally assigned customers and activities.'
-                      : r.role === 'TENANT_ADMIN' || r.role === 'SUPER_ADMIN'
-                      ? 'System administrator with full organizational privileges.'
-                      : `Custom system role for ${r.roleName.toLowerCase()} authorization.`}
-                  </p>
+                  <div className="space-y-2">
+                    {permissionsState.filter(r => r.scope === 'SYSTEM' || r.role === 'SUPER_ADMIN').map((r) => {
+                      const isSelected = r.role === selectedRole;
+                      return (
+                        <div
+                          key={r.role}
+                          onClick={() => setSelectedRole(r.role)}
+                          className={`p-3.5 rounded-xl border cursor-pointer transition-all relative group ${
+                            isSelected
+                              ? 'bg-white border-[#4744e5] ring-2 ring-[#4744e5]/10 shadow-sm'
+                              : 'bg-white border-[#E1E1E1] hover:border-[#c7c4d8]'
+                          }`}
+                        >
+                          <div className="flex justify-between items-start gap-2">
+                            <div className="flex items-center gap-2">
+                              <h3 className="font-bold text-sm text-[#1a1c1c] font-['Hanken_Grotesk']">
+                                {r.roleName}
+                              </h3>
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 uppercase">Platform</span>
+                            </div>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded shrink-0 ${
+                              isSelected ? 'bg-[#4744e5] text-white' : 'bg-[#f3f3f3] text-[#464555]'
+                            }`}>
+                              Scope: {r.dataScope}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-[#767587] mt-1 line-clamp-2">
+                            Platform-level super administrator with unrestricted system-wide access.
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-              );
-            })}
+
+                {/* SECTION 2: TENANT ROLE TEMPLATES */}
+                <div>
+                  <div className="flex items-center gap-1.5 mb-2 px-1">
+                    <span className="material-symbols-outlined text-[15px] text-[#767587]">dataset</span>
+                    <span className="text-[11px] font-bold text-[#464555] uppercase tracking-wider">
+                      Tenant Role Templates (Blueprints)
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {permissionsState.filter(r => r.scope === 'TEMPLATE' || (r.scope !== 'SYSTEM' && r.role !== 'SUPER_ADMIN')).map((r) => {
+                      const isSelected = r.role === selectedRole;
+                      return (
+                        <div
+                          key={r.role}
+                          onClick={() => setSelectedRole(r.role)}
+                          className={`p-3.5 rounded-xl border cursor-pointer transition-all relative group ${
+                            isSelected
+                              ? 'bg-white border-[#4744e5] ring-2 ring-[#4744e5]/10 shadow-sm'
+                              : 'bg-white border-[#E1E1E1] hover:border-[#c7c4d8]'
+                          }`}
+                        >
+                          <div className="flex justify-between items-start gap-2">
+                            <div className="flex items-center gap-2">
+                              <h3 className="font-bold text-sm text-[#1a1c1c] font-['Hanken_Grotesk']">
+                                {r.roleName}
+                              </h3>
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 uppercase">Template</span>
+                            </div>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded shrink-0 ${
+                              isSelected ? 'bg-[#4744e5] text-white' : 'bg-[#f3f3f3] text-[#464555]'
+                            }`}>
+                              Scope: {r.dataScope}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-[#767587] mt-1 line-clamp-2">
+                            Blueprint template cloned into new tenants upon creation.
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </>
+            ) : (
+              /* TENANT CONSOLE: TENANT-OWNED ROLES */
+              permissionsState.map((r) => {
+                const isSelected = r.role === selectedRole;
+                return (
+                  <div
+                    key={r.role}
+                    onClick={() => setSelectedRole(r.role)}
+                    className={`p-4 rounded-xl border cursor-pointer transition-all relative group ${
+                      isSelected
+                        ? 'bg-white border-[#4744e5] ring-2 ring-[#4744e5]/10 shadow-sm'
+                        : 'bg-white border-[#E1E1E1] hover:border-[#c7c4d8]'
+                    }`}
+                  >
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-bold text-sm text-[#1a1c1c] font-['Hanken_Grotesk']">
+                          {r.roleName}
+                        </h3>
+
+                        {/* EDIT ROLE NAME BUTTON */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingRole({ role: r.role, roleName: r.roleName });
+                            setEditRoleNameInput(r.roleName);
+                            setEditErrorMsg('');
+                          }}
+                          className="p-1 text-[#767587] hover:text-[#4744e5] hover:bg-[#4744e5]/10 rounded transition-all opacity-80 group-hover:opacity-100"
+                          title="Edit Role Name"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">edit</span>
+                        </button>
+                      </div>
+
+                      <span
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded shrink-0 ${
+                          isSelected ? 'bg-[#4744e5] text-white' : 'bg-[#f3f3f3] text-[#464555]'
+                        }`}
+                      >
+                        Scope: {r.dataScope}
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-[#767587] mt-1 line-clamp-2">
+                      {r.role.includes('SALES_MANAGER')
+                        ? 'Full visibility over departmental sales reps, targets, and pipelines.'
+                        : r.role.includes('SUPERVISOR')
+                        ? 'Team-level approval rights for field visits and task allocations.'
+                        : r.role.includes('SALES_REPRESENTATIVE')
+                        ? 'Isolated access to personally assigned customers and activities.'
+                        : r.role.includes('TENANT_ADMIN')
+                        ? 'Tenant administrator with full organizational privileges.'
+                        : `Custom tenant role for ${r.roleName.toLowerCase()} authorization.`}
+                    </p>
+                  </div>
+                );
+              })
+            )}
           </div>
 
           {/* ADD NEW ROLE BUTTON AT BOTTOM OF LEFT PANE */}

@@ -20,13 +20,31 @@ async function seedData() {
   await pool.query(`INSERT IGNORE INTO tenants (id, code, name, status) VALUES (?, ?, ?, ?)`, 
     [tenantId, 'T001', 'TechNova Corp', 'ACTIVE']);
 
-  // Seed Roles
+  // Seed Platform Role
   await pool.query(`INSERT IGNORE INTO roles (id, tenantId, name, description, isSystem, scope) VALUES (?, ?, ?, ?, ?, ?)`, 
-    ['SUPER_ADMIN', null, 'SUPER_ADMIN', 'System Administrator', true, 'SYSTEM']);
+    ['SUPER_ADMIN', null, 'Super Admin', 'Platform System Administrator', true, 'SYSTEM']);
+
+  // Seed System Tenant Role Templates
+  const defaultTemplates = [
+    { id: 'TEMPLATE_TENANT_ADMIN', name: 'Tenant Administrator', desc: 'Full administrative authority over tenant users, roles, and settings.', perms: ['MANAGE_TENANT', 'MANAGE_USERS', 'MANAGE_ROLES', 'MANAGE_CUSTOMERS', 'MANAGE_PROJECTS', 'MANAGE_TASKS'], scope: 'ORGANIZATION' },
+    { id: 'TEMPLATE_SALES_MANAGER', name: 'Sales Manager', desc: 'Departmental oversight, target allocations, and pipeline reporting.', perms: ['ASSIGN_TASKS', 'MANAGE_CUSTOMERS', 'MANAGE_PROJECTS', 'MANAGE_TASKS', 'VIEW_ALL_CUSTOMERS', 'VIEW_REPORTS'], scope: 'ORGANIZATION' },
+    { id: 'TEMPLATE_SUPERVISOR', name: 'Supervisor', desc: 'Team-level supervision of field visits and task delegation.', perms: ['ASSIGN_TASKS', 'VIEW_ALL_CUSTOMERS', 'VIEW_ALL_PROJECTS', 'VIEW_TEAM_TASKS'], scope: 'TEAM' },
+    { id: 'TEMPLATE_SALES_REPRESENTATIVE', name: 'Sales Representative', desc: 'Operational sales execution on personally assigned records.', perms: ['MANAGE_OWN_CUSTOMERS', 'MANAGE_OWN_PROJECTS', 'MANAGE_OWN_TASKS'], scope: 'OWN' }
+  ];
+
+  for (const tmpl of defaultTemplates) {
+    await pool.query(`INSERT IGNORE INTO roles (id, tenantId, name, description, isSystem, scope) VALUES (?, NULL, ?, ?, true, 'TEMPLATE')`, [tmpl.id, tmpl.name, tmpl.desc]);
+    for (const p of tmpl.perms) {
+      await pool.query(`INSERT IGNORE INTO role_permissions (roleId, permission) VALUES (?, ?)`, [tmpl.id, p]);
+    }
+    await pool.query(`INSERT IGNORE INTO role_data_scopes (id, roleId, scope) VALUES (?, ?, ?)`, [`RDS-${tmpl.id}`, tmpl.id, tmpl.scope]);
+  }
+
+  // Seed Tenant-Owned Roles for TEN-00001
   await pool.query(`INSERT IGNORE INTO roles (id, tenantId, name, description, isSystem, scope) VALUES (?, ?, ?, ?, ?, ?)`, 
-    ['TENANT_ADMIN', tenantId, 'TENANT_ADMIN', 'Tenant Administrator', true, 'TENANT']);
+    ['TENANT_ADMIN', tenantId, 'Tenant Administrator', 'Tenant Administrator', true, 'TENANT']);
   await pool.query(`INSERT IGNORE INTO roles (id, tenantId, name, description, isSystem, scope) VALUES (?, ?, ?, ?, ?, ?)`, 
-    ['SALES_REPRESENTATIVE', tenantId, 'SALES_REPRESENTATIVE', 'Sales Representative', true, 'TENANT']);
+    ['SALES_REPRESENTATIVE', tenantId, 'Sales Representative', 'Sales Representative', true, 'TENANT']);
 
   // Seed Users
   await pool.query(`INSERT IGNORE INTO users (id, email, name, passwordHash, status) VALUES (?, ?, ?, ?, ?)`, 

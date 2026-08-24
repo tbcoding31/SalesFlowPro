@@ -344,6 +344,9 @@ export interface AuditLog {
 export interface RolePermissions {
   role: UserRole;
   roleName: string;
+  scope?: 'SYSTEM' | 'TEMPLATE' | 'TENANT' | string;
+  isSystem?: boolean | number;
+  tenantId?: string | null;
   dataScope: 'OWN' | 'TEAM' | 'DEPARTMENT' | 'ORGANIZATION' | 'SYSTEM';
   permissions: {
     module: string;

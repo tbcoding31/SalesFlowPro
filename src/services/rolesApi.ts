@@ -80,6 +80,9 @@ export const rolesApi = {
       return {
         role: role.id || role.role_code || role.name,
         roleName: role.name,
+        scope: role.scope,
+        isSystem: role.isSystem,
+        tenantId: role.tenantId,
         permissions: permissionsMap as any,
         dataScope: roleScope ? roleScope.scope : 'TEAM',
       } as RolePermissions;
