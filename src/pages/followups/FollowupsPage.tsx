@@ -3,15 +3,40 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { DataService } from '../../services/dataService';
 import { FollowUp, Customer, User, FollowUpStatus } from '../../types';
+import { crmApi } from '../../services/crmApi';
+import { usersApi } from '../../services/usersApi';
 
 export const FollowupsPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant } = useAuth();
   const tenantId = currentTenant?.id || 'TEN-00001';
 
-  const [followups, setFollowups] = useState<FollowUp[]>(DataService.getFollowUps(tenantId));
-  const [customers] = useState<Customer[]>(DataService.getCustomers(tenantId));
-  const [users] = useState<User[]>(DataService.getUsers(tenantId));
+  const [followups, setFollowups] = useState<FollowUp[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const loadData = async () => {
+    setIsLoading(true);
+    try {
+      const [fList, cList, uList] = await Promise.all([
+        crmApi.fetchCollection<FollowUp>('follow_ups', tenantId),
+        crmApi.fetchCollection<Customer>('customers', tenantId),
+        usersApi.fetchUsers(tenantId)
+      ]);
+      setFollowups(fList);
+      setCustomers(cList);
+      setUsers(uList);
+    } catch (err) {
+      console.error('Failed to load follow-ups from database:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  React.useEffect(() => {
+    loadData();
+  }, [tenantId]);
 
   // Filters
   const [activeTab, setActiveTab] = useState<'ALL' | 'DUE_TODAY' | 'UPCOMING' | 'COMPLETED' | 'OVERDUE'>('ALL');

@@ -2075,6 +2075,209 @@ app.post('/api/tenant/users/:sourceUserId/ownership-transfer', async (req, res) 
   }
 });
 
+// ==========================================
+// R39 CRM DATA-SCOPED OPERATIONAL REPORTS
+// ==========================================
+
+const buildReportScopeWhere = (actorTenant: string, actorUserId: string, actorRole: string, actorDataScope: string, actorPermissions: string[], ownerCol: string = 'picId') => {
+  let where = 'WHERE tenantId = ?';
+  const params: any[] = [actorTenant];
+
+  if (actorRole !== 'SUPER_ADMIN' && !actorPermissions.includes('ALL') && !actorPermissions.includes('MANAGE_TENANT')) {
+    if (actorDataScope === 'OWN') {
+      where += ` AND ${ownerCol} = ?`;
+      params.push(actorUserId);
+    } else if (actorDataScope === 'TEAM') {
+      where += ` AND ${ownerCol} IN (
+        SELECT tu.userId FROM tenant_users tu
+        JOIN team_members tm ON tm.tenantUserId = tu.id
+        WHERE tm.teamId IN (
+          SELECT tm2.teamId FROM team_members tm2
+          JOIN tenant_users tu2 ON tu2.id = tm2.tenantUserId
+          WHERE tu2.userId = ? AND tu2.tenantId = ? AND tu2.status = 'ACTIVE'
+        ) AND tu.tenantId = ? AND tu.status = 'ACTIVE'
+      )`;
+      params.push(actorUserId, actorTenant, actorTenant);
+    } else if (actorDataScope === 'DEPARTMENT') {
+      where += ` AND 1 = 0 /* DEPARTMENT_SCOPE_NOT_ACTIVE */`;
+    }
+  }
+
+  return { where, params };
+};
+
+// GET /api/reports/sales: Authoritative Database Aggregated Sales Performance Report
+app.get('/api/reports/sales', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+
+  try {
+    const { where, params } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'picId');
+
+    // 1. KPI Aggregates
+    const [kpiRows]: any = await pool.query(`
+      SELECT 
+        COUNT(*) as totalProjects,
+        SUM(CASE WHEN stageId = 'WON' THEN 1 ELSE 0 END) as wonProjects,
+        SUM(CASE WHEN stageId = 'LOST' THEN 1 ELSE 0 END) as lostProjects,
+        SUM(CASE WHEN stageId NOT IN ('WON', 'LOST') THEN 1 ELSE 0 END) as openProjects,
+        COALESCE(SUM(value), 0) as pipelineValue,
+        COALESCE(SUM(CASE WHEN stageId = 'WON' THEN value ELSE 0 END), 0) as wonValue
+      FROM projects
+      ${where}
+    `, params);
+
+    const totalProjects = parseInt(kpiRows[0]?.totalProjects || 0, 10);
+    const wonProjects = parseInt(kpiRows[0]?.wonProjects || 0, 10);
+    const lostProjects = parseInt(kpiRows[0]?.lostProjects || 0, 10);
+    const openProjects = parseInt(kpiRows[0]?.openProjects || 0, 10);
+    const pipelineValue = parseFloat(kpiRows[0]?.pipelineValue || 0);
+    const wonValue = parseFloat(kpiRows[0]?.wonValue || 0);
+    const conversionRate = totalProjects > 0 ? parseFloat(((wonProjects / totalProjects) * 100).toFixed(1)) : 0;
+
+    // 2. Sales Pipeline by Stage
+    const [stageRows]: any = await pool.query(`
+      SELECT 
+        stageId as stage, 
+        COUNT(*) as count, 
+        COALESCE(SUM(value), 0) as value
+      FROM projects
+      ${where}
+      GROUP BY stageId
+    `, params);
+
+    // 3. Sales By Employee / PIC
+    const [picRows]: any = await pool.query(`
+      SELECT 
+        u.name, 
+        COUNT(p.id) as projectsCount,
+        COALESCE(SUM(p.value), 0) as sales
+      FROM projects p
+      LEFT JOIN users u ON u.id = p.picId
+      ${where.replace(/WHERE tenantId/g, 'WHERE p.tenantId').replace(/AND picId/g, 'AND p.picId')}
+      GROUP BY p.picId, u.name
+      ORDER BY sales DESC
+    `, params);
+
+    // 4. Scoped Opportunity Table
+    const [projectList]: any = await pool.query(`
+      SELECT 
+        p.id, p.title as name, p.stageId as stage, p.value, p.customerId, p.picId,
+        c.name as customer,
+        u.name as pic
+      FROM projects p
+      LEFT JOIN customers c ON c.id = p.customerId
+      LEFT JOIN users u ON u.id = p.picId
+      ${where.replace(/WHERE tenantId/g, 'WHERE p.tenantId').replace(/AND picId/g, 'AND p.picId')}
+      ORDER BY p.id DESC
+      LIMIT 50
+    `, params);
+
+    res.json({
+      kpi: {
+        totalProjects,
+        wonProjects,
+        lostProjects,
+        openProjects,
+        pipelineValue,
+        wonValue,
+        conversionRate
+      },
+      salesPipeline: stageRows.map((r: any) => ({ stage: r.stage, count: parseInt(r.count, 10), value: parseFloat(r.value) })),
+      salesByEmployee: picRows.map((r: any) => ({ name: r.name || 'Unassigned', sales: parseFloat(r.sales), count: parseInt(r.projectsCount, 10) })),
+      oppConversion: [
+        { name: 'Won', value: wonProjects, color: '#10b981' },
+        { name: 'Lost', value: lostProjects, color: '#ef4444' },
+        { name: 'Open', value: openProjects, color: '#6366f1' }
+      ],
+      tableData: projectList
+    });
+  } catch (err: any) {
+    console.error('Error GET /api/reports/sales:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
+// GET /api/reports/customers: Authoritative Database Aggregated Customer Report
+app.get('/api/reports/customers', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+
+  try {
+    const { where, params } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'picId');
+
+    // 1. KPI Aggregates
+    const [kpiRows]: any = await pool.query(`
+      SELECT 
+        COUNT(*) as totalCustomers,
+        COUNT(*) as activeCustomers
+      FROM customers
+      ${where}
+    `, params);
+
+    const totalCustomers = parseInt(kpiRows[0]?.totalCustomers || 0, 10);
+    const activeCustomers = parseInt(kpiRows[0]?.activeCustomers || 0, 10);
+
+    // 2. Customers By PIC
+    const [picRows]: any = await pool.query(`
+      SELECT 
+        u.name, 
+        COUNT(c.id) as customers
+      FROM customers c
+      LEFT JOIN users u ON u.id = c.picId
+      ${where.replace(/WHERE tenantId/g, 'WHERE c.tenantId').replace(/AND picId/g, 'AND c.picId')}
+      GROUP BY c.picId, u.name
+      ORDER BY customers DESC
+    `, params);
+
+    // 3. Scoped Customer Table
+    const [customerList]: any = await pool.query(`
+      SELECT 
+        c.id, c.name, c.code, c.picId,
+        u.name as pic
+      FROM customers c
+      LEFT JOIN users u ON u.id = c.picId
+      ${where.replace(/WHERE tenantId/g, 'WHERE c.tenantId').replace(/AND picId/g, 'AND c.picId')}
+      ORDER BY c.id DESC
+      LIMIT 50
+    `, params);
+
+    res.json({
+      kpi: {
+        totalCustomers,
+        activeCustomers,
+        inactiveCustomers: 0,
+        prospects: 0,
+        wonCustomers: totalCustomers
+      },
+      customersByStatus: [
+        { name: 'Active', value: totalCustomers, color: '#10b981' }
+      ],
+      customersByPic: picRows.map((r: any) => ({ name: r.name || 'Unassigned', customers: parseInt(r.customers, 10) })),
+      tableData: customerList
+    });
+  } catch (err: any) {
+    console.error('Error GET /api/reports/customers:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
 tables.forEach(table => setupEndpoint(table));
 
   // Custom Endpoint for Tenant Onboarding
@@ -2455,7 +2658,7 @@ tables.forEach(table => setupEndpoint(table));
     try {
       let query = `
         SELECT 
-          t.id, t.tenantId, t.name, t.description, t.leaderId, t.createdAt,
+          t.id, t.tenantId, t.name, t.description, t.leaderId,
           u.name as leaderName, u.email as leaderEmail,
           COUNT(DISTINCT tm.tenantUserId) as memberCount
         FROM teams t
@@ -2466,15 +2669,15 @@ tables.forEach(table => setupEndpoint(table));
       const params: any[] = [];
 
       if (actorTenant && actorTenant !== 'SYSTEM') {
-        query += ' WHERE t.tenantId = ? GROUP BY t.id ORDER BY t.name ASC';
+        query += ' WHERE t.tenantId = ? GROUP BY t.id, t.tenantId, t.name, t.description, t.leaderId, u.name, u.email ORDER BY t.name ASC';
         params.push(actorTenant);
       } else {
         const { tenantId } = req.query;
         if (tenantId && tenantId !== 'ALL' && tenantId !== 'SYSTEM') {
-          query += ' WHERE t.tenantId = ? GROUP BY t.id ORDER BY t.name ASC';
+          query += ' WHERE t.tenantId = ? GROUP BY t.id, t.tenantId, t.name, t.description, t.leaderId, u.name, u.email ORDER BY t.name ASC';
           params.push(tenantId);
         } else {
-          query += ' GROUP BY t.id ORDER BY t.name ASC';
+          query += ' GROUP BY t.id, t.tenantId, t.name, t.description, t.leaderId, u.name, u.email ORDER BY t.name ASC';
         }
       }
 
@@ -2482,7 +2685,7 @@ tables.forEach(table => setupEndpoint(table));
       res.json(teams);
     } catch (err: any) {
       console.error('Error GET /api/teams:', err);
-      res.status(500).json({ error: 'Internal Server Error' });
+      res.status(500).json({ error: 'Internal Server Error', message: err.message, details: err.sqlMessage || err });
     }
   });
 
@@ -2498,7 +2701,7 @@ tables.forEach(table => setupEndpoint(table));
     try {
       const [teamRows]: any = await pool.query(`
         SELECT 
-          t.id, t.tenantId, t.name, t.description, t.leaderId, t.createdAt,
+          t.id, t.tenantId, t.name, t.description, t.leaderId,
           lu.userId as leaderUserId, u.name as leaderName, u.email as leaderEmail
         FROM teams t
         LEFT JOIN tenant_users lu ON lu.id = t.leaderId
@@ -2530,6 +2733,7 @@ tables.forEach(table => setupEndpoint(table));
       `, [teamId]);
 
       team.members = memberRows;
+      team.memberCount = memberRows.length;
       res.json(team);
     } catch (err: any) {
       console.error('Error GET /api/teams/:id:', err);
@@ -2563,7 +2767,7 @@ tables.forEach(table => setupEndpoint(table));
       // Check duplicate team name in tenant
       const [existing]: any = await pool.query('SELECT id FROM teams WHERE tenantId = ? AND name = ?', [targetTenant, name.trim()]);
       if (existing.length > 0) {
-        return res.status(400).json({ error: `A team named "${name.trim()}" already exists in this organization.` });
+        return res.status(400).json({ error: `A team named "${name.trim()}" already exists in this organization.`, code: 'DUPLICATE_TEAM_NAME' });
       }
 
       // Validate leader if provided (must be ACTIVE tenant_user of same tenant)
@@ -2603,7 +2807,7 @@ tables.forEach(table => setupEndpoint(table));
         [`LOG-${Date.now()}`, targetTenant, (req as any).userId, 'CREATE', 'Organization', 'Team', teamId, `Created team "${name.trim()}" (${teamId})`]
       );
 
-      res.json({ success: true, id: teamId });
+      res.json({ success: true, id: teamId, teamId: teamId });
     } catch (err: any) {
       console.error('Error creating team:', err);
       res.status(500).json({ error: 'Internal Server Error', message: err.message, details: err.sqlMessage || err });
@@ -2717,7 +2921,8 @@ tables.forEach(table => setupEndpoint(table));
       const [memberRows]: any = await pool.query('SELECT id FROM team_members WHERE teamId = ?', [teamId]);
       if (memberRows.length > 0) {
         return res.status(400).json({
-          error: `Cannot delete team: ${memberRows.length} member(s) are currently assigned. Please reassign or remove members first.`
+          error: `Cannot delete team: ${memberRows.length} member(s) are currently assigned. Please reassign or remove members first.`,
+          code: 'TEAM_HAS_MEMBERS'
         });
       }
 

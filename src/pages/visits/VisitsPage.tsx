@@ -3,6 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { DataService } from '../../services/dataService';
 import { Visit, Customer, User, VisitStatus } from '../../types';
+import { crmApi } from '../../services/crmApi';
+import { usersApi } from '../../services/usersApi';
 
 export const VisitsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -10,9 +12,32 @@ export const VisitsPage: React.FC = () => {
   const tenantId = currentTenant?.id || 'TEN-00001';
 
   // Data state
-  const [visits, setVisits] = useState<Visit[]>(() => DataService.getVisits(tenantId));
-  const customers = useMemo(() => DataService.getCustomers(tenantId), [tenantId]);
-  const users = useMemo(() => DataService.getUsers(tenantId), [tenantId]);
+  const [visits, setVisits] = useState<Visit[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const loadData = async () => {
+    setIsLoading(true);
+    try {
+      const [vList, cList, uList] = await Promise.all([
+        crmApi.fetchCollection<Visit>('visits', tenantId),
+        crmApi.fetchCollection<Customer>('customers', tenantId),
+        usersApi.fetchUsers(tenantId)
+      ]);
+      setVisits(vList);
+      setCustomers(cList);
+      setUsers(uList);
+    } catch (err) {
+      console.error('Failed to load visits from database:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  React.useEffect(() => {
+    loadData();
+  }, [tenantId]);
 
   // View state
   const [activeView, setActiveView] = useState<'list' | 'calendar'>('list');

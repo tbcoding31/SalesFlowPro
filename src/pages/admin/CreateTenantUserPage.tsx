@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { DataService } from '../../services/dataService';
 import { Tenant, User, UserRole, UserStatus } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { usersApi } from '../../services/usersApi';
 
 export const CreateTenantUserPage: React.FC = () => {
   const navigate = useNavigate();
@@ -36,6 +37,17 @@ export const CreateTenantUserPage: React.FC = () => {
   const [selectedTenantId, setSelectedTenantId] = useState<string>(defaultTenant.id);
   const activeTenant = tenants.find((t) => t.id === selectedTenantId) || defaultTenant;
 
+  const [teamsList, setTeamsList] = useState<{id: string, name: string}[]>([]);
+  const [selectedTeamId, setSelectedTeamId] = useState<string>('');
+
+  useEffect(() => {
+    fetch(`/api/teams?tenantId=${selectedTenantId}`, {
+      headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('sfp_auth_token') || '') }
+    }).then(r => r.json()).then(data => {
+      if (Array.isArray(data)) setTeamsList(data);
+    }).catch(e => console.error(e));
+  }, [selectedTenantId]);
+
   // Form State - User Information
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -44,7 +56,7 @@ export const CreateTenantUserPage: React.FC = () => {
   const [isUsernameCustom, setIsUsernameCustom] = useState(false);
   const [phone, setPhone] = useState('');
   const [position, setPosition] = useState('');
-  const [department, setDepartment] = useState('');
+  const [department, setDepartment] = useState('Sales');
 
   // Form State - Role & Status
   const [role, setRole] = useState<UserRole | ''>('');
@@ -129,32 +141,60 @@ export const CreateTenantUserPage: React.FC = () => {
       return acc;
     }, {});
 
-    const newUser: User = {
-      id: `USR-${Date.now().toString().slice(-4)}`,
+    const selectedTeamObj = teamsList.find(t => t.id === selectedTeamId);
+
+    const payload: any = {
       tenantId: activeTenant.id,
-      firstName: firstName.trim(),
-      lastName: lastName.trim(),
-      name: `${firstName.trim()} ${lastName.trim()}`,
       email: email.trim(),
-      username: username.trim(),
-      phone: phone.trim() || '+62 812 0000 0000',
-      avatarUrl: `https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80`,
-      role: role as UserRole,
-      roleName: roleNameMap[role as UserRole] || 'Tenant Member',
-      department: department.trim() || 'General',
-      position: position.trim() || 'Staff',
-      status,
-      createdAt: new Date().toISOString().split('T')[0],
+      name: `${firstName.trim()} ${lastName.trim()}`,
+      roleId: role,
+      password: tempPassword,
+      teamId: selectedTeamId || undefined
     };
 
-    DataService.saveUser(newUser);
+    setIsSubmitting(true);
+    usersApi.saveUser(payload as any, true).then((res) => {
+      setIsSubmitting(false);
+      if (res.success) {
+        const createdUser: User = {
+          id: (res as any).userId || `USR-${Date.now().toString().slice(-4)}`,
+          tenantId: activeTenant.id,
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          name: `${firstName.trim()} ${lastName.trim()}`,
+          email: email.trim(),
+          username: username.trim(),
+          department: department,
+          role: role as UserRole,
+          roleName: roleNameMap[role as UserRole] || 'Tenant Member',
+          position: position.trim() || 'Staff',
+          teamId: selectedTeamId || undefined,
+          teamName: selectedTeamObj?.name || undefined,
+          status: 'ACTIVE',
+          createdAt: new Date().toISOString().split('T')[0],
+        };
 
-    if (securityMethod === 'TEMP_PASSWORD') {
-      setSuccessModal(newUser);
-    } else {
-      navigate('/admin/tenant-users');
-    }
+        if (securityMethod === 'TEMP_PASSWORD') {
+          setSuccessModal(createdUser);
+        } else {
+          navigate('/admin/tenant-users');
+        }
+      } else {
+        if (res.code === 'USER_ALREADY_MEMBER') {
+          setErrorMsg('This user already belongs to this organization.');
+        } else if (res.code === 'USER_SUSPENDED') {
+          setErrorMsg('This user identity is suspended at platform level and cannot be added.');
+        } else {
+          setErrorMsg(res.error || 'Failed to create user account. Please try again.');
+        }
+      }
+    }).catch(err => {
+      setIsSubmitting(false);
+      setErrorMsg(err.message || 'An unexpected network error occurred.');
+    });
   };
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   return (
     <div className="space-y-6 font-['Inter',sans-serif] pb-12 max-w-[1200px] mx-auto">
@@ -328,18 +368,24 @@ export const CreateTenantUserPage: React.FC = () => {
               />
             </div>
 
-            {/* Department */}
+            {/* Assigned Team (Optional) */}
             <div className="sm:col-span-2">
               <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
-                Department
+                Assigned Team (Optional)
               </label>
-              <input
-                type="text"
-                value={department}
-                onChange={(e) => setDepartment(e.target.value)}
-                placeholder="e.g. Enterprise Sales"
-                className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs focus:outline-none focus:border-[#4744e5] text-[#1a1c1c] placeholder-[#9494a0]"
-              />
+              <select
+                value={selectedTeamId}
+                onChange={(e) => setSelectedTeamId(e.target.value)}
+                className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs bg-white text-[#1a1c1c] focus:outline-none focus:border-[#4744e5]"
+              >
+                <option value="">No Team (Individual / Unassigned)</option>
+                {teamsList.map(t => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+              <p className="text-[11px] text-[#767587] mt-1">
+                Users with Team data scope will only have visibility over records assigned to members of this team.
+              </p>
             </div>
           </div>
         </div>

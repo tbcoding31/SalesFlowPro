@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams, useLocation } from 'react-router-do
 import { useAuth } from '../../context/AuthContext';
 import { DataService } from '../../services/dataService';
 import { Task, Customer, TaskStatus, Project } from '../../types';
+import { crmApi } from '../../services/crmApi';
 
 export const TaskBoardPage: React.FC = () => {
   const navigate = useNavigate();
@@ -11,9 +12,32 @@ export const TaskBoardPage: React.FC = () => {
   const tenantId = currentTenant?.id || 'TEN-00001';
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const [tasks, setTasks] = useState<Task[]>(DataService.getTasks(tenantId));
-  const [customers] = useState<Customer[]>(DataService.getCustomers(tenantId));
-  const [projects] = useState<Project[]>(DataService.getProjects(tenantId));
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const loadData = async () => {
+    setIsLoading(true);
+    try {
+      const [tList, cList, pList] = await Promise.all([
+        crmApi.fetchCollection<Task>('tasks', tenantId),
+        crmApi.fetchCollection<Customer>('customers', tenantId),
+        crmApi.fetchCollection<Project>('projects', tenantId)
+      ]);
+      setTasks(tList);
+      setCustomers(cList);
+      setProjects(pList);
+    } catch (err) {
+      console.error('Error loading task board data:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  React.useEffect(() => {
+    loadData();
+  }, [tenantId]);
 
   // Main Categories
   const activeCategory = searchParams.get('category') || 'VISIT';
@@ -117,22 +141,23 @@ export const TaskBoardPage: React.FC = () => {
       const updatedTasks = tasks.map(t => t.id === taskId ? updatedTask : t);
       setTasks(updatedTasks);
       
-      // Save to DataService
-      DataService.saveTask(updatedTask);
+      // Save to database via API
+      crmApi.updateRecord('tasks', updatedTask.id, { status: newStatus, statusId: newStatus }).then(res => {
+        if (!res.success) {
+          console.error('Failed to update task status in DB:', res.error);
+          loadData(); // Revert on failure
+        }
+      });
       
-      // Add Activity
-      DataService.addActivity({
+      // Add Activity to database
+      crmApi.createRecord('activities', {
+        id: `ACT-${Date.now()}`,
         tenantId,
         customerId: updatedTask.customerId,
-        customerName: updatedTask.customerName,
         userId: currentUser?.id || 'SYSTEM',
-        userName: currentUser?.name || 'System User',
         type: 'TASK',
         subject: 'Task Status Updated',
-        description: `Moved task "${updatedTask.title}" from ${oldStatus.replace('_', ' ')} to ${newStatus.replace('_', ' ')}`,
-        occurredAt: new Date().toISOString(),
-        entityType: 'TASK',
-        entityId: updatedTask.id
+        description: `Moved task "${updatedTask.title}" from ${oldStatus.replace('_', ' ')} to ${newStatus.replace('_', ' ')}`
       });
     }
     setDraggedTaskId(null);

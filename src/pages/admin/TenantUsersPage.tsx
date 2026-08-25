@@ -164,7 +164,11 @@ export const TenantUsersPage: React.FC = () => {
     if (result.success) {
       await loadUsers(selectedTenantId);
     } else {
-      alert(result.error || "Failed to update user status");
+      if (result.code === 'LAST_TENANT_ADMIN') {
+        alert("This is the last active administrator for this organization.\n\nAssign another user an administrative role before suspending or demoting this user.");
+      } else {
+        alert(result.error || "Failed to update membership status.");
+      }
     }
   };
 

@@ -325,6 +325,7 @@ export const RolesPermissionsPage: React.FC = () => {
     description: string;
     badge: string;
     superAdminOnly?: boolean;
+    disabled?: boolean;
   }[] = [
     {
       key: 'OWN',
@@ -339,16 +340,17 @@ export const RolesPermissionsPage: React.FC = () => {
       badge: 'Team Level'
     },
     {
-      key: 'DEPARTMENT',
-      title: 'Department Scope',
-      description: "Broader access across all sales teams and members within the user's department.",
-      badge: 'Departmental'
-    },
-    {
       key: 'ORGANIZATION',
       title: 'Entire Organization',
       description: 'Unrestricted visibility across all departments and records within this tenant organization.',
       badge: 'Tenant-Wide'
+    },
+    {
+      key: 'DEPARTMENT',
+      title: 'Department Scope (Future-Ready)',
+      description: "Reserved for multi-team departmental enterprise hierarchy (Currently Inactive).",
+      badge: 'Reserved / Inactive',
+      disabled: true
     },
     {
       key: 'SYSTEM',
@@ -782,16 +784,23 @@ export const RolesPermissionsPage: React.FC = () => {
                       .map(opt => {
                         const isSelected = activeRoleData.dataScope === opt.key;
                         const isLockedSystem = activeRoleData.role === 'SUPER_ADMIN';
+                        const isDisabled = opt.disabled || (isLockedSystem && opt.key !== 'SYSTEM');
 
                         return (
                           <div
                             key={opt.key}
-                            onClick={() => !isLockedSystem && handleScopeChange(opt.key)}
+                            onClick={() => {
+                              if (opt.disabled) {
+                                triggerToast('DEPARTMENT data scope is currently reserved and inactive.', true);
+                                return;
+                              }
+                              if (!isLockedSystem) handleScopeChange(opt.key);
+                            }}
                             className={`p-4 rounded-xl border transition-all select-none flex items-start gap-3.5 ${
                               isSelected
                                 ? 'border-2 border-[#4744e5] bg-[#4744e5]/[0.03] shadow-sm'
                                 : 'border-[#E1E1E1] bg-white hover:border-[#b0b0b0]'
-                            } ${isLockedSystem ? 'cursor-not-allowed opacity-90' : 'cursor-pointer'}`}
+                            } ${isDisabled ? 'cursor-not-allowed opacity-60 bg-gray-50/80' : 'cursor-pointer'}`}
                           >
                             <div
                               className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 mt-0.5 transition-all ${
@@ -996,7 +1005,6 @@ export const RolesPermissionsPage: React.FC = () => {
                 >
                   <option value="OWN">Own Records (Assigned PIC Records Only)</option>
                   <option value="TEAM">Team Scope (Assigned Team Records)</option>
-                  <option value="DEPARTMENT">Department Scope (Department-Wide)</option>
                   <option value="ORGANIZATION">Organization Scope (All Tenant Records)</option>
                 </select>
               </div>

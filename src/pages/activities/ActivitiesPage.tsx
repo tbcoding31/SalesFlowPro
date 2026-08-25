@@ -3,15 +3,40 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { DataService } from '../../services/dataService';
 import { Activity, Customer, User } from '../../types';
+import { crmApi } from '../../services/crmApi';
+import { usersApi } from '../../services/usersApi';
 
 export const ActivitiesPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant } = useAuth();
   const tenantId = currentTenant?.id || 'TEN-00001';
   
-  const [activities] = useState<Activity[]>(DataService.getActivities(tenantId));
-  const [customers] = useState<Customer[]>(DataService.getCustomers(tenantId));
-  const [users] = useState<User[]>(DataService.getUsers(tenantId));
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const loadData = async () => {
+    setIsLoading(true);
+    try {
+      const [aList, cList, uList] = await Promise.all([
+        crmApi.fetchCollection<Activity>('activities', tenantId),
+        crmApi.fetchCollection<Customer>('customers', tenantId),
+        usersApi.fetchUsers(tenantId)
+      ]);
+      setActivities(aList);
+      setCustomers(cList);
+      setUsers(uList);
+    } catch (err) {
+      console.error('Failed to load activities from database:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  React.useEffect(() => {
+    loadData();
+  }, [tenantId]);
 
   // Filters
   const [dateRange, setDateRange] = useState<string>('ALL');

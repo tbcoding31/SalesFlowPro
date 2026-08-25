@@ -66,6 +66,7 @@ export interface Tenant {
 export interface User {
   id: string;
   tenantId?: string | null; // null for platform Super Admin
+  tenantUserId?: string;
   firstName: string;
   lastName: string;
   name: string;
@@ -124,6 +125,7 @@ export interface Customer {
   email: string;
   region: string;
   address: string;
+  picId?: string;
   assignedPicId: string;
   assignedPicName: string;
   assignedPicAvatar?: string;
@@ -134,6 +136,7 @@ export interface Customer {
   nextFollowUpAt?: string;
   notes?: string;
   customerSource?: string;
+  contactPerson?: string;
   createdByName?: string;
   city?: string;
   province?: string;

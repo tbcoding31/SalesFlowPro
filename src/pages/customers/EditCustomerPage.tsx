@@ -12,7 +12,8 @@ export const EditCustomerPage: React.FC = () => {
   const { currentTenant, currentUser } = useAuth();
   const tenantId = currentTenant?.id || 'TEN-00001';
 
-  const [tenantUsers, setTenantUsers] = useState<User[]>([]);
+  const [assignableUsers, setAssignableUsers] = useState<User[]>([]);
+  const [allUsers, setAllUsers] = useState<User[]>([]);
   const tasks = DataService.getTasks(tenantId);
 
   const [customer, setCustomer] = useState<Customer | undefined>(() => {
@@ -28,7 +29,11 @@ export const EditCustomerPage: React.FC = () => {
   const [masterStatuses, setMasterStatuses] = useState<MasterDataItem[]>([]);
 
   useEffect(() => {
-    usersApi.fetchUsers(tenantId).then(setTenantUsers);
+    // 1. Fetch assignable users for new assignment selection
+    usersApi.fetchUsers(tenantId, true).then(setAssignableUsers);
+    // 2. Fetch full tenant user roster for current/historical owner resolution
+    usersApi.fetchUsers(tenantId).then(setAllUsers);
+
     masterDataApi.fetchMasterData('customer_types', tenantId).then(setMasterTypes);
     masterDataApi.fetchMasterData('customer_statuses', tenantId).then(setMasterStatuses);
   }, [tenantId]);
@@ -86,7 +91,7 @@ export const EditCustomerPage: React.FC = () => {
   const handleSave = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
 
-    const selectedUser = tenantUsers.find((u) => u.id === assignedPicId) || currentUser;
+    const selectedUser = allUsers.find((u) => u.id === assignedPicId) || currentUser;
 
     const updatedCustomer: Customer = {
       ...(customer || {
@@ -135,7 +140,7 @@ export const EditCustomerPage: React.FC = () => {
     navigate(`/customers/${updatedCustomer.id}`);
   };
 
-  const selectedPicUser = tenantUsers.find((u) => u.id === assignedPicId) || currentUser;
+  const selectedPicUser = allUsers.find((u) => u.id === assignedPicId) || currentUser;
   const picTasksCount = tasks.filter((t) => t.picId === assignedPicId && t.status !== 'COMPLETED').length || 8;
 
   return (
@@ -363,8 +368,17 @@ export const EditCustomerPage: React.FC = () => {
                     onChange={(e) => setAssignedPicId(e.target.value)}
                     className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-xl text-xs bg-white text-[#1a1c1c] font-medium appearance-none focus:outline-none focus:border-[#4744e5] cursor-pointer"
                   >
-                    {tenantUsers.map((u) => {
-                      const tCnt = tasks.filter((t) => t.picId === u.id && t.status !== 'COMPLETED').length || 8;
+                    {/* Include current PIC option if suspended/not in active assignable list */}
+                    {assignedPicId && !assignableUsers.some(u => u.id === assignedPicId) && (() => {
+                      const curr = allUsers.find(u => u.id === assignedPicId);
+                      return (
+                        <option key={assignedPicId} value={assignedPicId}>
+                          {curr ? `${curr.name} — Current PIC (${curr.status})` : 'Current Stored PIC'}
+                        </option>
+                      );
+                    })()}
+                    {assignableUsers.map((u) => {
+                      const tCnt = tasks.filter((t) => t.picId === u.id && t.status !== 'COMPLETED').length || 0;
                       return (
                         <option key={u.id} value={u.id}>
                           {u.name} — {u.position || u.roleName} ({tCnt} Active Tasks)
@@ -378,26 +392,35 @@ export const EditCustomerPage: React.FC = () => {
                 </div>
 
                 {/* Rich PIC Box matching Image 2 */}
-                {selectedPicUser && (
-                  <div className="mt-2.5 p-3 bg-slate-50 border border-[#E1E1E1] rounded-xl flex items-center gap-3">
-                    <img
-                      src={
-                        selectedPicUser.avatarUrl ||
-                        'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
-                      }
-                      alt={selectedPicUser.name}
-                      className="w-9 h-9 rounded-full object-cover border border-slate-200"
-                    />
-                    <div className="flex-1">
-                      <div className="font-bold text-xs text-[#1a1c1c]">
-                        {selectedPicUser.name}
-                      </div>
-                      <div className="text-[11px] text-[#767587]">
-                        {selectedPicUser.position || 'Senior Rep'} • {picTasksCount} Active Tasks
+                {(() => {
+                  const selectedPicUser = allUsers.find((u) => u.id === assignedPicId);
+                  const picTasksCount = tasks.filter((t) => t.picId === assignedPicId && t.status !== 'COMPLETED').length || 0;
+                  return selectedPicUser ? (
+                    <div className="mt-2.5 p-3 bg-slate-50 border border-[#E1E1E1] rounded-xl flex items-center gap-3">
+                      <img
+                        src={
+                          selectedPicUser.avatarUrl ||
+                          'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
+                        }
+                        alt={selectedPicUser.name}
+                        className="w-9 h-9 rounded-full object-cover border border-slate-200"
+                      />
+                      <div className="flex-1">
+                        <div className="font-bold text-xs text-[#1a1c1c] flex items-center gap-2">
+                          <span>{selectedPicUser.name}</span>
+                          {selectedPicUser.status !== 'ACTIVE' && (
+                            <span className="px-2 py-0.5 bg-rose-100 text-rose-700 text-[10px] font-bold rounded">
+                              {selectedPicUser.status}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-[#767587]">
+                          {selectedPicUser.position || selectedPicUser.roleName || 'Senior Rep'} • {picTasksCount} Active Tasks
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  ) : null;
+                })()}
               </div>
 
               {/* Customer Source */}

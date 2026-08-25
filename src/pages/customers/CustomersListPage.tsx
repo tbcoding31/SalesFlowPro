@@ -1,15 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { DataService } from '../../services/dataService';
 import { masterDataApi } from '../../services/masterDataApi';
 import { Customer, CustomerType, User, MasterDataItem } from '../../types';
+import { crmApi } from '../../services/crmApi';
+import { usersApi } from '../../services/usersApi';
 
-interface ExtendedCustomerItem {
+export interface ExtendedCustomerItem {
   id: string;
   code: string;
   name: string;
-  industry: string;
+  industry?: string;
   avatarBg: string;
   avatarText: string;
   status: 'Active' | 'Pending' | 'Inactive';
@@ -18,157 +20,69 @@ interface ExtendedCustomerItem {
   picName: string;
   picAvatar?: string;
   picIsUnassigned?: boolean;
-  lastVisit: string;
+  lastVisit?: string;
   followUpDate?: string;
-  followUpStatus?: 'scheduled' | 'overdue' | 'none';
-  tasksCount: number | '-';
-  oppsCount: number | '-';
-  updatedAt: string;
-  type: string;
+  followUpStatus?: 'none' | 'scheduled' | 'overdue';
+  tasksCount?: number;
+  oppsCount?: number;
+  updatedAt?: string;
+  type?: CustomerType;
 }
-
-const DEFAULT_MOCK_CUSTOMERS: ExtendedCustomerItem[] = [
-  {
-    id: 'CUS-001',
-    code: 'CUS-0001',
-    name: 'PT Maju Jaya',
-    industry: 'Manufacturing',
-    avatarBg: 'bg-[#6161ff]',
-    avatarText: 'MJ',
-    status: 'Active',
-    contactPersonName: 'Budi Santoso',
-    contactPersonEmail: 'budi@majujaya.co.id',
-    picName: 'Ahmad',
-    picAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
-    lastVisit: '8 Aug 2026',
-    followUpDate: '12 Aug 2026',
-    followUpStatus: 'scheduled',
-    tasksCount: 4,
-    oppsCount: 3,
-    updatedAt: '10 Aug 2026',
-    type: 'Manufacturing',
-  },
-  {
-    id: 'CUS-002',
-    code: 'CUS-0002',
-    name: 'TechSynergy Solutions',
-    industry: 'IT Services',
-    avatarBg: 'bg-[#f97316]',
-    avatarText: 'TS',
-    status: 'Pending',
-    contactPersonName: 'Sarah Connor',
-    contactPersonEmail: 'sarah@techsynergy.net',
-    picName: 'Rina',
-    picAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
-    lastVisit: '1 Aug 2026',
-    followUpStatus: 'none',
-    tasksCount: 1,
-    oppsCount: 1,
-    updatedAt: '5 Aug 2026',
-    type: 'IT Services',
-  },
-  {
-    id: 'CUS-003',
-    code: 'CUS-0003',
-    name: 'Global Retailers Inc',
-    industry: 'Retail',
-    avatarBg: 'bg-[#94a3b8]',
-    avatarText: 'GR',
-    status: 'Inactive',
-    contactPersonName: 'Michael Lee',
-    contactPersonEmail: 'm.lee@globalretail.com',
-    picName: 'Unassigned',
-    picIsUnassigned: true,
-    lastVisit: '15 Jan 2026',
-    followUpStatus: 'overdue',
-    tasksCount: '-',
-    oppsCount: '-',
-    updatedAt: '2 Feb 2026',
-    type: 'Retail',
-  },
-  {
-    id: 'CUS-004',
-    code: 'CUS-0004',
-    name: 'Nusantara Energy Corp',
-    industry: 'Energy & Mining',
-    avatarBg: 'bg-[#10b981]',
-    avatarText: 'NE',
-    status: 'Active',
-    contactPersonName: 'Dian Sastro',
-    contactPersonEmail: 'dian.s@nusantaraenergy.co.id',
-    picName: 'Ahmad',
-    picAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
-    lastVisit: '5 Aug 2026',
-    followUpDate: '18 Aug 2026',
-    followUpStatus: 'scheduled',
-    tasksCount: 6,
-    oppsCount: 4,
-    updatedAt: '11 Aug 2026',
-    type: 'Energy',
-  },
-  {
-    id: 'CUS-005',
-    code: 'CUS-0005',
-    name: 'Barokah Logistics',
-    industry: 'Transport & Logistics',
-    avatarBg: 'bg-[#3b82f6]',
-    avatarText: 'BL',
-    status: 'Active',
-    contactPersonName: 'Eko Prasetyo',
-    contactPersonEmail: 'eko@barokahlogistics.id',
-    picName: 'Dimas',
-    picAvatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
-    lastVisit: '3 Aug 2026',
-    followUpDate: '15 Aug 2026',
-    followUpStatus: 'scheduled',
-    tasksCount: 2,
-    oppsCount: 2,
-    updatedAt: '9 Aug 2026',
-    type: 'Logistics',
-  },
-];
 
 export const CustomersListPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant, currentUser } = useAuth();
   const tenantId = currentTenant?.id || 'TEN-00001';
 
-  // Local state for list items
-  const [items, setItems] = useState<ExtendedCustomerItem[]>(() => {
-    const dataFromService = DataService.getCustomers(tenantId);
-    if (dataFromService && dataFromService.length > 0) {
-      // Map initial data service items to display structure
-      const mapped = dataFromService.map((c, idx) => ({
-        id: c.id,
-        code: c.code,
-        name: c.name,
-        industry: c.industry,
-        avatarBg: idx % 3 === 0 ? 'bg-[#6161ff]' : idx % 3 === 1 ? 'bg-[#f97316]' : 'bg-[#94a3b8]',
-        avatarText: c.name.substring(0, 2).toUpperCase(),
-        status: c.status === 'ACTIVE' || c.status === 'CUSTOMER' ? 'Active' as const : c.status === 'PROSPECT' ? 'Pending' as const : 'Inactive' as const,
-        contactPersonName: c.contacts && c.contacts.length > 0 ? c.contacts[0].name : 'Contact Person',
-        contactPersonEmail: c.email || 'info@company.com',
-        picName: c.assignedPicName || 'Ahmad',
-        picAvatar: c.assignedPicAvatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
-        picIsUnassigned: !c.assignedPicName || c.assignedPicName === 'Unassigned',
-        lastVisit: c.lastVisitAt || '8 Aug 2026',
-        followUpDate: c.nextFollowUpAt || '12 Aug 2026',
-        followUpStatus: c.nextFollowUpAt ? 'scheduled' as const : 'none' as const,
-        tasksCount: Math.floor(Math.random() * 5) + 1,
-        oppsCount: Math.floor(Math.random() * 4) + 1,
-        updatedAt: '10 Aug 2026',
-        type: c.type,
-      }));
+  // Database-backed state for list items
+  const [items, setItems] = useState<ExtendedCustomerItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [tenantUsers, setTenantUsers] = useState<User[]>([]);
 
-      // Ensure mock items from user request image (PT Maju Jaya, TechSynergy, Global Retailers) exist
-      const hasMajuJaya = mapped.some(m => m.name.toLowerCase().includes('maju jaya'));
-      if (!hasMajuJaya) {
-        return [...DEFAULT_MOCK_CUSTOMERS, ...mapped];
-      }
-      return mapped;
+  const loadData = async () => {
+    setIsLoading(true);
+    try {
+      const [customersList, usersList] = await Promise.all([
+        crmApi.fetchCollection<Customer>('customers', tenantId),
+        usersApi.fetchUsers(tenantId)
+      ]);
+      setTenantUsers(usersList);
+
+      const mapped: ExtendedCustomerItem[] = customersList.map((c, idx) => {
+        const pic = usersList.find(u => u.id === c.picId);
+        return {
+          id: c.id,
+          code: c.code,
+          name: c.name,
+          industry: c.industry || 'General',
+          avatarBg: idx % 3 === 0 ? 'bg-[#6161ff]' : idx % 3 === 1 ? 'bg-[#f97316]' : 'bg-[#94a3b8]',
+          avatarText: (c.name || 'CU').substring(0, 2).toUpperCase(),
+          status: c.status === 'ACTIVE' || c.status === 'CUSTOMER' ? 'Active' as const : c.status === 'PROSPECT' ? 'Pending' as const : 'Inactive' as const,
+          contactPersonName: (c.contacts && c.contacts.length > 0) ? c.contacts[0].name : (c.contactPerson || 'Contact Person'),
+          contactPersonEmail: c.email || 'info@company.com',
+          picName: pic?.name || c.assignedPicName || 'Unassigned',
+          picAvatar: pic?.avatarUrl || c.assignedPicAvatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
+          picIsUnassigned: !pic?.name && (!c.assignedPicName || c.assignedPicName === 'Unassigned'),
+          lastVisit: c.lastVisitAt || '-',
+          followUpDate: c.nextFollowUpAt || '-',
+          followUpStatus: c.nextFollowUpAt ? 'scheduled' as const : 'none' as const,
+          tasksCount: 0,
+          oppsCount: 0,
+          updatedAt: c.updatedAt || 'Recently',
+          type: c.type,
+        };
+      });
+      setItems(mapped);
+    } catch (err) {
+      console.error('Failed to load customers from database:', err);
+    } finally {
+      setIsLoading(false);
     }
-    return DEFAULT_MOCK_CUSTOMERS;
-  });
+  };
+
+  useEffect(() => {
+    loadData();
+  }, [tenantId]);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -216,8 +130,6 @@ export const CustomersListPage: React.FC = () => {
     masterDataApi.fetchMasterData('customer_types', tenantId).then(setCustomerTypes);
   }, [tenantId]);
 
-  const tenantUsers: User[] = DataService.getUsers(tenantId);
-
   const handleOpenEditModal = (item: ExtendedCustomerItem) => {
     setEditingCustomer(item);
     setEditName(item.name);
@@ -251,21 +163,18 @@ export const CustomersListPage: React.FC = () => {
 
     setItems((prev) => prev.map((i) => (i.id === editingCustomer.id ? updatedItem : i)));
 
-    const realCustomer = DataService.getCustomerById(editingCustomer.id);
-    if (realCustomer) {
-      realCustomer.name = editName;
-      realCustomer.industry = editIndustry;
-      realCustomer.status = editStatus === 'Active' ? 'ACTIVE' : editStatus === 'Pending' ? 'PROSPECT' : 'INACTIVE';
-      realCustomer.email = editContactEmail;
-      if (realCustomer.contacts && realCustomer.contacts.length > 0) {
-        realCustomer.contacts[0].name = editContactName;
-        realCustomer.contacts[0].email = editContactEmail;
+    crmApi.updateRecord('customers', editingCustomer.id, {
+      name: editName,
+      industry: editIndustry,
+      status: editStatus === 'Active' ? 'ACTIVE' : editStatus === 'Pending' ? 'PROSPECT' : 'INACTIVE',
+      email: editContactEmail,
+      picId: picUser?.id
+    }).then(res => {
+      if (!res.success) {
+        console.error('Failed to update customer in DB:', res.error);
+        loadData();
       }
-      if (editPicName !== 'Unassigned') {
-        realCustomer.assignedPicName = editPicName;
-      }
-      DataService.saveCustomer(realCustomer);
-    }
+    });
 
     setShowEditModal(false);
     setEditingCustomer(null);
@@ -280,7 +189,12 @@ export const CustomersListPage: React.FC = () => {
     if (!customerToDelete) return;
 
     setItems((prev) => prev.filter((i) => i.id !== customerToDelete.id));
-    DataService.deleteCustomer(customerToDelete.id);
+    crmApi.deleteRecord('customers', customerToDelete.id).then(res => {
+      if (!res.success) {
+        console.error('Failed to delete customer in DB:', res.error);
+        loadData();
+      }
+    });
 
     setShowDeleteModal(false);
     setCustomerToDelete(null);

@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { DataService } from '../../services/dataService';
 import { masterDataApi } from '../../services/masterDataApi';
 import { Project, ProjectStage, ActivityType, Customer, FollowUpType, MasterDataItem } from '../../types';
+import { crmApi } from '../../services/crmApi';
 
 type ViewMode = 'PIPELINE' | 'LIST';
 
@@ -12,10 +13,31 @@ export const ProjectsPage: React.FC = () => {
   const { currentTenant, currentUser } = useAuth();
   const tenantId = currentTenant?.id || 'TEN-00001';
 
-  const [projects, setProjects] = useState<Project[]>(DataService.getProjects(tenantId));
-  const [customers] = useState<Customer[]>(DataService.getCustomers(tenantId));
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('LIST');
   const [draggedOppId, setDraggedOppId] = useState<string | null>(null);
+
+  const loadData = async () => {
+    setIsLoading(true);
+    try {
+      const [pList, cList] = await Promise.all([
+        crmApi.fetchCollection<Project>('projects', tenantId),
+        crmApi.fetchCollection<Customer>('customers', tenantId)
+      ]);
+      setProjects(pList);
+      setCustomers(cList);
+    } catch (err) {
+      console.error('Failed to load projects from database:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  React.useEffect(() => {
+    loadData();
+  }, [tenantId]);
 
   // Follow Up Modal State
   const [showFollowUpModal, setShowFollowUpModal] = useState(false);

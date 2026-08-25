@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { DataService } from '../../services/dataService';
 import { masterDataApi } from '../../services/masterDataApi';
 import { Task, Customer, Project, MasterDataItem } from '../../types';
+import { crmApi } from '../../services/crmApi';
 
 export const TasksPage: React.FC = () => {
   const navigate = useNavigate();
@@ -12,9 +13,32 @@ export const TasksPage: React.FC = () => {
   const tenantId = currentTenant?.id || 'TEN-00001';
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const [tasks, setTasks] = useState<Task[]>(DataService.getTasks(tenantId));
-  const [customers] = useState<Customer[]>(DataService.getCustomers(tenantId));
-  const [projects] = useState<Project[]>(DataService.getProjects(tenantId));
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const loadData = async () => {
+    setIsLoading(true);
+    try {
+      const [tList, cList, pList] = await Promise.all([
+        crmApi.fetchCollection<Task>('tasks', tenantId),
+        crmApi.fetchCollection<Customer>('customers', tenantId),
+        crmApi.fetchCollection<Project>('projects', tenantId)
+      ]);
+      setTasks(tList);
+      setCustomers(cList);
+      setProjects(pList);
+    } catch (err) {
+      console.error('Failed to load tasks from database:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  React.useEffect(() => {
+    loadData();
+  }, [tenantId]);
 
   const [taskStatuses, setTaskStatuses] = useState<MasterDataItem[]>([]);
   const [taskPriorities, setTaskPriorities] = useState<MasterDataItem[]>([]);
