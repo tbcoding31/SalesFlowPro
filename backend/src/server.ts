@@ -14,8 +14,22 @@ export const can = (permissions: string[], action: string) => {
   return permissions.includes(action);
 };
 
-export const getAssignableRoles = async (pool: any, actorRoleId: string, actorTenantId?: string | null) => {
+export const getAssignableRoles = async (pool: any, actorRoleId: string, actorTenantId?: string | null, targetTenantId?: string | null) => {
   try {
+    // 0. Super Admin has full privilege to assign any tenant role
+    if (actorRoleId === 'SUPER_ADMIN') {
+      const tenantToQuery = targetTenantId || actorTenantId;
+      if (tenantToQuery && tenantToQuery !== 'SYSTEM') {
+        const [tenantRoleRows]: any = await pool.query(
+          "SELECT id FROM roles WHERE tenantId = ? AND scope = 'TENANT'",
+          [tenantToQuery]
+        );
+        return tenantRoleRows.map((r: any) => r.id);
+      }
+      const [allTenantRoles]: any = await pool.query("SELECT id FROM roles WHERE scope = 'TENANT'");
+      return allTenantRoles.map((r: any) => r.id);
+    }
+
     // 1. Direct match on role_assignment_policies
     const [rows]: any = await pool.query('SELECT assignableRoleId as roleId FROM role_assignment_policies WHERE assignerRoleId = ?', [actorRoleId]);
     let assignableIds = rows.map((r: any) => r.roleId);
@@ -38,14 +52,98 @@ export const getAssignableRoles = async (pool: any, actorRoleId: string, actorTe
 };
 
 /**
+ * Capability-based administrative continuity check.
+ * Counts ACTIVE tenant users whose active assigned role contains all three:
+ * MANAGE_TENANT, MANAGE_USERS, and MANAGE_ROLES.
+ */
+export const countActiveTenantAdmins = async (connectionOrPool: any, tenantId: string, excludeUserId?: string): Promise<number> => {
+  const params: any[] = [tenantId];
+  let query = `
+    SELECT COUNT(DISTINCT tu.id) as adminCount
+    FROM tenant_users tu
+    JOIN users u ON u.id = tu.userId
+    JOIN tenant_user_roles tur ON tur.tenantUserId = tu.id
+    JOIN role_permissions rp1 ON rp1.roleId = tur.roleId AND rp1.permission = 'MANAGE_TENANT'
+    JOIN role_permissions rp2 ON rp2.roleId = tur.roleId AND rp2.permission = 'MANAGE_USERS'
+    JOIN role_permissions rp3 ON rp3.roleId = tur.roleId AND rp3.permission = 'MANAGE_ROLES'
+    WHERE tu.tenantId = ?
+      AND tu.status = 'ACTIVE'
+      AND u.status = 'ACTIVE'
+  `;
+
+  if (excludeUserId) {
+    query += ' AND tu.userId != ?';
+    params.push(excludeUserId);
+  }
+
+  const [rows]: any = await connectionOrPool.query(query, params);
+  return rows[0]?.adminCount || 0;
+};
+
+/**
+ * Authoritative assignable tenant user validation.
+ * Verifies that the requested user has an ACTIVE global identity
+ * AND an ACTIVE tenant membership within the specified tenantId.
+ */
+export const validateAssignableTenantUser = async (connectionOrPool: any, tenantId: string, userId: string): Promise<{ valid: boolean, error?: string, code?: string }> => {
+  if (!userId) return { valid: false, error: 'User ID is required.', code: 'MISSING_USER_ID' };
+
+  const [rows]: any = await connectionOrPool.query(`
+    SELECT u.id, u.status as userGlobalStatus, tu.status as tenantUserStatus, tu.tenantId
+    FROM users u
+    JOIN tenant_users tu ON tu.userId = u.id
+    WHERE u.id = ? AND tu.tenantId = ?
+  `, [userId, tenantId]);
+
+  if (rows.length === 0) {
+    return {
+      valid: false,
+      error: 'Selected user is not a member of this organization.',
+      code: 'INVALID_PIC_FOR_TENANT'
+    };
+  }
+
+  const record = rows[0];
+  if (record.userGlobalStatus === 'SUSPENDED') {
+    return {
+      valid: false,
+      error: 'Selected user identity is globally suspended.',
+      code: 'USER_SUSPENDED'
+    };
+  }
+
+  if (record.tenantUserStatus === 'SUSPENDED') {
+    return {
+      valid: false,
+      error: 'Selected user membership in this organization is suspended.',
+      code: 'MEMBERSHIP_SUSPENDED'
+    };
+  }
+
+  if (record.tenantUserStatus !== 'ACTIVE' || record.userGlobalStatus !== 'ACTIVE') {
+    return {
+      valid: false,
+      error: 'Selected user is not active in this organization.',
+      code: 'USER_NOT_ACTIVE'
+    };
+  }
+
+  return { valid: true };
+};
+
+/**
  * Authoritative user access context resolution.
  * Supports both platform users (global roles with no tenant membership)
  * and tenant users (scoped roles through tenant_users).
  */
 export const resolveUserAccessContext = async (pool: any, userId: string) => {
+  // 0. Fetch Global Identity
+  const [globalUserRows]: any = await pool.query('SELECT id, email, name, status FROM users WHERE id = ?', [userId]);
+  const userGlobalStatus = globalUserRows.length > 0 ? (globalUserRows[0].status || 'ACTIVE') : 'ACTIVE';
+
   // 1. Check if user has tenant membership
   const [membershipRows]: any = await pool.query(`
-    SELECT tu.tenantId, tu.status as tenantUserStatus, tur.roleId, r.name as roleName, r.scope
+    SELECT tu.id as tenantUserId, tu.tenantId, tu.status as tenantUserStatus, tur.roleId, r.name as roleName, r.scope
     FROM tenant_users tu
     LEFT JOIN tenant_user_roles tur ON tur.tenantUserId = tu.id
     LEFT JOIN roles r ON r.id = tur.roleId
@@ -53,6 +151,8 @@ export const resolveUserAccessContext = async (pool: any, userId: string) => {
   `, [userId]);
 
   let tenantId: string | null = null;
+  let tenantUserId: string | null = null;
+  let tenantUserStatus: string = 'ACTIVE';
   let roleId: string | null = null;
   let roleName: string | null = null;
   let isPlatformUser = false;
@@ -63,6 +163,8 @@ export const resolveUserAccessContext = async (pool: any, userId: string) => {
 
   if (membershipRows.length > 0 && membershipRows[0].tenantId && membershipRows[0].tenantId !== 'SYSTEM') {
     tenantId = membershipRows[0].tenantId;
+    tenantUserId = membershipRows[0].tenantUserId;
+    tenantUserStatus = membershipRows[0].tenantUserStatus || 'ACTIVE';
     roleId = membershipRows[0].roleId;
     roleName = membershipRows[0].roleName;
   } else if (membershipRows.length > 0 && membershipRows[0].tenantId === 'SYSTEM') {
@@ -115,6 +217,9 @@ export const resolveUserAccessContext = async (pool: any, userId: string) => {
 
   return {
     tenantId,
+    tenantUserId,
+    userGlobalStatus,
+    tenantUserStatus,
     roleId,
     roleName,
     permissions,
@@ -190,8 +295,17 @@ app.use(async (req, res, next) => {
     // Hydrate User Context (Tenant, Role, Permissions) via authoritative helper
     const userContext = await resolveUserAccessContext(pool, session.userId);
 
-    // Tenant Suspension Check for tenant-scoped users
+    // 1. Global Identity Suspension Check (applies everywhere, including platform users)
+    if (userContext.userGlobalStatus === 'SUSPENDED') {
+      return res.status(403).json({ error: 'User identity is suspended', code: 'USER_SUSPENDED' });
+    }
+
+    // 2. Tenant & Membership Status Checks for tenant-scoped users
     if (userContext.tenantId && userContext.tenantId !== 'SYSTEM') {
+      if (userContext.tenantUserStatus === 'SUSPENDED') {
+        return res.status(403).json({ error: 'Tenant membership is suspended', code: 'MEMBERSHIP_SUSPENDED' });
+      }
+
       const [tenantRows]: any = await pool.query('SELECT status FROM tenants WHERE id = ?', [userContext.tenantId]);
       if (tenantRows.length > 0 && tenantRows[0].status === 'SUSPENDED') {
         return res.status(403).json({ error: 'Tenant is suspended', code: 'TENANT_SUSPENDED' });
@@ -199,6 +313,7 @@ app.use(async (req, res, next) => {
     }
 
     (req as any).userId = session.userId;
+    (req as any).tenantUserId = userContext.tenantUserId;
     (req as any).userRole = userContext.roleId;
     (req as any).userTenantId = userContext.tenantId;
     (req as any).userPermissions = userContext.permissions;
@@ -271,6 +386,9 @@ app.get('/api/sync/all', async (req, res) => {
     }
     const [dbRoles] = await pool.query(roleQuery, queryArgs) as any[];
 
+    const [dbTeams] = await pool.query('SELECT * FROM teams' + tenantFilter, queryArgs) as any[];
+    const [dbTeamMembers] = await pool.query('SELECT tm.* FROM team_members tm JOIN tenant_users tu ON tu.id = tm.tenantUserId' + tenantFilter, queryArgs) as any[];
+
     // Data tables (paginated — bounded by pageSize / SYNC_MAX_PAGE_SIZE)
     const paginatedArgs = [...queryArgs, pageSize, offset];
     const limitClause = tenantFilter
@@ -337,6 +455,18 @@ app.get('/api/sync/all', async (req, res) => {
         roleName: roleName,
         department: u.department || 'Sales',
         position: 'Staff', // Just mock a position
+        teamId: (() => {
+          if (!tu) return undefined;
+          const tm = dbTeamMembers.find((m: any) => m.tenantUserId === tu.id);
+          return tm ? tm.teamId : undefined;
+        })(),
+        teamName: (() => {
+          if (!tu) return undefined;
+          const tm = dbTeamMembers.find((m: any) => m.tenantUserId === tu.id);
+          if (!tm) return undefined;
+          const t = dbTeams.find((team: any) => team.id === tm.teamId);
+          return t ? t.name : undefined;
+        })(),
         status: u.statusId || 'ACTIVE',
         lastLoginAt: u.lastLogin,
         createdAt: u.lastLogin // Fallback
@@ -466,24 +596,49 @@ const setupEndpoint = (table: string) => {
     
     // Special handling for users table which links to tenant via tenant_users
     if (table === 'users') {
+      const { assignable } = req.query;
       let query = `
-        SELECT u.*, tu.tenantId, tu.isPrimary, r.id as role, r.name as roleName
+        SELECT u.id, u.email, u.name, u.avatar, u.createdAt, u.lastLoginAt,
+               u.status as identityStatus,
+               COALESCE(tu.status, u.status, 'ACTIVE') as status,
+               COALESCE(tu.status, u.status, 'ACTIVE') as membershipStatus,
+               tu.id as tenantUserId, tu.tenantId, tu.isPrimary,
+               r.id as role, r.name as roleName,
+               t.id as teamId, t.name as teamName, tm.role as teamRole
         FROM users u
-        LEFT JOIN tenant_users tu ON tu.userId = u.id AND tu.isPrimary = true
+        LEFT JOIN tenant_users tu ON tu.userId = u.id AND (tu.tenantId = ? OR tu.isPrimary = true)
         LEFT JOIN tenant_user_roles tur ON tur.tenantUserId = tu.id
         LEFT JOIN roles r ON r.id = tur.roleId
+        LEFT JOIN team_members tm ON tm.tenantUserId = tu.id
+        LEFT JOIN teams t ON t.id = tm.teamId
       `;
       const params: any[] = [];
+      const tenantForJoin = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId || 'SYSTEM');
+      params.push(tenantForJoin);
+
+      const whereClauses: string[] = [];
       if (actorTenant !== 'SYSTEM') {
-        query += ' WHERE tu.tenantId = ?';
+        whereClauses.push('tu.tenantId = ?');
         params.push(actorTenant);
       } else {
         const { tenantId } = req.query;
         if (tenantId && tenantId !== 'ALL' && tenantId !== 'SYSTEM') {
-          query += ' WHERE tu.tenantId = ?';
+          whereClauses.push('tu.tenantId = ?');
           params.push(tenantId);
         }
       }
+
+      // If assignable filter is requested (for new team/leader/PIC assignments), return only ACTIVE users with ACTIVE membership
+      if (assignable === 'true' || assignable === '1') {
+        whereClauses.push("u.status = 'ACTIVE'");
+        whereClauses.push("tu.status = 'ACTIVE'");
+      }
+
+      if (whereClauses.length > 0) {
+        query += ' WHERE ' + whereClauses.join(' AND ');
+      }
+
+      query += ' ORDER BY u.name ASC';
       sendRes(res, pool.query(query, params).then(([rows]) => rows));
       return;
     }
@@ -528,6 +683,35 @@ const setupEndpoint = (table: string) => {
       if (actorTenant !== 'SYSTEM') {
         query += ' WHERE tenantId = ?';
         params.push(actorTenant);
+
+        const actorUserId = (req as any).userId;
+        const actorDataScope = (req as any).userDataScope || 'OWN';
+        const actorPermissions = (req as any).userPermissions || [];
+        const perms = getRequiredPermissions(table);
+
+        // Check if table has resource ownership (picId / userId)
+        if (perms.ownerCol && !actorPermissions.includes('ALL') && !actorPermissions.includes('MANAGE_TENANT')) {
+          if (actorDataScope === 'OWN') {
+            query += ` AND ${perms.ownerCol} = ?`;
+            params.push(actorUserId);
+          } else if (actorDataScope === 'TEAM') {
+            // Dynamic TEAM scope resolution:
+            // Find all active tenant users in the same team as the actor
+            query += ` AND ${perms.ownerCol} IN (
+              SELECT tu.userId FROM tenant_users tu
+              JOIN team_members tm ON tm.tenantUserId = tu.id
+              WHERE tm.teamId IN (
+                SELECT tm2.teamId FROM team_members tm2
+                JOIN tenant_users tu2 ON tu2.id = tm2.tenantUserId
+                WHERE tu2.userId = ? AND tu2.tenantId = ? AND tu2.status = 'ACTIVE'
+              ) AND tu.tenantId = ? AND tu.status = 'ACTIVE'
+            )`;
+            params.push(actorUserId, actorTenant, actorTenant);
+          } else if (actorDataScope === 'DEPARTMENT') {
+            // Fail-safe for DEPARTMENT scope (HOLD state): deny operational records
+            query += ` AND 1 = 0 /* DEPARTMENT_SCOPE_NOT_ACTIVE */`;
+          }
+        }
       } else {
         const { tenantId } = req.query;
         if (tenantId && tenantId !== 'ALL' && tenantId !== 'SYSTEM') {
@@ -537,6 +721,56 @@ const setupEndpoint = (table: string) => {
       }
     }
     sendRes(res, pool.query(query, params).then(([rows]) => rows));
+  });
+
+  // GET single record by ID with dataScope and tenant protection
+  app.get(`/api/${table}/:id`, async (req, res) => {
+    const actorTenant = (req as any).userTenantId;
+    const actorRole = (req as any).userRole;
+    const actorUserId = (req as any).userId;
+    const actorDataScope = (req as any).userDataScope || 'OWN';
+    const actorPermissions = (req as any).userPermissions || [];
+    const id = req.params.id;
+
+    try {
+      let query = `SELECT * FROM ${table} WHERE id = ?`;
+      const params: any[] = [id];
+
+      if (tenantSpecificTables.includes(table) && actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM') {
+        query += ' AND tenantId = ?';
+        params.push(actorTenant);
+
+        const perms = getRequiredPermissions(table);
+        if (perms.ownerCol && !actorPermissions.includes('ALL') && !actorPermissions.includes('MANAGE_TENANT')) {
+          if (actorDataScope === 'OWN') {
+            query += ` AND ${perms.ownerCol} = ?`;
+            params.push(actorUserId);
+          } else if (actorDataScope === 'TEAM') {
+            query += ` AND ${perms.ownerCol} IN (
+              SELECT tu.userId FROM tenant_users tu
+              JOIN team_members tm ON tm.tenantUserId = tu.id
+              WHERE tm.teamId IN (
+                SELECT tm2.teamId FROM team_members tm2
+                JOIN tenant_users tu2 ON tu2.id = tm2.tenantUserId
+                WHERE tu2.userId = ? AND tu2.tenantId = ? AND tu2.status = 'ACTIVE'
+              ) AND tu.tenantId = ? AND tu.status = 'ACTIVE'
+            )`;
+            params.push(actorUserId, actorTenant, actorTenant);
+          } else if (actorDataScope === 'DEPARTMENT') {
+            query += ` AND 1 = 0 /* DEPARTMENT_SCOPE_NOT_ACTIVE */`;
+          }
+        }
+      }
+
+      const [rows]: any = await pool.query(query, params);
+      if (rows.length === 0) {
+        return res.status(404).json({ error: 'Record not found or access denied.' });
+      }
+      res.json(rows[0]);
+    } catch (err: any) {
+      console.error(`Error GET ${table}/:id:`, err.message);
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
   });
 
   const getRequiredPermissions = (table: string) => {
@@ -554,6 +788,8 @@ const setupEndpoint = (table: string) => {
       'users': { base: 'MANAGE_USERS', own: null, ownerCol: null },
       'tenants': { base: 'MANAGE_TENANT', own: null, ownerCol: null },
       'tenant_users': { base: 'MANAGE_USERS', own: null, ownerCol: null },
+      'teams': { base: 'MANAGE_USERS', own: null, ownerCol: null },
+      'team_members': { base: 'MANAGE_USERS', own: null, ownerCol: null },
       'task_priorities': { base: 'MANAGE_TENANT', own: null, ownerCol: null },
       'task_statuses': { base: 'MANAGE_TENANT', own: null, ownerCol: null },
       'project_stages': { base: 'MANAGE_TENANT', own: null, ownerCol: null },
@@ -614,6 +850,15 @@ const setupEndpoint = (table: string) => {
         data[authZ.ownerCol] = actorUserId;
       }
       
+      // Authoritative PIC validation on creation
+      if (data.picId) {
+        const targetTenant = data.tenantId || actorTenant;
+        const picCheck = await validateAssignableTenantUser(pool, targetTenant, data.picId);
+        if (!picCheck.valid) {
+          return res.status(400).json({ error: picCheck.error, code: picCheck.code });
+        }
+      }
+
       // Hash password if inserting into users table
       if (table === 'users' && data.passwordHash) {
         const salt = await bcrypt.genSalt(10);
@@ -647,6 +892,10 @@ const setupEndpoint = (table: string) => {
 
     const actorTenant = (req as any).userTenantId;
     const actorRole = (req as any).userRole;
+    const actorUserId = (req as any).userId;
+    const actorDataScope = (req as any).userDataScope || 'OWN';
+    const actorPermissions = (req as any).userPermissions || [];
+
     try {
       const id = req.params.id;
       const data = req.body;
@@ -657,13 +906,46 @@ const setupEndpoint = (table: string) => {
           return res.status(403).json({ error: 'Cross-tenant mutation forbidden (BOLA).' });
         }
       } else if (tenantSpecificTables.includes(table) && actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM') {
-        const [existing]: any = await pool.query(`SELECT tenantId FROM ${table} WHERE id = ?`, [id]);
+        const [existing]: any = await pool.query(`SELECT * FROM ${table} WHERE id = ?`, [id]);
         if (existing.length === 0) {
           return res.status(404).json({ error: 'Record not found' });
         }
         if (existing[0].tenantId !== actorTenant) {
           return res.status(403).json({ error: 'Cross-tenant mutation forbidden (BOLA).' });
         }
+
+        // Authoritative PIC validation on update (only if picId is being modified/reassigned)
+        if (data.picId && data.picId !== existing[0].picId) {
+          const picCheck = await validateAssignableTenantUser(pool, actorTenant, data.picId);
+          if (!picCheck.valid) {
+            return res.status(400).json({ error: picCheck.error, code: picCheck.code });
+          }
+        }
+
+        // Check TEAM data scope on mutation
+        const perms = getRequiredPermissions(table);
+        if (perms.ownerCol && !actorPermissions.includes('ALL') && !actorPermissions.includes('MANAGE_TENANT')) {
+          const recordOwner = existing[0][perms.ownerCol];
+          if (actorDataScope === 'OWN' && recordOwner !== actorUserId) {
+            return res.status(403).json({ error: 'Forbidden. You do not own this record.' });
+          } else if (actorDataScope === 'TEAM') {
+            const [teamMatch]: any = await pool.query(`
+              SELECT 1 FROM team_members tm1
+              JOIN tenant_users tu1 ON tu1.id = tm1.tenantUserId
+              JOIN team_members tm2 ON tm2.teamId = tm1.teamId
+              JOIN tenant_users tu2 ON tu2.id = tm2.tenantUserId
+              WHERE tu1.userId = ? AND tu2.userId = ? AND tu1.tenantId = ? AND tu2.tenantId = ?
+                AND tu1.status = 'ACTIVE' AND tu2.status = 'ACTIVE'
+            `, [actorUserId, recordOwner, actorTenant, actorTenant]);
+
+            if (teamMatch.length === 0) {
+              return res.status(403).json({ error: 'Forbidden. Record does not belong to an active member of your team.' });
+            }
+          } else if (actorDataScope === 'DEPARTMENT') {
+            return res.status(403).json({ error: 'Forbidden. DEPARTMENT data scope is inactive.', code: 'DEPARTMENT_SCOPE_NOT_ACTIVE' });
+          }
+        }
+
         data.tenantId = actorTenant; // prevent forging
       }
 
@@ -680,12 +962,11 @@ const setupEndpoint = (table: string) => {
       let query = `UPDATE ${table} SET ${setClause} WHERE id = ?`;
       const queryValues = [...values, id];
       
-      const actorUserId = (req as any).userId;
       if (tenantSpecificTables.includes(table) && actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM') {
          query += ' AND tenantId = ?';
          queryValues.push(actorTenant);
       }
-      if (authZ.restrictToOwn && authZ.ownerCol) {
+      if (authZ.restrictToOwn && authZ.ownerCol && actorDataScope === 'OWN') {
          query += ` AND ${authZ.ownerCol} = ?`;
          queryValues.push(actorUserId);
          data[authZ.ownerCol] = actorUserId; // force body not to bypass
@@ -731,28 +1012,54 @@ const setupEndpoint = (table: string) => {
 
     const actorTenant = (req as any).userTenantId;
     const actorRole = (req as any).userRole;
+    const actorUserId = (req as any).userId;
+    const actorDataScope = (req as any).userDataScope || 'OWN';
+    const actorPermissions = (req as any).userPermissions || [];
+
     try {
       const id = req.params.id;
       
       // Ownership check for BOLA protection
       if (tenantSpecificTables.includes(table) && actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM') {
-        const [existing]: any = await pool.query(`SELECT tenantId FROM ${table} WHERE id = ?`, [id]);
+        const [existing]: any = await pool.query(`SELECT * FROM ${table} WHERE id = ?`, [id]);
         if (existing.length === 0) {
           return res.status(404).json({ error: 'Record not found' });
         }
         if (existing[0].tenantId !== actorTenant) {
           return res.status(403).json({ error: 'Cross-tenant mutation forbidden (BOLA).' });
         }
+
+        // Check TEAM data scope on deletion
+        const perms = getRequiredPermissions(table);
+        if (perms.ownerCol && !actorPermissions.includes('ALL') && !actorPermissions.includes('MANAGE_TENANT')) {
+          const recordOwner = existing[0][perms.ownerCol];
+          if (actorDataScope === 'OWN' && recordOwner !== actorUserId) {
+            return res.status(403).json({ error: 'Forbidden. You do not own this record.' });
+          } else if (actorDataScope === 'TEAM') {
+            const [teamMatch]: any = await pool.query(`
+              SELECT 1 FROM team_members tm1
+              JOIN tenant_users tu1 ON tu1.id = tm1.tenantUserId
+              JOIN team_members tm2 ON tm2.teamId = tm1.teamId
+              JOIN tenant_users tu2 ON tu2.id = tm2.tenantUserId
+              WHERE tu1.userId = ? AND tu2.userId = ? AND tu1.tenantId = ? AND tu2.tenantId = ?
+            `, [actorUserId, recordOwner, actorTenant, actorTenant]);
+
+            if (teamMatch.length === 0) {
+              return res.status(403).json({ error: 'Forbidden. Record does not belong to a member of your team.' });
+            }
+          } else if (actorDataScope === 'DEPARTMENT') {
+            return res.status(403).json({ error: 'Forbidden. DEPARTMENT data scope is inactive.', code: 'DEPARTMENT_SCOPE_NOT_ACTIVE' });
+          }
+        }
       }
 
       let query = `DELETE FROM ${table} WHERE id = ?`;
       const values = [id];
-      const actorUserId = (req as any).userId;
       if (tenantSpecificTables.includes(table) && actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM') {
          query += ' AND tenantId = ?';
          values.push(actorTenant);
       }
-      if (authZ.restrictToOwn && authZ.ownerCol) {
+      if (authZ.restrictToOwn && authZ.ownerCol && actorDataScope === 'OWN') {
          query += ` AND ${authZ.ownerCol} = ?`;
          values.push(actorUserId);
       }
@@ -1126,6 +1433,7 @@ app.post('/api/tenant/users', async (req, res) => {
   const { email, password, name, roleId } = req.body;
   
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+  if (!email || !email.trim()) return res.status(400).json({ error: 'Email is required' });
   
   // Enforce Tenant Isolation (if actor is TENANT scoped, target tenant must be actor's tenant)
   let targetTenant = req.body.tenantId || actorTenant;
@@ -1133,7 +1441,7 @@ app.post('/api/tenant/users', async (req, res) => {
      return res.status(403).json({ error: 'Cross-tenant user creation forbidden.' });
   }
 
-  const assignable = await getAssignableRoles(pool, actorRole, actorTenant);
+  const assignable = await getAssignableRoles(pool, actorRole, actorTenant, targetTenant);
   if (!assignable.includes(roleId)) {
     return res.status(403).json({ error: 'Role assignment not permitted by policy.' });
   }
@@ -1141,20 +1449,96 @@ app.post('/api/tenant/users', async (req, res) => {
   const connection = await pool.getConnection();
   await connection.beginTransaction();
   try {
-    const userId = 'USR-' + Date.now();
-    const hash = await bcrypt.hash(password || 'Password123', 10);
-    await connection.query('INSERT INTO users (id, email, passwordHash, name) VALUES (?, ?, ?, ?)', [userId, email, hash, name]);
+    const trimmedEmail = email.trim().toLowerCase();
+
+    // 1. Check if user global identity exists
+    const [existingUserRows]: any = await connection.query('SELECT * FROM users WHERE email = ? FOR UPDATE', [trimmedEmail]);
     
+    let userId: string;
+    let isNewIdentity = false;
+
+    if (existingUserRows.length > 0) {
+      const existingUser = existingUserRows[0];
+      userId = existingUser.id;
+
+      // Check if global identity is suspended
+      if (existingUser.status === 'SUSPENDED') {
+        await connection.rollback();
+        return res.status(403).json({
+          error: 'User identity is suspended and cannot be added to an organization.',
+          code: 'USER_SUSPENDED'
+        });
+      }
+
+      // Check if membership already exists in this tenant
+      const [existingMembershipRows]: any = await connection.query(
+        'SELECT id FROM tenant_users WHERE tenantId = ? AND userId = ?',
+        [targetTenant, userId]
+      );
+
+      if (existingMembershipRows.length > 0) {
+        await connection.rollback();
+        return res.status(409).json({
+          error: 'User is already a member of this organization.',
+          code: 'USER_ALREADY_MEMBER'
+        });
+      }
+    } else {
+      // Create new global user identity
+      isNewIdentity = true;
+      userId = 'USR-' + Date.now();
+      const hash = await bcrypt.hash(password || 'Password123', 10);
+      await connection.query(
+        'INSERT INTO users (id, email, passwordHash, name, status) VALUES (?, ?, ?, ?, "ACTIVE")',
+        [userId, trimmedEmail, hash, name || trimmedEmail.split('@')[0]]
+      );
+    }
+
+    // Determine isPrimary (true if user has no prior memberships)
+    const [priorMemberships]: any = await connection.query('SELECT COUNT(*) as cnt FROM tenant_users WHERE userId = ?', [userId]);
+    const isPrimary = priorMemberships[0].cnt === 0 ? 1 : 0;
+
     const tenantUserId = 'TU-' + Date.now();
-    await connection.query('INSERT INTO tenant_users (id, tenantId, userId, isPrimary) VALUES (?, ?, ?, 1)', [tenantUserId, targetTenant, userId]);
+    await connection.query(
+      'INSERT INTO tenant_users (id, tenantId, userId, isPrimary, status) VALUES (?, ?, ?, ?, "ACTIVE")',
+      [tenantUserId, targetTenant, userId, isPrimary]
+    );
     
     await connection.query('INSERT INTO tenant_user_roles (id, tenantUserId, roleId) VALUES (?, ?, ?)', ['TUR-' + Date.now(), tenantUserId, roleId]);
+
+    // Optional Team Assignment
+    const { teamId } = req.body;
+    if (teamId) {
+      const [teamRows]: any = await connection.query('SELECT id FROM teams WHERE id = ? AND tenantId = ?', [teamId, targetTenant]);
+      if (teamRows.length > 0) {
+        await connection.query(
+          'INSERT INTO team_members (id, teamId, tenantUserId, role) VALUES (?, ?, ?, "MEMBER")',
+          [`TM-${Date.now()}`, teamId, tenantUserId]
+        );
+      }
+    }
+
+    // Audit Log
+    await connection.query(
+      'INSERT INTO audit_logs (id, tenantId, userId, action, module, entity, entityId, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        `LOG-${Date.now()}`,
+        targetTenant,
+        (req as any).userId,
+        isNewIdentity ? 'CREATE' : 'CREATE_MEMBERSHIP',
+        'User Management',
+        'Tenant User',
+        tenantUserId,
+        `Added user ${trimmedEmail} (${userId}) to tenant ${targetTenant} with role ${roleId}`
+      ]
+    );
     
     await connection.commit();
-    res.json({ success: true, userId });
+    res.json({ success: true, userId, tenantUserId });
   } catch (err: any) {
     await connection.rollback();
-    res.status(500).json({ error: 'User creation failed. Please try again.' });
+    console.error('Error creating tenant user:', err);
+    res.status(500).json({ error: 'User creation failed. Please try again.', details: err.message, sqlMessage: err.sqlMessage });
   } finally {
     connection.release();
   }
@@ -1163,10 +1547,11 @@ app.post('/api/tenant/users', async (req, res) => {
 app.put('/api/tenant/users/:id/roles', async (req, res) => {
   const actorRole = (req as any).userRole;
   const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
   const targetUserId = req.params.id;
   const { roleId } = req.body;
 
-  if (!actorRole || !actorTenant) return res.status(401).json({ error: 'Unauthorized' });
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
   const assignable = await getAssignableRoles(pool, actorRole, actorTenant);
   if (!assignable.includes(roleId)) {
@@ -1181,17 +1566,52 @@ app.put('/api/tenant/users/:id/roles', async (req, res) => {
     }
   }
 
-  // Self escalation check
-  if (targetUserId === (req as any).userId) {
-     return res.status(403).json({ error: 'Cannot modify own role to escalate privileges.' });
+  // Self escalation check (Cannot grant self a role with higher/different permissions than assignable)
+  if (targetUserId === (req as any).userId && actorRole !== 'SUPER_ADMIN') {
+    // Self-modification is only permitted for demotion/reassignment if allowed by assignment policy and Last Admin invariant
+    // We proceed to transaction where Last Admin check will evaluate continuity.
   }
 
   const connection = await pool.getConnection();
   await connection.beginTransaction();
   try {
-    const [tuRows]: any = await connection.query('SELECT id, tenantId FROM tenant_users WHERE userId = ?', [targetUserId]);
+    const [tuRows]: any = await connection.query('SELECT id, tenantId, status FROM tenant_users WHERE userId = ?', [targetUserId]);
     if (tuRows.length > 0) {
       const tuId = tuRows[0].id;
+      const targetTenantId = tuRows[0].tenantId;
+
+      // Lock tenant row for transactional concurrency protection
+      await connection.query('SELECT id FROM tenants WHERE id = ? FOR UPDATE', [targetTenantId]);
+
+      // Check if target user is currently an active administrator
+      const [currPermRows]: any = await connection.query(`
+        SELECT rp.permission
+        FROM tenant_user_roles tur
+        JOIN role_permissions rp ON rp.roleId = tur.roleId
+        WHERE tur.tenantUserId = ? AND rp.permission IN ('MANAGE_TENANT', 'MANAGE_USERS', 'MANAGE_ROLES')
+      `, [tuId]);
+      const currPerms = currPermRows.map((r: any) => r.permission);
+      const isTargetCurrentlyAdmin = currPerms.includes('MANAGE_TENANT') && currPerms.includes('MANAGE_USERS') && currPerms.includes('MANAGE_ROLES') && tuRows[0].status === 'ACTIVE';
+
+      // Check if new role preserves full administrator capability
+      const [newPermRows]: any = await connection.query(`
+        SELECT permission FROM role_permissions WHERE roleId = ? AND permission IN ('MANAGE_TENANT', 'MANAGE_USERS', 'MANAGE_ROLES')
+      `, [roleId]);
+      const newPerms = newPermRows.map((r: any) => r.permission);
+      const willTargetBeAdmin = newPerms.includes('MANAGE_TENANT') && newPerms.includes('MANAGE_USERS') && newPerms.includes('MANAGE_ROLES');
+
+      // If user is losing administrative capability, ensure at least one other active admin exists
+      if (isTargetCurrentlyAdmin && !willTargetBeAdmin) {
+        const remainingAdmins = await countActiveTenantAdmins(connection, targetTenantId, targetUserId);
+        if (remainingAdmins === 0) {
+          await connection.rollback();
+          return res.status(400).json({
+            error: 'The last active administrator cannot be demoted. Assign another administrator first.',
+            code: 'LAST_TENANT_ADMIN'
+          });
+        }
+      }
+
       const [oldRoleRows]: any = await connection.query('SELECT roleId FROM tenant_user_roles WHERE tenantUserId = ?', [tuId]);
       const oldRoleId = oldRoleRows.length > 0 ? oldRoleRows[0].roleId : null;
 
@@ -1202,7 +1622,7 @@ app.put('/api/tenant/users/:id/roles', async (req, res) => {
       // Audit Log for role change
       await connection.query(
         'INSERT INTO audit_logs (id, tenantId, userId, action, module, description) VALUES (?, ?, ?, ?, ?, ?)',
-        [`LOG-${Date.now()}`, tuRows[0].tenantId, (req as any).userId, 'ROLE_CHANGE', 'RBAC', `Reassigned user ${targetUserId} role from ${oldRoleId || 'NONE'} to ${roleId}`]
+        [`LOG-${Date.now()}`, targetTenantId, (req as any).userId, 'ROLE_CHANGE', 'RBAC', `Reassigned user ${targetUserId} role from ${oldRoleId || 'NONE'} to ${roleId}`]
       );
     }
     await connection.commit();
@@ -1210,6 +1630,446 @@ app.put('/api/tenant/users/:id/roles', async (req, res) => {
   } catch (err: any) {
     await connection.rollback();
     res.status(500).json({ error: 'Internal Server Error' });
+  } finally {
+    connection.release();
+  }
+});
+
+// --- MEMBERSHIP STATUS MANAGEMENT ---
+app.patch('/api/tenant/users/:id/status', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const targetUserId = req.params.id;
+  const { status } = req.body;
+
+  if (!actorRole || !actorTenant) return res.status(401).json({ error: 'Unauthorized' });
+  if (!['ACTIVE', 'SUSPENDED', 'INACTIVE'].includes(status)) {
+    return res.status(400).json({ error: 'Invalid status value. Must be ACTIVE, SUSPENDED, or INACTIVE.' });
+  }
+
+  const actorPermissions = (req as any).userPermissions || [];
+  if (!actorPermissions.includes('ALL') && !actorPermissions.includes('MANAGE_TENANT') && !actorPermissions.includes('MANAGE_USERS')) {
+    return res.status(403).json({ error: 'Forbidden. Requires MANAGE_USERS or MANAGE_TENANT capability.' });
+  }
+
+  const connection = await pool.getConnection();
+  await connection.beginTransaction();
+  try {
+    // 1. Resolve target tenant_user record (scoped to actorTenant for tenant administrators)
+    let tuQuery = 'SELECT id, tenantId, status FROM tenant_users WHERE (id = ? OR userId = ?)';
+    const tuParams: any[] = [targetUserId, targetUserId];
+    if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM') {
+      tuQuery += ' AND tenantId = ?';
+      tuParams.push(actorTenant);
+    }
+
+    const [tuRows]: any = await connection.query(tuQuery, tuParams);
+    if (tuRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Tenant membership not found.' });
+    }
+
+    const tuRecord = tuRows[0];
+    const targetTenantId = tuRecord.tenantId;
+
+    // Cross-tenant BOLA protection
+    if (actorRole !== 'SUPER_ADMIN' && actorTenant !== 'SYSTEM' && targetTenantId !== actorTenant) {
+      await connection.rollback();
+      return res.status(403).json({ error: 'Cross-tenant membership modification forbidden.' });
+    }
+
+    // Lock tenant row for transactional concurrency protection
+    await connection.query('SELECT id FROM tenants WHERE id = ? FOR UPDATE', [targetTenantId]);
+
+    const oldStatus = tuRecord.status;
+
+    // 2. Last Tenant Administrator Continuity Check on SUSPEND / INACTIVATE
+    if (oldStatus === 'ACTIVE' && status !== 'ACTIVE') {
+      const remainingAdmins = await countActiveTenantAdmins(connection, targetTenantId, targetUserId);
+      if (remainingAdmins === 0) {
+        await connection.rollback();
+        return res.status(400).json({
+          error: 'The last active administrator cannot be suspended. Assign another administrator first.',
+          code: 'LAST_TENANT_ADMIN'
+        });
+      }
+    }
+
+    // 3. Update tenant_users.status
+    await connection.query('UPDATE tenant_users SET status = ? WHERE id = ?', [status, tuRecord.id]);
+
+    // 4. If suspending or inactivating, revoke active sessions for this user
+    if (status !== 'ACTIVE') {
+      await connection.query('UPDATE auth_sessions SET expiresAt = NOW() WHERE userId = ?', [targetUserId]);
+    }
+
+    // 5. Audit Log
+    await connection.query(
+      'INSERT INTO audit_logs (id, tenantId, userId, action, module, entity, entityId, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        `LOG-${Date.now()}`,
+        targetTenantId,
+        (req as any).userId,
+        status === 'ACTIVE' ? 'MEMBERSHIP_REACTIVATED' : 'MEMBERSHIP_SUSPENDED',
+        'User Management',
+        'Tenant User',
+        tuRecord.id,
+        `Changed tenant membership status of user ${targetUserId} from ${oldStatus} to ${status}`
+      ]
+    );
+
+    await connection.commit();
+    res.json({ success: true, oldStatus, newStatus: status });
+  } catch (err: any) {
+    await connection.rollback();
+    console.error('Error updating tenant user status:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  } finally {
+    connection.release();
+  }
+});
+
+// Alias for PUT /api/tenant/users/:id/status
+app.put('/api/tenant/users/:id/status', async (req, res) => {
+  req.url = `/api/tenant/users/${req.params.id}/status`;
+  return app._router.handle(req, res, () => {});
+});
+
+// GLOBAL IDENTITY STATUS (SUPER_ADMIN ONLY)
+app.put('/api/users/:id/status', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const isPlatformUser = (req as any).isPlatformUser;
+  const targetUserId = req.params.id;
+  const { status } = req.body;
+
+  if (actorRole !== 'SUPER_ADMIN' && !isPlatformUser) {
+    return res.status(403).json({ error: 'Forbidden. Global user identity status modification is reserved for Platform Super Admin.' });
+  }
+  if (!['ACTIVE', 'SUSPENDED', 'INACTIVE'].includes(status)) {
+    return res.status(400).json({ error: 'Invalid status value.' });
+  }
+
+  const connection = await pool.getConnection();
+  await connection.beginTransaction();
+  try {
+    const [userRows]: any = await connection.query('SELECT id, status, email FROM users WHERE id = ?', [targetUserId]);
+    if (userRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    const oldStatus = userRows[0].status;
+    await connection.query('UPDATE users SET status = ? WHERE id = ?', [status, targetUserId]);
+
+    if (status !== 'ACTIVE') {
+      await connection.query('UPDATE auth_sessions SET expiresAt = NOW() WHERE userId = ?', [targetUserId]);
+    }
+
+    await connection.query(
+      'INSERT INTO audit_logs (id, userId, action, module, entity, entityId, description) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [
+        `LOG-${Date.now()}`,
+        (req as any).userId,
+        status === 'ACTIVE' ? 'GLOBAL_USER_REACTIVATED' : 'GLOBAL_USER_SUSPENDED',
+        'Global Identity',
+        'User',
+        targetUserId,
+        `Changed global user identity status for ${userRows[0].email} from ${oldStatus} to ${status}`
+      ]
+    );
+
+    await connection.commit();
+    res.json({ success: true, oldStatus, newStatus: status });
+  } catch (err: any) {
+    await connection.rollback();
+    res.status(500).json({ error: 'Internal Server Error' });
+  } finally {
+    connection.release();
+  }
+});
+
+// --- R38.3 OWNERSHIP IMPACT PREVIEW & OWNERSHIP TRANSFER ---
+
+/**
+ * GET /api/tenant/users/:id/ownership-impact
+ * Calculates authoritative, real-time database aggregate counts of all operational CRM entities
+ * owned by the specified user within the authenticated tenant.
+ */
+app.get('/api/tenant/users/:id/ownership-impact', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorPermissions = (req as any).userPermissions || [];
+  const targetUserId = req.params.id;
+
+  if (!actorRole || (!actorTenant && actorRole !== 'SUPER_ADMIN')) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  // Capability check: User must have MANAGE_TENANT, MANAGE_USERS, or CRM management capability
+  const hasAuthZ = actorPermissions.includes('ALL') || 
+                   actorPermissions.includes('MANAGE_TENANT') || 
+                   actorPermissions.includes('MANAGE_USERS') || 
+                   actorPermissions.includes('MANAGE_CUSTOMERS');
+  if (!hasAuthZ) {
+    return res.status(403).json({ error: 'Forbidden. Requires administrative or CRM management capability.' });
+  }
+
+  try {
+    // Resolve target tenant
+    let targetTenantId = actorTenant;
+    if (actorRole === 'SUPER_ADMIN' && req.query.tenantId) {
+      targetTenantId = req.query.tenantId as string;
+    }
+
+    if (!targetTenantId) {
+      // Find tenant from user membership if not explicitly provided
+      const [mRows]: any = await pool.query('SELECT tenantId FROM tenant_users WHERE userId = ? LIMIT 1', [targetUserId]);
+      if (mRows.length > 0) targetTenantId = mRows[0].tenantId;
+    }
+
+    // Cross-tenant BOLA protection
+    if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && targetTenantId !== actorTenant) {
+      return res.status(403).json({ error: 'Cross-tenant access forbidden.' });
+    }
+
+    // Perform authoritative DB aggregate queries
+    const [custRows]: any = await pool.query('SELECT COUNT(*) as count FROM customers WHERE tenantId = ? AND picId = ?', [targetTenantId, targetUserId]);
+    const [projRows]: any = await pool.query('SELECT COUNT(*) as count FROM projects WHERE tenantId = ? AND picId = ?', [targetTenantId, targetUserId]);
+    const [taskRows]: any = await pool.query('SELECT COUNT(*) as count FROM tasks WHERE tenantId = ? AND picId = ?', [targetTenantId, targetUserId]);
+    const [openTaskRows]: any = await pool.query('SELECT COUNT(*) as count FROM tasks WHERE tenantId = ? AND picId = ? AND (completedAt IS NULL OR statusId != "COMPLETED")', [targetTenantId, targetUserId]);
+    const [visitRows]: any = await pool.query('SELECT COUNT(*) as count FROM visits WHERE tenantId = ? AND picId = ?', [targetTenantId, targetUserId]);
+    const [plannedVisitRows]: any = await pool.query('SELECT COUNT(*) as count FROM visits WHERE tenantId = ? AND picId = ? AND statusId = "PLANNED"', [targetTenantId, targetUserId]);
+    const [followUpRows]: any = await pool.query('SELECT COUNT(*) as count FROM follow_ups WHERE tenantId = ? AND picId = ?', [targetTenantId, targetUserId]);
+    const [pendingFollowUpRows]: any = await pool.query('SELECT COUNT(*) as count FROM follow_ups WHERE tenantId = ? AND picId = ? AND (status = "PENDING" OR status = "SCHEDULED")', [targetTenantId, targetUserId]);
+
+    const impact = {
+      userId: targetUserId,
+      tenantId: targetTenantId,
+      customers: Number(custRows[0]?.count || 0),
+      projects: Number(projRows[0]?.count || 0),
+      tasks: Number(taskRows[0]?.count || 0),
+      openTasks: Number(openTaskRows[0]?.count || 0),
+      visits: Number(visitRows[0]?.count || 0),
+      plannedVisits: Number(plannedVisitRows[0]?.count || 0),
+      followUps: Number(followUpRows[0]?.count || 0),
+      pendingFollowUps: Number(pendingFollowUpRows[0]?.count || 0),
+      totalOwnedRecords: Number(custRows[0]?.count || 0) + Number(projRows[0]?.count || 0) + Number(taskRows[0]?.count || 0) + Number(visitRows[0]?.count || 0) + Number(followUpRows[0]?.count || 0)
+    };
+
+    res.json(impact);
+  } catch (err: any) {
+    console.error('Error fetching ownership impact:', err);
+    res.status(500).json({ error: 'Failed to calculate ownership impact.' });
+  }
+});
+
+/**
+ * POST /api/tenant/users/:sourceUserId/ownership-transfer
+ * Transactionally transfers operational CRM ownership from sourceUserId to targetUserId.
+ * Strictly preserves historical activity records (activities, audit logs, completed actions).
+ */
+app.post('/api/tenant/users/:sourceUserId/ownership-transfer', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const sourceUserId = req.params.sourceUserId;
+  const { targetUserId, resources, options } = req.body;
+
+  if (!actorRole || (!actorTenant && actorRole !== 'SUPER_ADMIN')) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  // Validate request body
+  if (!targetUserId) {
+    return res.status(400).json({ error: 'Target user ID is required.', code: 'MISSING_TARGET_USER' });
+  }
+
+  if (sourceUserId === targetUserId) {
+    return res.status(400).json({ error: 'Source and target user cannot be the same.', code: 'SOURCE_EQUALS_TARGET' });
+  }
+
+  // Capability authorization: Must have MANAGE_TENANT, MANAGE_USERS, or MANAGE_CUSTOMERS (with ORGANIZATION/TEAM scope)
+  const isSuper = actorRole === 'SUPER_ADMIN' || actorPermissions.includes('ALL');
+  const isAdmin = actorPermissions.includes('MANAGE_TENANT') || actorPermissions.includes('MANAGE_USERS');
+  const isSalesManager = actorPermissions.includes('MANAGE_CUSTOMERS') && actorDataScope === 'ORGANIZATION';
+  const isSupervisor = actorPermissions.includes('MANAGE_CUSTOMERS') && actorDataScope === 'TEAM';
+
+  if (!isSuper && !isAdmin && !isSalesManager && !isSupervisor) {
+    return res.status(403).json({ error: 'Forbidden. Insufficient authority for ownership transfer.', code: 'INSUFFICIENT_TRANSFER_AUTHORITY' });
+  }
+
+  const connection = await pool.getConnection();
+  await connection.beginTransaction();
+
+  try {
+    // 1. Resolve & validate tenant context
+    let targetTenantId = actorTenant;
+    if (isSuper && req.body.tenantId) {
+      targetTenantId = req.body.tenantId;
+    }
+
+    if (!targetTenantId || targetTenantId === 'SYSTEM') {
+      const [srcTenantRows]: any = await connection.query('SELECT tenantId FROM tenant_users WHERE userId = ? LIMIT 1', [sourceUserId]);
+      if (srcTenantRows.length > 0) targetTenantId = srcTenantRows[0].tenantId;
+    }
+
+    if (!targetTenantId) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Target tenant context could not be determined.', code: 'MISSING_TENANT_CONTEXT' });
+    }
+
+    // BOLA cross-tenant protection
+    if (!isSuper && actorTenant && actorTenant !== 'SYSTEM' && targetTenantId !== actorTenant) {
+      await connection.rollback();
+      return res.status(403).json({ error: 'Cross-tenant ownership transfer forbidden.', code: 'CROSS_TENANT_FORBIDDEN' });
+    }
+
+    // Lock tenant row for concurrency protection
+    await connection.query('SELECT id FROM tenants WHERE id = ? FOR UPDATE', [targetTenantId]);
+
+    // 2. Validate Source User belongs to this tenant (Source may be ACTIVE or SUSPENDED)
+    const [sourceMembership]: any = await connection.query(
+      'SELECT id, status FROM tenant_users WHERE tenantId = ? AND userId = ?',
+      [targetTenantId, sourceUserId]
+    );
+    if (sourceMembership.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Source user is not a member of this tenant.', code: 'SOURCE_NOT_MEMBER' });
+    }
+
+    // 3. Validate Target User (MUST be ACTIVE identity and ACTIVE membership in this tenant)
+    const targetValidation = await validateAssignableTenantUser(connection, targetTenantId, targetUserId);
+    if (!targetValidation.valid) {
+      await connection.rollback();
+      return res.status(400).json({ error: targetValidation.error, code: targetValidation.code });
+    }
+
+    // 4. If actor is Supervisor (TEAM scope), verify source and target belong to actor's team
+    if (!isSuper && !isAdmin && isSupervisor) {
+      const [teamCheck]: any = await connection.query(`
+        SELECT COUNT(DISTINCT tu.userId) as memberMatch
+        FROM team_members tm1
+        JOIN tenant_users tu_actor ON tu_actor.id = tm1.tenantUserId
+        JOIN team_members tm2 ON tm2.teamId = tm1.teamId
+        JOIN tenant_users tu ON tu.id = tm2.tenantUserId
+        WHERE tu_actor.userId = ? AND tu_actor.tenantId = ?
+          AND tu.userId IN (?, ?) AND tu.tenantId = ?
+      `, [actorUserId, targetTenantId, sourceUserId, targetUserId, targetTenantId]);
+
+      if ((teamCheck[0]?.memberMatch || 0) < 2) {
+        await connection.rollback();
+        return res.status(403).json({
+          error: 'Supervisor can only transfer ownership between active members of their own team.',
+          code: 'SUPERVISOR_TEAM_BOUNDARY_VIOLATION'
+        });
+      }
+    }
+
+    // 5. Determine which resources to transfer (default: ALL operational CRM entities)
+    const transferResources = Array.isArray(resources) && resources.length > 0 
+      ? resources 
+      : ['CUSTOMERS', 'PROJECTS', 'TASKS', 'VISITS', 'FOLLOW_UPS'];
+
+    let customersTransferred = 0;
+    let projectsTransferred = 0;
+    let tasksTransferred = 0;
+    let visitsTransferred = 0;
+    let followUpsTransferred = 0;
+
+    // A. Transfer Customers
+    if (transferResources.includes('CUSTOMERS')) {
+      const [custRes]: any = await connection.query(
+        'UPDATE customers SET picId = ? WHERE tenantId = ? AND picId = ?',
+        [targetUserId, targetTenantId, sourceUserId]
+      );
+      customersTransferred = custRes.affectedRows || 0;
+    }
+
+    // B. Transfer Projects (Active / in-flight projects)
+    if (transferResources.includes('PROJECTS')) {
+      const [projRes]: any = await connection.query(
+        'UPDATE projects SET picId = ? WHERE tenantId = ? AND picId = ?',
+        [targetUserId, targetTenantId, sourceUserId]
+      );
+      projectsTransferred = projRes.affectedRows || 0;
+    }
+
+    // C. Transfer Tasks (Transfer open/all operational tasks)
+    if (transferResources.includes('TASKS')) {
+      let taskQuery = 'UPDATE tasks SET picId = ? WHERE tenantId = ? AND picId = ?';
+      if (options?.onlyOpenTasks) {
+        taskQuery += ' AND (completedAt IS NULL OR statusId != "COMPLETED")';
+      }
+      const [taskRes]: any = await connection.query(taskQuery, [targetUserId, targetTenantId, sourceUserId]);
+      tasksTransferred = taskRes.affectedRows || 0;
+    }
+
+    // D. Transfer Visits (Transfer planned / all operational visits)
+    if (transferResources.includes('VISITS')) {
+      let visitQuery = 'UPDATE visits SET picId = ? WHERE tenantId = ? AND picId = ?';
+      if (options?.onlyPlannedVisits) {
+        visitQuery += ' AND statusId = "PLANNED"';
+      }
+      const [visitRes]: any = await connection.query(visitQuery, [targetUserId, targetTenantId, sourceUserId]);
+      visitsTransferred = visitRes.affectedRows || 0;
+    }
+
+    // E. Transfer Follow-ups
+    if (transferResources.includes('FOLLOW_UPS')) {
+      let followUpQuery = 'UPDATE follow_ups SET picId = ? WHERE tenantId = ? AND picId = ?';
+      if (options?.onlyPendingFollowUps) {
+        followUpQuery += ' AND (status = "PENDING" OR status = "SCHEDULED")';
+      }
+      const [fuRes]: any = await connection.query(followUpQuery, [targetUserId, targetTenantId, sourceUserId]);
+      followUpsTransferred = fuRes.affectedRows || 0;
+    }
+
+    // 6. Write Audit Log (Structured metadata; NEVER mutate historical activities table)
+    await connection.query(
+      'INSERT INTO audit_logs (id, tenantId, userId, action, module, entity, entityId, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        `LOG-${Date.now()}`,
+        targetTenantId,
+        actorUserId,
+        'OWNERSHIP_TRANSFER',
+        'CRM Ownership',
+        'User',
+        sourceUserId,
+        JSON.stringify({
+          sourceUserId,
+          targetUserId,
+          customersTransferred,
+          projectsTransferred,
+          tasksTransferred,
+          visitsTransferred,
+          followUpsTransferred,
+          timestamp: new Date().toISOString()
+        })
+      ]
+    );
+
+    await connection.commit();
+
+    res.json({
+      success: true,
+      tenantId: targetTenantId,
+      sourceUserId,
+      targetUserId,
+      transferred: {
+        customers: customersTransferred,
+        projects: projectsTransferred,
+        tasks: tasksTransferred,
+        visits: visitsTransferred,
+        followUps: followUpsTransferred,
+        total: customersTransferred + projectsTransferred + tasksTransferred + visitsTransferred + followUpsTransferred
+      }
+    });
+  } catch (err: any) {
+    await connection.rollback();
+    console.error('Error during ownership transfer:', err);
+    res.status(500).json({ error: 'Ownership transfer transaction failed.', details: err.message });
   } finally {
     connection.release();
   }
@@ -1383,10 +2243,19 @@ tables.forEach(table => setupEndpoint(table));
       }
     }
 
-    // Data Scope Ceiling: Only Super Admin can assign SYSTEM data scope
-    if (dataScope === 'SYSTEM' && actorRole !== 'SUPER_ADMIN') {
-      return res.status(403).json({ error: 'Forbidden. SYSTEM data scope is restricted to platform roles.' });
-    }
+      // Data Scope Ceiling & Active Scope Validation:
+      // Only Super Admin can assign SYSTEM data scope
+      if (dataScope === 'SYSTEM' && actorRole !== 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Forbidden. SYSTEM data scope is restricted to platform roles.' });
+      }
+
+      // Department scope is currently in HOLD / RESERVED state
+      if (dataScope === 'DEPARTMENT' && actorRole !== 'SUPER_ADMIN') {
+        return res.status(403).json({
+          error: 'Forbidden. DEPARTMENT data scope is currently reserved and inactive in this release.',
+          code: 'DEPARTMENT_SCOPE_NOT_ACTIVE'
+        });
+      }
     
     const connection = await pool.getConnection();
     await connection.beginTransaction();
@@ -1571,6 +2440,421 @@ tables.forEach(table => setupEndpoint(table));
     }
   });
 
+  // ==========================================
+  // --- TEAMS & TEAM MEMBERS API (R38.2) ---
+  // ==========================================
+
+  // GET /api/teams: List teams within tenant
+  app.get('/api/teams', async (req, res) => {
+    const actorRole = (req as any).userRole;
+    const actorTenant = (req as any).userTenantId;
+    const isPlatformUser = (req as any).isPlatformUser;
+
+    if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+    try {
+      let query = `
+        SELECT 
+          t.id, t.tenantId, t.name, t.description, t.leaderId, t.createdAt,
+          u.name as leaderName, u.email as leaderEmail,
+          COUNT(DISTINCT tm.tenantUserId) as memberCount
+        FROM teams t
+        LEFT JOIN tenant_users lu ON lu.id = t.leaderId
+        LEFT JOIN users u ON u.id = lu.userId
+        LEFT JOIN team_members tm ON tm.teamId = t.id
+      `;
+      const params: any[] = [];
+
+      if (actorTenant && actorTenant !== 'SYSTEM') {
+        query += ' WHERE t.tenantId = ? GROUP BY t.id ORDER BY t.name ASC';
+        params.push(actorTenant);
+      } else {
+        const { tenantId } = req.query;
+        if (tenantId && tenantId !== 'ALL' && tenantId !== 'SYSTEM') {
+          query += ' WHERE t.tenantId = ? GROUP BY t.id ORDER BY t.name ASC';
+          params.push(tenantId);
+        } else {
+          query += ' GROUP BY t.id ORDER BY t.name ASC';
+        }
+      }
+
+      const [teams]: any = await pool.query(query, params);
+      res.json(teams);
+    } catch (err: any) {
+      console.error('Error GET /api/teams:', err);
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
+
+  // GET /api/teams/:id: Get team details with active members
+  app.get('/api/teams/:id', async (req, res) => {
+    const teamId = req.params.id;
+    const actorTenant = (req as any).userTenantId;
+    const actorRole = (req as any).userRole;
+    const isPlatformUser = (req as any).isPlatformUser;
+
+    if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+    try {
+      const [teamRows]: any = await pool.query(`
+        SELECT 
+          t.id, t.tenantId, t.name, t.description, t.leaderId, t.createdAt,
+          lu.userId as leaderUserId, u.name as leaderName, u.email as leaderEmail
+        FROM teams t
+        LEFT JOIN tenant_users lu ON lu.id = t.leaderId
+        LEFT JOIN users u ON u.id = lu.userId
+        WHERE t.id = ?
+      `, [teamId]);
+
+      if (teamRows.length === 0) return res.status(404).json({ error: 'Team not found.' });
+
+      const team = teamRows[0];
+      if (team.tenantId !== actorTenant && !isPlatformUser && actorRole !== 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Forbidden. Cross-tenant access denied.' });
+      }
+
+      // Fetch team members
+      const [memberRows]: any = await pool.query(`
+        SELECT 
+          tm.id, tm.teamId, tm.tenantUserId, tm.role as teamRole, tm.joinedAt,
+          tu.tenantId, tu.userId, tu.status as membershipStatus,
+          u.name as userName, u.email as userEmail,
+          r.name as roleName
+        FROM team_members tm
+        JOIN tenant_users tu ON tu.id = tm.tenantUserId
+        JOIN users u ON u.id = tu.userId
+        LEFT JOIN tenant_user_roles tur ON tur.tenantUserId = tu.id
+        LEFT JOIN roles r ON r.id = tur.roleId
+        WHERE tm.teamId = ?
+        ORDER BY u.name ASC
+      `, [teamId]);
+
+      team.members = memberRows;
+      res.json(team);
+    } catch (err: any) {
+      console.error('Error GET /api/teams/:id:', err);
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
+
+  // POST /api/teams: Create a new team
+  app.post('/api/teams', async (req, res) => {
+    const actorRole = (req as any).userRole;
+    const actorTenant = (req as any).userTenantId;
+    const actorPermissions = (req as any).userPermissions || [];
+    const isPlatformUser = (req as any).isPlatformUser;
+
+    if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+    if (!actorPermissions.includes('ALL') && !actorPermissions.includes('MANAGE_TENANT') && !actorPermissions.includes('MANAGE_USERS')) {
+      return res.status(403).json({ error: 'Forbidden. Requires MANAGE_USERS or MANAGE_TENANT capability.' });
+    }
+
+    try {
+      const { name, description, leaderId } = req.body;
+      if (!name || !name.trim()) {
+        return res.status(400).json({ error: 'Team name is required.' });
+      }
+
+      const targetTenant = isPlatformUser ? (req.body.tenantId || actorTenant) : actorTenant;
+      if (!targetTenant) {
+        return res.status(400).json({ error: 'Tenant context is required.' });
+      }
+
+      // Check duplicate team name in tenant
+      const [existing]: any = await pool.query('SELECT id FROM teams WHERE tenantId = ? AND name = ?', [targetTenant, name.trim()]);
+      if (existing.length > 0) {
+        return res.status(400).json({ error: `A team named "${name.trim()}" already exists in this organization.` });
+      }
+
+      // Validate leader if provided (must be ACTIVE tenant_user of same tenant)
+      let validLeaderId = null;
+      if (leaderId) {
+        // leaderId can be tenant_users.id or users.id
+        const [tuRows]: any = await pool.query(
+          'SELECT id, tenantId, status FROM tenant_users WHERE (id = ? OR userId = ?) AND tenantId = ?',
+          [leaderId, leaderId, targetTenant]
+        );
+        if (tuRows.length === 0) {
+          return res.status(400).json({ error: 'Selected team leader does not belong to this organization.' });
+        }
+        if (tuRows[0].status === 'SUSPENDED') {
+          return res.status(400).json({ error: 'Cannot assign a suspended user as team leader.' });
+        }
+        validLeaderId = tuRows[0].id;
+      }
+
+      const teamId = `TEAM-${targetTenant}-${Date.now()}`;
+      await pool.query(
+        'INSERT INTO teams (id, tenantId, name, description, leaderId) VALUES (?, ?, ?, ?, ?)',
+        [teamId, targetTenant, name.trim(), description || '', validLeaderId]
+      );
+
+      // If leader was assigned, ensure leader is also in team_members with unique guard
+      if (validLeaderId) {
+        await pool.query(
+          'INSERT INTO team_members (id, teamId, tenantUserId, role) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE teamId = VALUES(teamId), role = "LEADER"',
+          [`TM-${Date.now()}`, teamId, validLeaderId, 'LEADER']
+        );
+      }
+
+      // Audit Log
+      await pool.query(
+        'INSERT INTO audit_logs (id, tenantId, userId, action, module, entity, entityId, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [`LOG-${Date.now()}`, targetTenant, (req as any).userId, 'CREATE', 'Organization', 'Team', teamId, `Created team "${name.trim()}" (${teamId})`]
+      );
+
+      res.json({ success: true, id: teamId });
+    } catch (err: any) {
+      console.error('Error creating team:', err);
+      res.status(500).json({ error: 'Internal Server Error', message: err.message, details: err.sqlMessage || err });
+    }
+  });
+
+  // PUT /api/teams/:id: Update team name, description, or leader
+  app.put('/api/teams/:id', async (req, res) => {
+    const teamId = req.params.id;
+    const actorRole = (req as any).userRole;
+    const actorTenant = (req as any).userTenantId;
+    const actorPermissions = (req as any).userPermissions || [];
+    const isPlatformUser = (req as any).isPlatformUser;
+
+    if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+    if (!actorPermissions.includes('ALL') && !actorPermissions.includes('MANAGE_TENANT') && !actorPermissions.includes('MANAGE_USERS')) {
+      return res.status(403).json({ error: 'Forbidden. Requires MANAGE_USERS or MANAGE_TENANT capability.' });
+    }
+
+    try {
+      const [teamRows]: any = await pool.query('SELECT * FROM teams WHERE id = ?', [teamId]);
+      if (teamRows.length === 0) return res.status(404).json({ error: 'Team not found.' });
+
+      const team = teamRows[0];
+      if (team.tenantId !== actorTenant && !isPlatformUser && actorRole !== 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Forbidden. Cross-tenant mutation denied.' });
+      }
+
+      const { name, description, leaderId } = req.body;
+      const updates: string[] = [];
+      const params: any[] = [];
+
+      if (name && name.trim()) {
+        // Duplicate name check
+        const [dupRows]: any = await pool.query(
+          'SELECT id FROM teams WHERE tenantId = ? AND name = ? AND id != ?',
+          [team.tenantId, name.trim(), teamId]
+        );
+        if (dupRows.length > 0) {
+          return res.status(400).json({ error: `A team named "${name.trim()}" already exists in this organization.` });
+        }
+        updates.push('name = ?');
+        params.push(name.trim());
+      }
+
+      if (description !== undefined) {
+        updates.push('description = ?');
+        params.push(description);
+      }
+
+      if (leaderId !== undefined) {
+        if (leaderId === null || leaderId === '') {
+          updates.push('leaderId = NULL');
+        } else {
+          const [tuRows]: any = await pool.query(
+            'SELECT id, tenantId, status FROM tenant_users WHERE (id = ? OR userId = ?) AND tenantId = ?',
+            [leaderId, leaderId, team.tenantId]
+          );
+          if (tuRows.length === 0) {
+            return res.status(400).json({ error: 'Selected team leader does not belong to this organization.' });
+          }
+          if (tuRows[0].status === 'SUSPENDED') {
+            return res.status(400).json({ error: 'Cannot assign a suspended user as team leader.' });
+          }
+          updates.push('leaderId = ?');
+          params.push(tuRows[0].id);
+
+          // Update/Insert team_members for leader
+          await pool.query(
+            'INSERT INTO team_members (id, teamId, tenantUserId, role) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE teamId = VALUES(teamId), role = "LEADER"',
+            [`TM-${Date.now()}`, teamId, tuRows[0].id, 'LEADER']
+          );
+        }
+      }
+
+      if (updates.length > 0) {
+        params.push(teamId);
+        await pool.query(`UPDATE teams SET ${updates.join(', ')} WHERE id = ?`, params);
+      }
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Error updating team:', err);
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
+
+  // DELETE /api/teams/:id: Delete team with safety check for active members
+  app.delete('/api/teams/:id', async (req, res) => {
+    const teamId = req.params.id;
+    const actorRole = (req as any).userRole;
+    const actorTenant = (req as any).userTenantId;
+    const actorPermissions = (req as any).userPermissions || [];
+    const isPlatformUser = (req as any).isPlatformUser;
+
+    if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+    if (!actorPermissions.includes('ALL') && !actorPermissions.includes('MANAGE_TENANT') && !actorPermissions.includes('MANAGE_USERS')) {
+      return res.status(403).json({ error: 'Forbidden. Requires MANAGE_USERS or MANAGE_TENANT capability.' });
+    }
+
+    try {
+      const [teamRows]: any = await pool.query('SELECT * FROM teams WHERE id = ?', [teamId]);
+      if (teamRows.length === 0) return res.status(404).json({ error: 'Team not found.' });
+
+      const team = teamRows[0];
+      if (team.tenantId !== actorTenant && !isPlatformUser && actorRole !== 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Forbidden. Cross-tenant mutation denied.' });
+      }
+
+      // Safety check: Cannot delete team with active members
+      const [memberRows]: any = await pool.query('SELECT id FROM team_members WHERE teamId = ?', [teamId]);
+      if (memberRows.length > 0) {
+        return res.status(400).json({
+          error: `Cannot delete team: ${memberRows.length} member(s) are currently assigned. Please reassign or remove members first.`
+        });
+      }
+
+      await pool.query('DELETE FROM teams WHERE id = ?', [teamId]);
+
+      // Audit Log
+      await pool.query(
+        'INSERT INTO audit_logs (id, tenantId, userId, action, module, entity, entityId, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [`LOG-${Date.now()}`, team.tenantId, (req as any).userId, 'DELETE', 'Organization', 'Team', teamId, `Deleted team "${team.name}" (${teamId})`]
+      );
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Error deleting team:', err);
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
+
+  // POST /api/teams/:id/members: Assign a member to a team (1 active team per membership)
+  app.post('/api/teams/:id/members', async (req, res) => {
+    const teamId = req.params.id;
+    const actorRole = (req as any).userRole;
+    const actorTenant = (req as any).userTenantId;
+    const actorPermissions = (req as any).userPermissions || [];
+    const isPlatformUser = (req as any).isPlatformUser;
+
+    if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+    if (!actorPermissions.includes('ALL') && !actorPermissions.includes('MANAGE_TENANT') && !actorPermissions.includes('MANAGE_USERS')) {
+      return res.status(403).json({ error: 'Forbidden. Requires MANAGE_USERS or MANAGE_TENANT capability.' });
+    }
+
+    try {
+      const [teamRows]: any = await pool.query('SELECT * FROM teams WHERE id = ?', [teamId]);
+      if (teamRows.length === 0) return res.status(404).json({ error: 'Team not found.' });
+
+      const team = teamRows[0];
+      if (team.tenantId !== actorTenant && !isPlatformUser && actorRole !== 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Forbidden. Cross-tenant mutation denied.' });
+      }
+
+      const { userId, tenantUserId, role } = req.body;
+      const targetIdentifier = tenantUserId || userId;
+      if (!targetIdentifier) {
+        return res.status(400).json({ error: 'User identifier (userId or tenantUserId) is required.' });
+      }
+
+      // Find tenant_user record
+      const [tuRows]: any = await pool.query(
+        'SELECT id, tenantId, userId, status FROM tenant_users WHERE (id = ? OR userId = ?) AND tenantId = ?',
+        [targetIdentifier, targetIdentifier, team.tenantId]
+      );
+
+      if (tuRows.length === 0) {
+        return res.status(400).json({ error: 'User is not an active member of this organization.' });
+      }
+
+      const targetTu = tuRows[0];
+      if (targetTu.status === 'SUSPENDED') {
+        return res.status(400).json({ error: 'Cannot assign a suspended user to a team.' });
+      }
+
+      // Check and enforce 1 active team per membership invariant
+      const memberRole = role || 'MEMBER';
+      const memberId = `TM-${Date.now()}-${Math.random().toString(36).slice(-4)}`;
+
+      // Upsert: update team assignment if already in another team, or insert new
+      await pool.query(
+        `INSERT INTO team_members (id, teamId, tenantUserId, role, joinedAt)
+         VALUES (?, ?, ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE teamId = VALUES(teamId), role = VALUES(role), joinedAt = NOW()`,
+        [memberId, teamId, targetTu.id, memberRole]
+      );
+
+      // Audit log
+      await pool.query(
+        'INSERT INTO audit_logs (id, tenantId, userId, action, module, entity, entityId, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [`LOG-${Date.now()}`, team.tenantId, (req as any).userId, 'ASSIGN', 'Organization', 'TeamMember', memberId, `Assigned user ${targetTu.userId} to team ${team.name} as ${memberRole}`]
+      );
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Error adding team member:', err);
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
+
+  // DELETE /api/teams/:id/members/:tenantUserId: Remove member from team
+  app.delete('/api/teams/:id/members/:targetId', async (req, res) => {
+    const { id: teamId, targetId } = req.params;
+    const actorRole = (req as any).userRole;
+    const actorTenant = (req as any).userTenantId;
+    const actorPermissions = (req as any).userPermissions || [];
+    const isPlatformUser = (req as any).isPlatformUser;
+
+    if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+    if (!actorPermissions.includes('ALL') && !actorPermissions.includes('MANAGE_TENANT') && !actorPermissions.includes('MANAGE_USERS')) {
+      return res.status(403).json({ error: 'Forbidden. Requires MANAGE_USERS or MANAGE_TENANT capability.' });
+    }
+
+    try {
+      const [teamRows]: any = await pool.query('SELECT * FROM teams WHERE id = ?', [teamId]);
+      if (teamRows.length === 0) return res.status(404).json({ error: 'Team not found.' });
+
+      const team = teamRows[0];
+      if (team.tenantId !== actorTenant && !isPlatformUser && actorRole !== 'SUPER_ADMIN') {
+        return res.status(403).json({ error: 'Forbidden. Cross-tenant mutation denied.' });
+      }
+
+      // Delete member record
+      const [delRes]: any = await pool.query(
+        `DELETE FROM team_members 
+         WHERE teamId = ? AND (tenantUserId = ? OR tenantUserId IN (SELECT id FROM tenant_users WHERE userId = ?))`,
+        [teamId, targetId, targetId]
+      );
+
+      if (delRes.affectedRows === 0) {
+        return res.status(404).json({ error: 'Member not found in this team.' });
+      }
+
+      // If removed member was the leader, clear leaderId
+      if (team.leaderId === targetId) {
+        await pool.query('UPDATE teams SET leaderId = NULL WHERE id = ?', [teamId]);
+      }
+
+      // Audit log
+      await pool.query(
+        'INSERT INTO audit_logs (id, tenantId, userId, action, module, entity, entityId, description) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [`LOG-${Date.now()}`, team.tenantId, (req as any).userId, 'DELETE', 'Organization', 'TeamMember', targetId, `Removed member ${targetId} from team ${team.name}`]
+      );
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Error removing team member:', err);
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
+
 // --- AUTHENTICATION ---
 app.post('/api/auth/login', async (req, res) => {
   try {
@@ -1608,8 +2892,25 @@ app.post('/api/auth/login', async (req, res) => {
     // Resolve authoritative user context (role, tenantId, permissions)
     const userContext = await resolveUserAccessContext(pool, user.id);
 
-    // Check tenant status before session creation for tenant-scoped users
+    // 1. Global Identity Suspension Check
+    if (userContext.userGlobalStatus === 'SUSPENDED') {
+      return res.status(403).json({
+        success: false,
+        message: 'Account identity is globally suspended',
+        code: 'USER_SUSPENDED'
+      });
+    }
+
+    // 2. Tenant & Membership Status Checks for tenant-scoped users
     if (userContext.tenantId && userContext.tenantId !== 'SYSTEM') {
+      if (userContext.tenantUserStatus === 'SUSPENDED') {
+        return res.status(403).json({
+          success: false,
+          message: 'Your membership in this organization is suspended',
+          code: 'MEMBERSHIP_SUSPENDED'
+        });
+      }
+
       const [tenantRows]: any = await pool.query('SELECT status FROM tenants WHERE id = ?', [userContext.tenantId]);
       if (tenantRows.length > 0 && tenantRows[0].status === 'SUSPENDED') {
         return res.status(403).json({

@@ -84,8 +84,8 @@ export const TenantUsersPage: React.FC = () => {
       createdAt: new Date().toISOString().split('T')[0],
     };
 
-    const success = await usersApi.saveUser(newUser);
-    if (success) {
+    const result = await usersApi.saveUser(newUser);
+    if (result.success) {
       await loadUsers(selectedTenantId);
       setShowAddModal(false);
       // Reset
@@ -93,17 +93,78 @@ export const TenantUsersPage: React.FC = () => {
       setLastName('');
       setEmail('');
     } else {
-      alert("Failed to create user account");
+      alert(result.error || "Failed to create user account");
+    }
+  };
+
+  // Ownership Transfer State
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  const [transferSourceUser, setTransferSourceUser] = useState<User | null>(null);
+  const [transferTargetUserId, setTransferTargetUserId] = useState<string>('');
+  const [transferCandidates, setTransferCandidates] = useState<User[]>([]);
+  const [ownershipImpact, setOwnershipImpact] = useState<{
+    customers: number;
+    projects: number;
+    tasks: number;
+    openTasks: number;
+    visits: number;
+    plannedVisits: number;
+    followUps: number;
+    pendingFollowUps: number;
+    totalOwnedRecords: number;
+  } | null>(null);
+  const [isImpactLoading, setIsImpactLoading] = useState(false);
+  const [isTransferring, setIsTransferring] = useState(false);
+  const [transferResult, setTransferResult] = useState<{
+    success: boolean;
+    transferred?: any;
+    error?: string;
+  } | null>(null);
+
+  const openTransferModal = async (user: User) => {
+    setTransferSourceUser(user);
+    setTransferTargetUserId('');
+    setTransferResult(null);
+    setShowTransferModal(true);
+    setIsImpactLoading(true);
+
+    // Fetch impact and assignable candidates in parallel directly from DB APIs
+    const [impact, candidates] = await Promise.all([
+      usersApi.fetchOwnershipImpact(user.id, user.tenantId),
+      usersApi.fetchUsers(user.tenantId, true)
+    ]);
+
+    setOwnershipImpact(impact);
+    // Filter out source user from candidate list
+    setTransferCandidates(candidates.filter(c => c.id !== user.id));
+    setIsImpactLoading(false);
+  };
+
+  const handleExecuteTransfer = async () => {
+    if (!transferSourceUser || !transferTargetUserId) return;
+    setIsTransferring(true);
+    setTransferResult(null);
+
+    const result = await usersApi.transferOwnership(transferSourceUser.id, transferTargetUserId);
+    setIsTransferring(false);
+    setTransferResult(result);
+
+    if (result.success) {
+      // Reload users & refresh impact
+      await loadUsers(selectedTenantId);
+      const updatedImpact = await usersApi.fetchOwnershipImpact(transferSourceUser.id, transferSourceUser.tenantId);
+      setOwnershipImpact(updatedImpact);
     }
   };
 
   const toggleUserStatus = async (u: User) => {
     const newStatus = u.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
-    const success = await usersApi.updateUserStatus(u.id, newStatus);
-    if (success) {
+    const isPlatform = currentUser?.tenantId === 'SYSTEM';
+    const result = await usersApi.updateUserStatus(u.id, newStatus, isPlatform);
+    if (result.success) {
       await loadUsers(selectedTenantId);
     } else {
-      alert("Failed to update user status");
+      alert(result.error || "Failed to update user status");
     }
   };
 
@@ -258,7 +319,15 @@ export const TenantUsersPage: React.FC = () => {
                       {u.lastLoginAt || 'Never'}
                     </td>
 
-                    <td className="px-6 py-4 text-right">
+                    <td className="px-6 py-4 text-right flex items-center justify-end gap-2">
+                      <button
+                        onClick={() => openTransferModal(u)}
+                        title="Transfer CRM Ownership"
+                        className="px-2.5 py-1 rounded text-xs font-semibold border border-[#4744e5]/30 text-[#4744e5] hover:bg-[#4744e5]/10 transition-colors flex items-center gap-1"
+                      >
+                        <span className="material-symbols-outlined text-[14px]">swap_horiz</span>
+                        <span>Transfer</span>
+                      </button>
                       <button
                         onClick={() => toggleUserStatus(u)}
                         className={`px-2.5 py-1 rounded text-xs font-semibold border transition-colors ${
@@ -398,6 +467,172 @@ export const TenantUsersPage: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* OWNERSHIP TRANSFER MODAL */}
+      {showTransferModal && transferSourceUser && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl border border-[#E1E1E1] shadow-xl max-w-lg w-full p-6 space-y-4 font-['Inter',sans-serif]">
+            <div className="flex justify-between items-center border-b border-[#E1E1E1] pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-[#4744e5]/10 text-[#4744e5] rounded-lg flex items-center justify-center">
+                  <span className="material-symbols-outlined text-[20px]">swap_horiz</span>
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">
+                    Transfer Operational CRM Ownership
+                  </h2>
+                  <p className="text-[11px] text-[#767587]">
+                    Reassign customer and pipeline responsibilities from {transferSourceUser.name}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowTransferModal(false)}
+                className="text-[#767587] hover:text-[#1a1c1c] p-1"
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            {/* Impact Preview Section */}
+            <div className="bg-[#f9f9f9] border border-[#E1E1E1] rounded-lg p-4 space-y-3">
+              <div className="text-xs font-bold text-[#1a1c1c] uppercase tracking-wider font-['Hanken_Grotesk'] flex items-center justify-between">
+                <span>Database Ownership Impact Preview</span>
+                {isImpactLoading && <span className="text-[10px] text-[#767587] font-normal">Calculating...</span>}
+              </div>
+
+              {isImpactLoading ? (
+                <div className="text-center py-4 text-xs text-[#767587]">
+                  Querying live database records...
+                </div>
+              ) : ownershipImpact ? (
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="bg-white p-2.5 rounded border border-[#E1E1E1]">
+                    <div className="text-lg font-bold text-[#4744e5] font-['Hanken_Grotesk']">
+                      {ownershipImpact.customers}
+                    </div>
+                    <div className="text-[10px] text-[#767587] font-medium">Customers</div>
+                  </div>
+                  <div className="bg-white p-2.5 rounded border border-[#E1E1E1]">
+                    <div className="text-lg font-bold text-[#4744e5] font-['Hanken_Grotesk']">
+                      {ownershipImpact.projects}
+                    </div>
+                    <div className="text-[10px] text-[#767587] font-medium">Projects</div>
+                  </div>
+                  <div className="bg-white p-2.5 rounded border border-[#E1E1E1]">
+                    <div className="text-lg font-bold text-[#4744e5] font-['Hanken_Grotesk']">
+                      {ownershipImpact.tasks}
+                    </div>
+                    <div className="text-[10px] text-[#767587] font-medium">Tasks</div>
+                  </div>
+                  <div className="bg-white p-2.5 rounded border border-[#E1E1E1]">
+                    <div className="text-lg font-bold text-[#4744e5] font-['Hanken_Grotesk']">
+                      {ownershipImpact.visits}
+                    </div>
+                    <div className="text-[10px] text-[#767587] font-medium">Visits</div>
+                  </div>
+                  <div className="bg-white p-2.5 rounded border border-[#E1E1E1]">
+                    <div className="text-lg font-bold text-[#4744e5] font-['Hanken_Grotesk']">
+                      {ownershipImpact.followUps}
+                    </div>
+                    <div className="text-[10px] text-[#767587] font-medium">Follow-ups</div>
+                  </div>
+                  <div className="bg-white p-2.5 rounded border border-[#4744e5]/30 bg-[#4744e5]/5">
+                    <div className="text-lg font-bold text-[#4744e5] font-['Hanken_Grotesk']">
+                      {ownershipImpact.totalOwnedRecords}
+                    </div>
+                    <div className="text-[10px] text-[#4744e5] font-bold">Total Records</div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-xs text-[#ba1a1a] text-center py-2">
+                  Unable to load database ownership impact.
+                </div>
+              )}
+
+              <p className="text-[11px] text-[#767587] leading-relaxed italic">
+                * Note: Historical activities, audit logs, and completed actions remain permanently attributed to original authors.
+              </p>
+            </div>
+
+            {/* Target Assignee Selector */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-[#1a1c1c]">
+                Select Target Active Assignee (New PIC) *
+              </label>
+              {transferCandidates.length === 0 ? (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
+                  No active users found in this organization available for assignment.
+                </div>
+              ) : (
+                <select
+                  value={transferTargetUserId}
+                  onChange={(e) => setTransferTargetUserId(e.target.value)}
+                  className="w-full px-3 py-2 border border-[#E1E1E1] rounded-lg text-xs bg-white focus:outline-hidden focus:border-[#4744e5]"
+                >
+                  <option value="">-- Select Active Team Member --</option>
+                  {transferCandidates.map((cand) => (
+                    <option key={cand.id} value={cand.id}>
+                      {cand.name} ({cand.roleName || cand.role}) - {cand.email}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            {/* Transfer Result Banner */}
+            {transferResult && (
+              <div className={`p-3 rounded-lg text-xs ${
+                transferResult.success 
+                  ? 'bg-emerald-50 border border-emerald-200 text-emerald-800' 
+                  : 'bg-rose-50 border border-rose-200 text-rose-800'
+              }`}>
+                {transferResult.success ? (
+                  <div>
+                    <div className="font-bold">Ownership Transfer Completed Successfully!</div>
+                    <div className="text-[11px] mt-1">
+                      Transferred {transferResult.transferred?.total || 0} total records ({transferResult.transferred?.customers} customers, {transferResult.transferred?.projects} projects, {transferResult.transferred?.tasks} tasks, {transferResult.transferred?.visits} visits, {transferResult.transferred?.followUps} follow-ups).
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="font-bold">Transfer Failed</div>
+                    <div className="text-[11px] mt-0.5">{transferResult.error}</div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex justify-end gap-2 pt-3 border-t border-[#E1E1E1]">
+              <button
+                type="button"
+                onClick={() => setShowTransferModal(false)}
+                className="px-4 py-2 border border-[#E1E1E1] text-[#1a1c1c] rounded-lg text-xs font-semibold hover:bg-[#f9f9f9]"
+              >
+                {transferResult?.success ? 'Close' : 'Cancel'}
+              </button>
+              {!transferResult?.success && (
+                <button
+                  type="button"
+                  disabled={!transferTargetUserId || isTransferring || isImpactLoading}
+                  onClick={handleExecuteTransfer}
+                  className="px-4 py-2 bg-[#4744e5] hover:bg-[#2c24ce] disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5"
+                >
+                  {isTransferring ? (
+                    <span>Transferring...</span>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined text-[16px]">swap_horiz</span>
+                      <span>Confirm & Transfer Ownership</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}

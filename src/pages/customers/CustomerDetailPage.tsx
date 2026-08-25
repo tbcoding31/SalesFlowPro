@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { DataService } from '../../services/dataService';
+import { usersApi } from '../../services/usersApi';
 import { Customer, Visit, Task, FollowUp, Project, Activity, User, TaskPriority, TaskStatus, FollowUpType, FollowUpPriority, FollowUpStatus, ProjectStage } from '../../types';
 
 export interface ActivityTimelineItem {
@@ -382,7 +383,12 @@ export const CustomerDetailPage: React.FC = () => {
   const followups: FollowUp[] = followupsList;
   const projects: Project[] = oppsList;
   const activities: Activity[] = DataService.getActivities(tenantId, customer.id);
-  const tenantUsers: User[] = DataService.getUsers(tenantId);
+  const [tenantUsers, setTenantUsers] = useState<User[]>(() => DataService.getUsers(tenantId));
+  useEffect(() => {
+    usersApi.fetchUsers(tenantId).then(users => {
+      if (users && users.length > 0) setTenantUsers(users);
+    });
+  }, [tenantId]);
 
   // Compute Unified Customer Activity Timeline
   const rawActivities: ActivityTimelineItem[] = [];

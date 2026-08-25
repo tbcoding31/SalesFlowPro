@@ -4,13 +4,14 @@ import { useAuth } from '../../context/AuthContext';
 import { DataService } from '../../services/dataService';
 import { masterDataApi } from '../../services/masterDataApi';
 import { Customer, CustomerType, CustomerStatus, User, MasterDataItem } from '../../types';
+import { usersApi } from '../../services/usersApi';
 
 export const CreateCustomerPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant, currentUser } = useAuth();
   const tenantId = currentTenant?.id || 'TEN-00001';
 
-  const tenantUsers: User[] = DataService.getUsers(tenantId);
+  const [tenantUsers, setTenantUsers] = useState<User[]>([]);
   const tasks = DataService.getTasks(tenantId);
 
   // Form Fields
@@ -22,6 +23,13 @@ export const CreateCustomerPage: React.FC = () => {
   const [masterStatuses, setMasterStatuses] = React.useState<MasterDataItem[]>([]);
 
   React.useEffect(() => {
+    usersApi.fetchUsers(tenantId, true).then(users => {
+      setTenantUsers(users);
+      if (users.length > 0) {
+        setAssignedPicId(prev => prev || users[0].id);
+      }
+    });
+
     masterDataApi.fetchMasterData('customer_types', tenantId).then(data => {
       setMasterTypes(data);
       const def = data.find(d => d.isDefault);
@@ -46,7 +54,7 @@ export const CreateCustomerPage: React.FC = () => {
   const [city, setCity] = useState('');
   const [postalCode, setPostalCode] = useState('');
 
-  const [assignedPicId, setAssignedPicId] = useState<string>(currentUser?.id || tenantUsers[0]?.id || 'USR-001');
+  const [assignedPicId, setAssignedPicId] = useState<string>(currentUser?.id || '');
   const [customerSource, setCustomerSource] = useState<string>('');
   const [notes, setNotes] = useState('');
 

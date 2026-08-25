@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { DataService } from '../../services/dataService';
 import { masterDataApi } from '../../services/masterDataApi';
 import { Customer, CustomerType, CustomerStatus, User, MasterDataItem } from '../../types';
+import { usersApi } from '../../services/usersApi';
 
 export const EditCustomerPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -11,7 +12,7 @@ export const EditCustomerPage: React.FC = () => {
   const { currentTenant, currentUser } = useAuth();
   const tenantId = currentTenant?.id || 'TEN-00001';
 
-  const tenantUsers: User[] = DataService.getUsers(tenantId);
+  const [tenantUsers, setTenantUsers] = useState<User[]>([]);
   const tasks = DataService.getTasks(tenantId);
 
   const [customer, setCustomer] = useState<Customer | undefined>(() => {
@@ -27,6 +28,7 @@ export const EditCustomerPage: React.FC = () => {
   const [masterStatuses, setMasterStatuses] = useState<MasterDataItem[]>([]);
 
   useEffect(() => {
+    usersApi.fetchUsers(tenantId).then(setTenantUsers);
     masterDataApi.fetchMasterData('customer_types', tenantId).then(setMasterTypes);
     masterDataApi.fetchMasterData('customer_statuses', tenantId).then(setMasterStatuses);
   }, [tenantId]);
