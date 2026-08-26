@@ -13,6 +13,7 @@ export const ProjectDetailPage: React.FC = () => {
 
   const [project, setProject] = useState<Project | null>(null);
   const [customer, setCustomer] = useState<Customer | null>(null);
+  const [nextAction, setNextAction] = useState<any | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [visits, setVisits] = useState<Visit[]>([]);
   const [followups, setFollowups] = useState<FollowUp[]>([]);
@@ -31,16 +32,22 @@ export const ProjectDetailPage: React.FC = () => {
           const cust = await crmApi.fetchRecordById<Customer>('customers', proj.customerId);
           if (cust) setCustomer(cust);
         }
-        const [allTasks, allVisits, allFollowups, allActivities] = await Promise.all([
+        const [allTasks, allVisits, allFollowups, allActivities, naRes] = await Promise.all([
           crmApi.fetchCollection<Task>('tasks', tenantId),
           crmApi.fetchCollection<Visit>('visits', tenantId),
           crmApi.fetchCollection<FollowUp>('follow_ups', tenantId),
-          crmApi.fetchCollection<Activity>('activities', tenantId)
+          crmApi.fetchCollection<Activity>('activities', tenantId),
+          crmApi.fetchProjectNextAction(id)
         ]);
         setTasks(allTasks.filter(t => (t as any).relatedProjectId === id).slice(0, 5));
         setVisits(allVisits.filter(v => (v as any).relatedProjectId === id).slice(0, 5));
         setFollowups(allFollowups.filter(f => (f as any).relatedProjectId === id).slice(0, 5));
         setActivities(allActivities.filter(a => (a.entityType === 'PROJECT' && a.entityId === id) || (a.metadata && a.metadata.projectId === id)).slice(0, 15));
+        if (naRes && naRes.nextAction) {
+          setNextAction(naRes.nextAction);
+        } else {
+          setNextAction(null);
+        }
       }
     } catch (err) {
       console.error('Error loading project details from DB:', err);
@@ -174,6 +181,30 @@ export const ProjectDetailPage: React.FC = () => {
                 {new Date(project.expectedCloseDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
               </div>
             </div>
+          </div>
+
+          {/* Database-backed Next Action Banner */}
+          <div className="mt-5 p-3.5 bg-indigo-50/70 border border-indigo-100 rounded-xl flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold text-xs shrink-0">
+                <span className="material-symbols-outlined text-sm">
+                  {nextAction?.type === 'VISIT' ? 'route' : nextAction?.type === 'FOLLOW_UP' ? 'forum' : 'task'}
+                </span>
+              </div>
+              <div>
+                <span className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider block">
+                  Next Action ({nextAction ? nextAction.type : 'None Scheduled'})
+                </span>
+                <span className="text-xs font-bold text-slate-800 block">
+                  {nextAction ? nextAction.title : 'No pending task, visit, or follow-up.'}
+                </span>
+              </div>
+            </div>
+            {nextAction && (
+              <span className="text-[11px] font-semibold text-indigo-700 bg-white px-2.5 py-1 rounded-md border border-indigo-200 shrink-0 font-mono">
+                {nextAction.actionAt}
+              </span>
+            )}
           </div>
         </div>
 

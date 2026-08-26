@@ -2569,6 +2569,413 @@ app.patch('/api/projects/:id/stage', async (req, res) => {
   }
 });
 
+// ==========================================
+// R40.3 SALES REPRESENTATIVE DAILY AGENDA & NEXT-ACTION WORKFLOW
+// ==========================================
+
+app.get(['/api/sales/agenda', '/api/agenda'], async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+
+  try {
+    const todayStr = (req.query.date as string) || new Date().toISOString().split('T')[0];
+    const upcomingDays = parseInt((req.query.upcomingDays as string) || '7', 10);
+    const upcomingEnd = new Date(Date.parse(todayStr) + (upcomingDays * 86400000)).toISOString().split('T')[0];
+
+    const { where: taskWhere, params: taskParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 't.picId');
+    const { where: visitWhere, params: visitParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'v.picId');
+    const { where: fuWhere, params: fuParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'f.picId');
+
+    // 1. Fetch Authorized Tasks
+    const [taskRows]: any = await pool.query(`
+      SELECT 
+        t.id, t.title, t.description, t.customerId, t.relatedProjectId, t.relatedVisitId,
+        t.priorityId as priority, t.statusId as status, t.dueDate, t.picId, t.completedAt,
+        c.name as customerName, c.code as customerCode,
+        p.title as projectName, p.stageId as projectStage,
+        u.name as picName, u.avatar as picAvatar
+      FROM tasks t
+      LEFT JOIN customers c ON c.id = t.customerId
+      LEFT JOIN projects p ON p.id = t.relatedProjectId
+      LEFT JOIN users u ON u.id = t.picId
+      ${taskWhere.replace(/WHERE tenantId/g, 'WHERE t.tenantId')}
+    `, taskParams);
+
+    // 2. Fetch Authorized Visits
+    const [visitRows]: any = await pool.query(`
+      SELECT 
+        v.id, v.title, v.customerId, v.relatedProjectId, v.purposeId as purpose,
+        v.statusId as status, v.visitDate, v.startTime, v.endTime, v.location,
+        v.result, v.nextAction, v.picId,
+        c.name as customerName, c.code as customerCode,
+        p.title as projectName, p.stageId as projectStage,
+        u.name as picName, u.avatar as picAvatar
+      FROM visits v
+      LEFT JOIN customers c ON c.id = v.customerId
+      LEFT JOIN projects p ON p.id = v.relatedProjectId
+      LEFT JOIN users u ON u.id = v.picId
+      ${visitWhere.replace(/WHERE tenantId/g, 'WHERE v.tenantId')}
+    `, visitParams);
+
+    // 3. Fetch Authorized Follow-ups
+    const [fuRows]: any = await pool.query(`
+      SELECT 
+        f.id, f.title, f.customerId, f.typeId, f.relatedVisitId, f.relatedProjectId,
+        f.picId, f.followUpDate, f.priorityId as priority, f.notes, f.outcome,
+        f.status, f.completedAt,
+        c.name as customerName, c.code as customerCode,
+        p.title as projectName, p.stageId as projectStage,
+        u.name as picName, u.avatar as picAvatar
+      FROM follow_ups f
+      LEFT JOIN customers c ON c.id = f.customerId
+      LEFT JOIN projects p ON p.id = f.relatedProjectId
+      LEFT JOIN users u ON u.id = f.picId
+      ${fuWhere.replace(/WHERE tenantId/g, 'WHERE f.tenantId')}
+    `, fuParams);
+
+    // Helper to format Date or Date-string reliably to 'YYYY-MM-DD'
+    const toLocalDateStr = (val: any) => {
+      if (!val) return null;
+      if (typeof val === 'string') {
+        return val.slice(0, 10);
+      }
+      if (val instanceof Date) {
+        const year = val.getFullYear();
+        const month = String(val.getMonth() + 1).padStart(2, '0');
+        const day = String(val.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      }
+      return String(val).slice(0, 10);
+    };
+
+    // 4. Normalized Aggregation
+    const overdue: any[] = [];
+    const today: any[] = [];
+    const upcoming: any[] = [];
+    const completedToday: any[] = [];
+
+    // Process Tasks
+    taskRows.forEach((t: any) => {
+      const isCompleted = t.status === 'COMPLETED' || t.status === 'CANCELLED';
+      const actionDate = toLocalDateStr(t.dueDate);
+      const completedDate = toLocalDateStr(t.completedAt);
+
+      const item = {
+        id: t.id,
+        type: 'TASK',
+        title: t.title,
+        description: t.description,
+        customerId: t.customerId,
+        customerName: t.customerName,
+        customerCode: t.customerCode,
+        projectId: t.relatedProjectId,
+        projectName: t.projectName,
+        projectStage: t.projectStage,
+        actionAt: actionDate,
+        priority: t.priority || 'MEDIUM',
+        status: t.status,
+        picId: t.picId,
+        picName: t.picName,
+        sourceEntity: 'tasks',
+        sourceId: t.id
+      };
+
+      if (isCompleted) {
+        if (completedDate === todayStr || actionDate === todayStr) {
+          completedToday.push(item);
+        }
+      } else if (actionDate) {
+        if (actionDate < todayStr) {
+          overdue.push(item);
+        } else if (actionDate === todayStr) {
+          today.push(item);
+        } else if (actionDate > todayStr && actionDate <= upcomingEnd) {
+          upcoming.push(item);
+        }
+      }
+    });
+
+    // Process Visits
+    visitRows.forEach((v: any) => {
+      const isCompleted = v.status === 'COMPLETED' || v.status === 'CANCELLED';
+      const actionDate = toLocalDateStr(v.visitDate);
+
+      const item = {
+        id: v.id,
+        type: 'VISIT',
+        title: v.title,
+        description: `${v.purpose ? 'Purpose: ' + v.purpose : ''}${v.location ? ' | Location: ' + v.location : ''}`,
+        customerId: v.customerId,
+        customerName: v.customerName,
+        customerCode: v.customerCode,
+        projectId: v.relatedProjectId,
+        projectName: v.projectName,
+        projectStage: v.projectStage,
+        actionAt: actionDate,
+        startTime: v.startTime,
+        endTime: v.endTime,
+        priority: null,
+        status: v.status,
+        result: v.result,
+        nextAction: v.nextAction,
+        picId: v.picId,
+        picName: v.picName,
+        sourceEntity: 'visits',
+        sourceId: v.id
+      };
+
+      if (isCompleted) {
+        if (actionDate === todayStr) {
+          completedToday.push(item);
+        }
+      } else if (actionDate) {
+        if (actionDate < todayStr) {
+          overdue.push(item);
+        } else if (actionDate === todayStr) {
+          today.push(item);
+        } else if (actionDate > todayStr && actionDate <= upcomingEnd) {
+          upcoming.push(item);
+        }
+      }
+    });
+
+    // Process Follow-ups
+    fuRows.forEach((f: any) => {
+      const isCompleted = f.status === 'COMPLETED' || f.status === 'CANCELLED';
+      const actionDate = toLocalDateStr(f.followUpDate);
+      const completedDate = toLocalDateStr(f.completedAt);
+
+      const item = {
+        id: f.id,
+        type: 'FOLLOW_UP',
+        title: f.title,
+        description: f.notes || f.outcome || '',
+        customerId: f.customerId,
+        customerName: f.customerName,
+        customerCode: f.customerCode,
+        projectId: f.relatedProjectId,
+        projectName: f.projectName,
+        projectStage: f.projectStage,
+        actionAt: actionDate,
+        priority: f.priority || 'NORMAL',
+        status: f.status,
+        outcome: f.outcome,
+        picId: f.picId,
+        picName: f.picName,
+        sourceEntity: 'follow_ups',
+        sourceId: f.id
+      };
+
+      if (isCompleted) {
+        if (completedDate === todayStr || actionDate === todayStr) {
+          completedToday.push(item);
+        }
+      } else if (actionDate) {
+        if (actionDate < todayStr) {
+          overdue.push(item);
+        } else if (actionDate === todayStr) {
+          today.push(item);
+        } else if (actionDate > todayStr && actionDate <= upcomingEnd) {
+          upcoming.push(item);
+        }
+      }
+    });
+
+    // Tie-break sorting:
+    // 1. actionAt ASC (earliest first)
+    // 2. priority (HIGH -> URGENT -> NORMAL -> LOW -> null)
+    // 3. type (VISIT -> FOLLOW_UP -> TASK)
+    const priorityWeight: Record<string, number> = { 'URGENT': 1, 'HIGH': 2, 'NORMAL': 3, 'MEDIUM': 3, 'LOW': 4 };
+    const typeWeight: Record<string, number> = { 'VISIT': 1, 'FOLLOW_UP': 2, 'TASK': 3 };
+
+    const sortAgenda = (a: any, b: any) => {
+      const dateA = a.actionAt || '9999-99-99';
+      const dateB = b.actionAt || '9999-99-99';
+      if (dateA !== dateB) return dateA.localeCompare(dateB);
+
+      const pA = priorityWeight[a.priority] || 5;
+      const pB = priorityWeight[b.priority] || 5;
+      if (pA !== pB) return pA - pB;
+
+      const tA = typeWeight[a.type] || 5;
+      const tB = typeWeight[b.type] || 5;
+      return tA - tB;
+    };
+
+    overdue.sort(sortAgenda);
+    today.sort(sortAgenda);
+    upcoming.sort(sortAgenda);
+    completedToday.sort((a, b) => (b.actionAt || '').localeCompare(a.actionAt || ''));
+
+    // 5. Compute Needs Attention / Stalled Projects (Open projects with 0 pending actions)
+    const { where: projWhere, params: projParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'p.picId');
+    const [openProjects]: any = await pool.query(`
+      SELECT p.id, p.title, p.stageId, p.value, p.customerId, c.name as customerName, u.name as picName
+      FROM projects p
+      LEFT JOIN customers c ON c.id = p.customerId
+      LEFT JOIN users u ON u.id = p.picId
+      ${projWhere.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
+      AND p.stageId NOT IN ('WON', 'LOST')
+    `, projParams);
+
+    const pendingProjectIds = new Set([
+      ...overdue.filter(i => i.projectId).map(i => i.projectId),
+      ...today.filter(i => i.projectId).map(i => i.projectId),
+      ...upcoming.filter(i => i.projectId).map(i => i.projectId)
+    ]);
+
+    const stalledProjects = openProjects.filter((p: any) => !pendingProjectIds.has(p.id)).map((p: any) => ({
+      id: p.id,
+      title: p.title,
+      stage: p.stageId,
+      value: parseFloat(p.value || 0),
+      customerId: p.customerId,
+      customerName: p.customerName,
+      picName: p.picName,
+      reason: 'No scheduled Task, Visit, or Follow-up'
+    }));
+
+    res.json({
+      date: todayStr,
+      metrics: {
+        overdueCount: overdue.length,
+        todayCount: today.length,
+        upcomingCount: upcoming.length,
+        completedTodayCount: completedToday.length,
+        stalledProjectsCount: stalledProjects.length
+      },
+      overdue,
+      today,
+      upcoming,
+      completedToday,
+      stalledProjects
+    });
+  } catch (err: any) {
+    console.error('Error GET /api/sales/agenda:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
+// GET /api/customers/:id/next-action
+app.get('/api/customers/:id/next-action', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const customerId = req.params.id;
+  try {
+    const [custRows]: any = await pool.query('SELECT id, tenantId, name FROM customers WHERE id = ?', [customerId]);
+    if (custRows.length === 0) return res.status(404).json({ error: 'Customer not found' });
+    if (actorTenant && actorTenant !== 'SYSTEM' && custRows[0].tenantId !== actorTenant) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    const toLocalDateStr = (val: any) => {
+      if (!val) return null;
+      if (typeof val === 'string') return val.slice(0, 10);
+      if (val instanceof Date) {
+        const year = val.getFullYear();
+        const month = String(val.getMonth() + 1).padStart(2, '0');
+        const day = String(val.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      }
+      return String(val).slice(0, 10);
+    };
+
+    const [tasks]: any = await pool.query(
+      'SELECT id, title, dueDate as actionDate, priorityId as priority, statusId as status FROM tasks WHERE customerId = ? AND statusId NOT IN ("COMPLETED", "CANCELLED") ORDER BY dueDate ASC LIMIT 5',
+      [customerId]
+    );
+    const [visits]: any = await pool.query(
+      'SELECT id, title, visitDate as actionDate, startTime, purposeId as purpose, statusId as status FROM visits WHERE customerId = ? AND statusId NOT IN ("COMPLETED", "CANCELLED") ORDER BY visitDate ASC LIMIT 5',
+      [customerId]
+    );
+    const [followups]: any = await pool.query(
+      'SELECT id, title, followUpDate as actionDate, priorityId as priority, status FROM follow_ups WHERE customerId = ? AND status NOT IN ("COMPLETED", "CANCELLED") ORDER BY followUpDate ASC LIMIT 5',
+      [customerId]
+    );
+
+    const candidates: any[] = [
+      ...tasks.map((t: any) => ({ ...t, type: 'TASK', actionAt: toLocalDateStr(t.actionDate) })),
+      ...visits.map((v: any) => ({ ...v, type: 'VISIT', actionAt: toLocalDateStr(v.actionDate) })),
+      ...followups.map((f: any) => ({ ...f, type: 'FOLLOW_UP', actionAt: toLocalDateStr(f.actionDate) }))
+    ].filter(i => i.actionAt);
+
+    candidates.sort((a, b) => (a.actionAt || '').localeCompare(b.actionAt || ''));
+
+    const nextAction = candidates.length > 0 ? candidates[0] : null;
+    res.json({ customerId, nextAction, totalPending: candidates.length });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
+// GET /api/projects/:id/next-action
+app.get('/api/projects/:id/next-action', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const projectId = req.params.id;
+  try {
+    const [projRows]: any = await pool.query('SELECT id, tenantId, title FROM projects WHERE id = ?', [projectId]);
+    if (projRows.length === 0) return res.status(404).json({ error: 'Project not found' });
+    if (actorTenant && actorTenant !== 'SYSTEM' && projRows[0].tenantId !== actorTenant) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const toLocalDateStr = (val: any) => {
+      if (!val) return null;
+      if (typeof val === 'string') return val.slice(0, 10);
+      if (val instanceof Date) {
+        const year = val.getFullYear();
+        const month = String(val.getMonth() + 1).padStart(2, '0');
+        const day = String(val.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+      }
+      return String(val).slice(0, 10);
+    };
+
+    const [tasks]: any = await pool.query(
+      'SELECT id, title, dueDate as actionDate, priorityId as priority, statusId as status FROM tasks WHERE relatedProjectId = ? AND statusId NOT IN ("COMPLETED", "CANCELLED") ORDER BY dueDate ASC LIMIT 5',
+      [projectId]
+    );
+    const [visits]: any = await pool.query(
+      'SELECT id, title, visitDate as actionDate, startTime, purposeId as purpose, statusId as status FROM visits WHERE relatedProjectId = ? AND statusId NOT IN ("COMPLETED", "CANCELLED") ORDER BY visitDate ASC LIMIT 5',
+      [projectId]
+    );
+    const [followups]: any = await pool.query(
+      'SELECT id, title, followUpDate as actionDate, priorityId as priority, status FROM follow_ups WHERE relatedProjectId = ? AND status NOT IN ("COMPLETED", "CANCELLED") ORDER BY followUpDate ASC LIMIT 5',
+      [projectId]
+    );
+
+    const candidates: any[] = [
+      ...tasks.map((t: any) => ({ ...t, type: 'TASK', actionAt: toLocalDateStr(t.actionDate) })),
+      ...visits.map((v: any) => ({ ...v, type: 'VISIT', actionAt: toLocalDateStr(v.actionDate) })),
+      ...followups.map((f: any) => ({ ...f, type: 'FOLLOW_UP', actionAt: toLocalDateStr(f.actionDate) }))
+    ].filter(i => i.actionAt);
+
+    candidates.sort((a, b) => (a.actionAt || '').localeCompare(b.actionAt || ''));
+
+    const nextAction = candidates.length > 0 ? candidates[0] : null;
+    res.json({ projectId, nextAction, totalPending: candidates.length });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
 // Alias for PUT /api/projects/:id/stage
 app.put('/api/projects/:id/stage', async (req, res) => {
   req.url = `/api/projects/${req.params.id}/stage`;

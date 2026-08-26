@@ -163,9 +163,8 @@ export const CustomerDetailPage: React.FC = () => {
   const { currentTenant, currentUser, hasPermission } = useAuth();
   const tenantId = currentTenant?.id || 'TEN-00001';
 
-  const [customer, setCustomer] = useState<Customer | undefined>(
-    DataService.getCustomerById(id || 'CUS-001')
-  );
+  const [customer, setCustomer] = useState<Customer | undefined>(undefined);
+  const [customerNextAction, setCustomerNextAction] = useState<any | null>(null);
 
   const [activeTab, setActiveTab] = useState<'overview' | 'visits' | 'tasks' | 'followups' | 'projects' | 'activities'>('overview');
 
@@ -267,12 +266,7 @@ export const CustomerDetailPage: React.FC = () => {
   const [reassignSearch, setReassignSearch] = useState('');
 
   // Follow-Up List State & Filters
-  const [followupsList, setFollowupsList] = useState<FollowUp[]>(() => DataService.getFollowUps(tenantId, customer ? customer.id : undefined));
-  const refreshFollowups = () => {
-    if (customer) {
-      setFollowupsList(DataService.getFollowUps(tenantId, customer.id));
-    }
-  };
+  const [followupsList, setFollowupsList] = useState<FollowUp[]>([]);
 
   const [followUpSearch, setFollowUpSearch] = useState('');
   const [followUpStatusFilter, setFollowUpStatusFilter] = useState('ALL');
@@ -364,7 +358,6 @@ export const CustomerDetailPage: React.FC = () => {
 
   const [visitsList, setVisitsList] = useState<Visit[]>([]);
   const [tasksList, setTasksList] = useState<Task[]>([]);
-  const [followupsList, setFollowupsList] = useState<FollowUp[]>([]);
   const [oppsList, setOppsList] = useState<Project[]>([]);
   const [activitiesList, setActivitiesList] = useState<Activity[]>([]);
   const [tenantUsers, setTenantUsers] = useState<User[]>([]);
@@ -372,14 +365,15 @@ export const CustomerDetailPage: React.FC = () => {
   const loadAllCustomerData = async () => {
     if (!id) return;
     try {
-      const [custData, vList, tList, fList, pList, aList, uList] = await Promise.all([
+      const [custData, vList, tList, fList, pList, aList, uList, naRes] = await Promise.all([
         crmApi.fetchRecordById<Customer>('customers', id),
         crmApi.fetchCollection<Visit>('visits', tenantId),
         crmApi.fetchCollection<Task>('tasks', tenantId),
         crmApi.fetchCollection<FollowUp>('follow_ups', tenantId),
         crmApi.fetchCollection<Project>('projects', tenantId),
         crmApi.fetchCollection<Activity>('activities', tenantId),
-        usersApi.fetchUsers(tenantId)
+        usersApi.fetchUsers(tenantId),
+        crmApi.fetchCustomerNextAction(id)
       ]);
 
       if (custData) {
@@ -401,6 +395,11 @@ export const CustomerDetailPage: React.FC = () => {
       setOppsList(pList.filter((p: any) => p.customerId === id));
       setActivitiesList(aList.filter((a: any) => a.customerId === id || a.entityId === id));
       setTenantUsers(uList || []);
+      if (naRes && naRes.nextAction) {
+        setCustomerNextAction(naRes.nextAction);
+      } else {
+        setCustomerNextAction(null);
+      }
     } catch (err) {
       console.error('Error loading customer detail data:', err);
     }
@@ -1724,9 +1723,9 @@ export const CustomerDetailPage: React.FC = () => {
 
 
 
-  const handleAddNote = (e: React.FormEvent) => {
+  const handleAddNote = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newNoteText.trim()) return;
+    if (!newNoteText.trim() || !customer) return;
 
     const existingNotes = customer.notes ? `${customer.notes}\n---\n${newNoteText}` : newNoteText;
     const updated: Customer = {
@@ -2068,6 +2067,41 @@ export const CustomerDetailPage: React.FC = () => {
                 </a>
               </div>
             </div>
+          </div>
+
+          {/* SECTION 3.5 — DATABASE-AUTHORITATIVE NEXT ACTION */}
+          <div className="p-4 bg-indigo-50/80 border border-indigo-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold shrink-0">
+                <span className="material-symbols-outlined text-lg">
+                  {customerNextAction?.type === 'VISIT' ? 'route' : customerNextAction?.type === 'FOLLOW_UP' ? 'forum' : 'task'}
+                </span>
+              </div>
+              <div>
+                <span className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider block">
+                  Next Scheduled Action ({customerNextAction ? customerNextAction.type : 'None'})
+                </span>
+                <span className="text-sm font-bold text-slate-900 block">
+                  {customerNextAction ? customerNextAction.title : 'No pending operational work scheduled.'}
+                </span>
+              </div>
+            </div>
+            {customerNextAction ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-indigo-800 bg-white px-3 py-1.5 rounded-lg border border-indigo-200 font-mono">
+                  {customerNextAction.actionAt}
+                </span>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setShowVisitModal(true)}
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg transition-colors"
+                >
+                  Schedule Action
+                </button>
+              </div>
+            )}
           </div>
 
           {/* SECTION 4 & 5 — RECENT ACTIVITIES & UPCOMING ACTIVITIES */}

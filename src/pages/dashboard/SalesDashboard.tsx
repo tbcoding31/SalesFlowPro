@@ -9,9 +9,8 @@ export const SalesDashboard: React.FC = () => {
   const { currentUser, currentTenant } = useAuth();
   const tenantId = currentTenant?.id || 'TEN-00001';
 
+  const [agenda, setAgenda] = useState<any | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [visits, setVisits] = useState<Visit[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -19,16 +18,14 @@ export const SalesDashboard: React.FC = () => {
   const loadData = async () => {
     setIsLoading(true);
     try {
-      const [cList, vList, tList, pList, aList] = await Promise.all([
+      const [agendaData, cList, pList, aList] = await Promise.all([
+        crmApi.fetchSalesAgenda(),
         crmApi.fetchCollection<Customer>('customers', tenantId),
-        crmApi.fetchCollection<Visit>('visits', tenantId),
-        crmApi.fetchCollection<Task>('tasks', tenantId),
         crmApi.fetchCollection<Project>('projects', tenantId),
         crmApi.fetchCollection<Activity>('activities', tenantId)
       ]);
+      setAgenda(agendaData);
       setCustomers(cList);
-      setVisits(vList);
-      setTasks(tList);
       setProjects(pList);
       setActivities(aList);
     } catch (err) {
@@ -45,44 +42,46 @@ export const SalesDashboard: React.FC = () => {
   const { hasPermission } = useAuth();
   const isSalesRep = !hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS');
 
-  // Metrics
+  // Authoritative Agenda Lists
+  const overdueItems = agenda?.overdue || [];
+  const todayItems = agenda?.today || [];
+  const upcomingItems = agenda?.upcoming || [];
+  const completedTodayItems = agenda?.completedToday || [];
+  const stalledProjects = agenda?.stalledProjects || [];
+
   const myCustomers = isSalesRep
     ? customers.filter((c) => (c.picId || c.assignedPicId) === currentUser?.id)
     : customers;
-
-  const todayIso = new Date().toISOString().split('T')[0];
-  const plannedVisitsToday = visits.filter(
-    (v) => (v.visitDate === todayIso || v.visitDate === '2026-08-12')
-  );
-
-  const pendingTasks = tasks.filter((t) => t.status !== 'COMPLETED' && (t as any).statusId !== 'COMPLETED');
 
   const totalPipelineValue = projects
     .filter((o) => (o as any).stageId !== 'LOST' && o.stage !== 'LOST')
     .reduce((acc, o) => acc + (Number((o as any).value) || Number(o.estimatedValue) || 0), 0);
 
-  const toggleTaskComplete = async (taskId: string) => {
-    const task = tasks.find((t) => t.id === taskId);
-    if (task) {
-      const nextStatus = (task.status === 'COMPLETED' || (task as any).statusId === 'COMPLETED') ? 'TODO' : 'COMPLETED';
-      await crmApi.updateRecord('tasks', taskId, {
-        statusId: nextStatus,
-        status: nextStatus,
-        completedAt: nextStatus === 'COMPLETED' ? new Date().toISOString() : null
-      });
-      loadData();
-    }
+  const toggleTaskComplete = async (taskId: string, currentStatus: string) => {
+    const nextStatus = currentStatus === 'COMPLETED' ? 'TODO' : 'COMPLETED';
+    await crmApi.updateRecord('tasks', taskId, {
+      statusId: nextStatus,
+      status: nextStatus,
+      completedAt: nextStatus === 'COMPLETED' ? new Date().toISOString() : null
+    });
+    loadData();
   };
 
   const updateVisitStatus = async (visitId: string, status: Visit['status']) => {
-    const visit = visits.find((v) => v.id === visitId);
-    if (visit) {
-      await crmApi.updateRecord('visits', visitId, {
-        statusId: status,
-        status
-      });
-      loadData();
-    }
+    await crmApi.updateRecord('visits', visitId, {
+      statusId: status,
+      status
+    });
+    loadData();
+  };
+
+  const completeFollowUp = async (fuId: string) => {
+    await crmApi.updateRecord('follow_ups', fuId, {
+      status: 'COMPLETED',
+      statusId: 'COMPLETED',
+      completedAt: new Date().toISOString()
+    });
+    loadData();
   };
 
   return (
@@ -120,242 +119,252 @@ export const SalesDashboard: React.FC = () => {
 
       {/* KPI Cards Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1 */}
+        {/* Card 1: Today Actions */}
         <div className="bg-white p-5 rounded-xl border border-[#E1E1E1] shadow-sm">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-[#464555] font-['Hanken_Grotesk'] uppercase tracking-wider">
-              Active Accounts
+              Due Today
             </span>
             <div className="w-8 h-8 rounded-lg bg-[#4744e5]/10 text-[#4744e5] flex items-center justify-center">
-              <span className="material-symbols-outlined text-lg">groups</span>
+              <span className="material-symbols-outlined text-lg">today</span>
             </div>
           </div>
           <div className="mt-3 flex items-baseline justify-between">
             <span className="text-2xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">
-              {myCustomers.length}
-            </span>
-            <span className="text-xs text-[#00C875] font-semibold flex items-center">
-              <span className="material-symbols-outlined text-sm">trending_up</span>
-              +12% MoM
-            </span>
-          </div>
-          <div className="text-[11px] text-[#767587] mt-1">
-            {myCustomers.filter((c) => c.type === 'ENTERPRISE').length} Enterprise Tier
-          </div>
-        </div>
-
-        {/* Card 2 */}
-        <div className="bg-white p-5 rounded-xl border border-[#E1E1E1] shadow-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-[#464555] font-['Hanken_Grotesk'] uppercase tracking-wider">
-              Today's Field Visits
-            </span>
-            <div className="w-8 h-8 rounded-lg bg-[#6161ff]/10 text-[#6161ff] flex items-center justify-center">
-              <span className="material-symbols-outlined text-lg">route</span>
-            </div>
-          </div>
-          <div className="mt-3 flex items-baseline justify-between">
-            <span className="text-2xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">
-              {plannedVisitsToday.length}
+              {todayItems.length}
             </span>
             <span className="text-xs text-[#4744e5] font-bold">
-              {plannedVisitsToday.filter((v) => v.status === 'COMPLETED').length} Done
+              {completedTodayItems.length} Done
             </span>
           </div>
           <div className="text-[11px] text-[#767587] mt-1">
-            {plannedVisitsToday.filter((v) => v.status === 'IN_PROGRESS').length} Currently in progress
+            Visits, Follow-ups, and Tasks scheduled today
           </div>
         </div>
 
-        {/* Card 3 */}
+        {/* Card 2: Overdue Attention */}
         <div className="bg-white p-5 rounded-xl border border-[#E1E1E1] shadow-sm">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-[#464555] font-['Hanken_Grotesk'] uppercase tracking-wider">
-              Pending Sales Tasks
+              Overdue Actions
             </span>
-            <div className="w-8 h-8 rounded-lg bg-[#9a4600]/10 text-[#9a4600] flex items-center justify-center">
-              <span className="material-symbols-outlined text-lg">task_alt</span>
+            <div className={`w-8 h-8 rounded-lg ${overdueItems.length > 0 ? 'bg-[#ba1a1a]/10 text-[#ba1a1a]' : 'bg-[#00C875]/10 text-[#008f53]'} flex items-center justify-center`}>
+              <span className="material-symbols-outlined text-lg">warning</span>
+            </div>
+          </div>
+          <div className="mt-3 flex items-baseline justify-between">
+            <span className={`text-2xl font-extrabold font-['Hanken_Grotesk'] ${overdueItems.length > 0 ? 'text-[#ba1a1a]' : 'text-[#1a1c1c]'}`}>
+              {overdueItems.length}
+            </span>
+            <span className={`text-xs font-bold ${overdueItems.length > 0 ? 'text-[#ba1a1a]' : 'text-[#008f53]'}`}>
+              {overdueItems.length > 0 ? 'Requires Action' : 'All Clear'}
+            </span>
+          </div>
+          <div className="text-[11px] text-[#767587] mt-1">
+            Past due deliverables needing resolution
+          </div>
+        </div>
+
+        {/* Card 3: Upcoming 7 Days */}
+        <div className="bg-white p-5 rounded-xl border border-[#E1E1E1] shadow-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-[#464555] font-['Hanken_Grotesk'] uppercase tracking-wider">
+              Upcoming (7 Days)
+            </span>
+            <div className="w-8 h-8 rounded-lg bg-[#6161ff]/10 text-[#6161ff] flex items-center justify-center">
+              <span className="material-symbols-outlined text-lg">upcoming</span>
             </div>
           </div>
           <div className="mt-3 flex items-baseline justify-between">
             <span className="text-2xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">
-              {pendingTasks.length}
+              {upcomingItems.length}
             </span>
-            <span className="text-xs text-[#ba1a1a] font-bold">
-              {pendingTasks.filter((t) => t.priority === 'URGENT').length} Urgent
+            <span className="text-xs text-[#767587] font-semibold">
+              Planned Work
             </span>
           </div>
           <div className="text-[11px] text-[#767587] mt-1">
-            Overdue tasks require immediate follow-up
+            Future pipeline engagements
           </div>
         </div>
 
-        {/* Card 4 */}
+        {/* Card 4: Stalled Projects */}
         <div className="bg-white p-5 rounded-xl border border-[#E1E1E1] shadow-sm">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-[#464555] font-['Hanken_Grotesk'] uppercase tracking-wider">
-              Active Pipeline Value
+              Missing Next Action
             </span>
-            <div className="w-8 h-8 rounded-lg bg-[#00C875]/10 text-[#008f53] flex items-center justify-center">
-              <span className="material-symbols-outlined text-lg">monetization_on</span>
+            <div className={`w-8 h-8 rounded-lg ${stalledProjects.length > 0 ? 'bg-[#9a4600]/10 text-[#9a4600]' : 'bg-[#00C875]/10 text-[#008f53]'} flex items-center justify-center`}>
+              <span className="material-symbols-outlined text-lg">pending_actions</span>
             </div>
           </div>
           <div className="mt-3 flex items-baseline justify-between">
-            <span className="text-xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">
-              Rp {(totalPipelineValue / 1000000000).toFixed(1)}B IDR
+            <span className="text-2xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">
+              {stalledProjects.length}
             </span>
-            <span className="text-xs text-[#00C875] font-semibold">
-              {projects.filter((o) => o.stage === 'WON').length} Deals Won
+            <span className="text-xs text-[#9a4600] font-bold">
+              Open Deals
             </span>
           </div>
           <div className="text-[11px] text-[#767587] mt-1">
-            Weighted close probability: 74%
+            Active projects with zero future schedule
           </div>
         </div>
       </div>
 
-      {/* Main Grid: Today's Schedule & Urgent Tasks */}
+      {/* Main Grid: Overdue & Today Agenda */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Today's Visits */}
+        {/* Overdue Queue */}
         <div className="bg-white p-6 rounded-xl border border-[#E1E1E1] shadow-sm space-y-4">
           <div className="flex justify-between items-center border-b border-[#E1E1E1] pb-3">
             <div>
-              <h2 className="text-base font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">
-                Today's Planned Sales Visits
+              <h2 className="text-base font-bold text-[#ba1a1a] font-['Hanken_Grotesk'] flex items-center gap-2">
+                <span className="material-symbols-outlined text-[20px]">error</span>
+                <span>Overdue Action Queue</span>
               </h2>
-              <p className="text-xs text-[#767587]">Field engagements scheduled for today</p>
+              <p className="text-xs text-[#767587]">Work that passed its deadline without completion</p>
             </div>
-
-            <Link to="/visits" className="text-xs text-[#4744e5] font-bold hover:underline">
-              View All Visits
-            </Link>
+            <span className="px-2.5 py-0.5 bg-[#ba1a1a]/10 text-[#ba1a1a] text-xs font-extrabold rounded-full">
+              {overdueItems.length}
+            </span>
           </div>
 
           <div className="space-y-3">
-            {plannedVisitsToday.length === 0 ? (
-              <div className="p-8 text-center text-xs text-[#767587]">No sales visits scheduled for today.</div>
+            {overdueItems.length === 0 ? (
+              <div className="p-8 text-center text-xs text-[#767587] bg-[#f9f9f9] rounded-lg border border-[#E1E1E1]">
+                🎉 No overdue actions! All historical deliverables are up to date.
+              </div>
             ) : (
-              plannedVisitsToday.map((v) => (
-                <div key={v.id} className="p-4 bg-[#f9f9f9] rounded-lg border border-[#E1E1E1] space-y-2">
+              overdueItems.map((item) => (
+                <div key={item.id} className="p-3.5 bg-rose-50/50 rounded-lg border border-rose-200 space-y-2">
                   <div className="flex justify-between items-start">
                     <div>
-                      <span className="font-bold text-xs text-[#1a1c1c] font-['Hanken_Grotesk'] block">
-                        {v.title}
-                      </span>
-                      <span className="text-[11px] text-[#4744e5] font-bold block mt-0.5">
-                        {v.customerName} ({v.customerCode})
+                      <div className="flex items-center gap-2">
+                        <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded uppercase ${
+                          item.type === 'VISIT' ? 'bg-[#4744e5] text-white' : item.type === 'FOLLOW_UP' ? 'bg-[#0284c7] text-white' : 'bg-[#d97706] text-white'
+                        }`}>
+                          {item.type}
+                        </span>
+                        <span className="font-bold text-xs text-[#1a1c1c]">{item.title}</span>
+                      </div>
+                      <span className="text-[11px] text-[#4744e5] font-bold block mt-1">
+                        {item.customerName} {item.projectName ? `• Project: ${item.projectName}` : ''}
                       </span>
                     </div>
-
-                    <span
-                      className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
-                        v.status === 'COMPLETED'
-                          ? 'bg-[#00C875]/10 text-[#008f53]'
-                          : v.status === 'IN_PROGRESS'
-                          ? 'bg-[#6161ff]/10 text-[#6161ff]'
-                          : 'bg-[#f3f3f3] text-[#464555]'
-                      }`}
-                    >
-                      {v.status}
+                    <span className="text-[10px] font-bold text-rose-700 bg-white px-2 py-0.5 rounded border border-rose-300 font-mono">
+                      Due: {item.actionAt}
                     </span>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-4 text-[11px] text-[#767587]">
-                    <span className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[14px]">schedule</span>
-                      {v.startTime} - {v.endTime}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[14px]">location_on</span>
-                      {v.location}
-                    </span>
-                  </div>
-
-                  {v.notes && (
-                    <p className="text-[11px] text-[#464555] bg-white p-2 rounded border border-[#E1E1E1]">
-                      {v.notes}
-                    </p>
-                  )}
-
-                  {v.status !== 'COMPLETED' && (
-                    <div className="flex justify-end gap-2 pt-1">
-                      {v.status === 'PLANNED' && (
-                        <button
-                          onClick={() => updateVisitStatus(v.id, 'IN_PROGRESS')}
-                          className="px-2.5 py-1 bg-[#4744e5] text-white text-[11px] font-bold rounded hover:bg-[#2c24ce]"
-                        >
-                          Start Visit
-                        </button>
-                      )}
+                  <div className="flex justify-end gap-2 pt-1 border-t border-rose-100">
+                    {item.type === 'VISIT' && (
                       <button
-                        onClick={() => updateVisitStatus(v.id, 'COMPLETED')}
+                        onClick={() => updateVisitStatus(item.sourceId, 'COMPLETED')}
                         className="px-2.5 py-1 bg-[#00C875] text-white text-[11px] font-bold rounded hover:bg-[#00a35f]"
                       >
                         Complete Visit
                       </button>
-                    </div>
-                  )}
+                    )}
+                    {item.type === 'FOLLOW_UP' && (
+                      <button
+                        onClick={() => completeFollowUp(item.sourceId)}
+                        className="px-2.5 py-1 bg-[#0284c7] text-white text-[11px] font-bold rounded hover:bg-[#0369a1]"
+                      >
+                        Resolve Follow-up
+                      </button>
+                    )}
+                    {item.type === 'TASK' && (
+                      <button
+                        onClick={() => toggleTaskComplete(item.sourceId, item.status)}
+                        className="px-2.5 py-1 bg-[#4744e5] text-white text-[11px] font-bold rounded hover:bg-[#2c24ce]"
+                      >
+                        Complete Task
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))
             )}
           </div>
         </div>
 
-        {/* Actionable Sales Tasks */}
+        {/* Today's Unified Agenda */}
         <div className="bg-white p-6 rounded-xl border border-[#E1E1E1] shadow-sm space-y-4">
           <div className="flex justify-between items-center border-b border-[#E1E1E1] pb-3">
             <div>
-              <h2 className="text-base font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">
-                Actionable Tasks & Follow-ups
+              <h2 className="text-base font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] flex items-center gap-2">
+                <span className="material-symbols-outlined text-[20px] text-[#4744e5]">today</span>
+                <span>Today's Unified Agenda</span>
               </h2>
-              <p className="text-xs text-[#767587]">Checklist for current sales deliverables</p>
+              <p className="text-xs text-[#767587]">Action items scheduled for your business day</p>
             </div>
-
-            <Link to="/tasks" className="text-xs text-[#4744e5] font-bold hover:underline">
-              View All Tasks
-            </Link>
+            <span className="px-2.5 py-0.5 bg-[#4744e5]/10 text-[#4744e5] text-xs font-extrabold rounded-full">
+              {todayItems.length}
+            </span>
           </div>
 
-          <div className="space-y-2.5">
-            {pendingTasks.map((t) => (
-              <div
-                key={t.id}
-                className="p-3 bg-[#f9f9f9] rounded-lg border border-[#E1E1E1] flex items-start justify-between gap-3"
-              >
-                <div className="flex items-start gap-2.5">
-                  <input
-                    type="checkbox"
-                    checked={t.status === 'COMPLETED'}
-                    onChange={() => toggleTaskComplete(t.id)}
-                    className="mt-0.5 w-4 h-4 rounded text-[#4744e5] cursor-pointer"
-                  />
-                  <div>
-                    <span
-                      className={`text-xs font-bold block ${
-                        t.status === 'COMPLETED' ? 'line-through text-[#767587]' : 'text-[#1a1c1c]'
-                      }`}
-                    >
-                      {t.title}
-                    </span>
-                    <span className="text-[11px] text-[#767587] block mt-0.5">
-                      {t.customerName} • Due: {t.dueDate}
-                    </span>
+          <div className="space-y-3">
+            {todayItems.length === 0 ? (
+              <div className="p-8 text-center text-xs text-[#767587] bg-[#f9f9f9] rounded-lg border border-[#E1E1E1]">
+                You're all caught up for today! No pending visits, calls, or tasks.
+              </div>
+            ) : (
+              todayItems.map((item) => (
+                <div key={item.id} className="p-3.5 bg-[#f9f9f9] rounded-lg border border-[#E1E1E1] space-y-2">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded uppercase ${
+                          item.type === 'VISIT' ? 'bg-[#4744e5] text-white' : item.type === 'FOLLOW_UP' ? 'bg-[#0284c7] text-white' : 'bg-[#d97706] text-white'
+                        }`}>
+                          {item.type}
+                        </span>
+                        <span className="font-bold text-xs text-[#1a1c1c]">{item.title}</span>
+                      </div>
+                      <span className="text-[11px] text-[#4744e5] font-bold block mt-1">
+                        {item.customerName} {item.projectName ? `• Deal: ${item.projectName}` : ''}
+                      </span>
+                    </div>
+                    {item.startTime ? (
+                      <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200 font-mono">
+                        {item.startTime} - {item.endTime}
+                      </span>
+                    ) : item.priority ? (
+                      <span className="text-[9px] font-extrabold uppercase bg-amber-50 text-amber-800 px-2 py-0.5 rounded border border-amber-200">
+                        {item.priority}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-1 border-t border-[#E1E1E1]">
+                    {item.type === 'VISIT' && (
+                      <button
+                        onClick={() => updateVisitStatus(item.sourceId, 'COMPLETED')}
+                        className="px-2.5 py-1 bg-[#00C875] text-white text-[11px] font-bold rounded hover:bg-[#00a35f]"
+                      >
+                        Complete Visit
+                      </button>
+                    )}
+                    {item.type === 'FOLLOW_UP' && (
+                      <button
+                        onClick={() => completeFollowUp(item.sourceId)}
+                        className="px-2.5 py-1 bg-[#0284c7] text-white text-[11px] font-bold rounded hover:bg-[#0369a1]"
+                      >
+                        Resolve Follow-up
+                      </button>
+                    )}
+                    {item.type === 'TASK' && (
+                      <button
+                        onClick={() => toggleTaskComplete(item.sourceId, item.status)}
+                        className="px-2.5 py-1 bg-[#4744e5] text-white text-[11px] font-bold rounded hover:bg-[#2c24ce]"
+                      >
+                        Complete Task
+                      </button>
+                    )}
                   </div>
                 </div>
-
-                <span
-                  className={`px-2 py-0.5 text-[9px] font-bold uppercase rounded ${
-                    t.priority === 'URGENT'
-                      ? 'bg-[#ba1a1a]/10 text-[#ba1a1a]'
-                      : t.priority === 'HIGH'
-                      ? 'bg-[#9a4600]/10 text-[#9a4600]'
-                      : 'bg-[#f3f3f3] text-[#464555]'
-                  }`}
-                >
-                  {t.priority}
-                </span>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
       </div>

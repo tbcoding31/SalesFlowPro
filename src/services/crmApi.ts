@@ -95,6 +95,45 @@ export const crmApi = {
     }
   },
 
+  // Sales Agenda & Next Action Fetchers
+  fetchSalesAgenda: async (date?: string, upcomingDays: number = 7): Promise<any> => {
+    try {
+      const params = new URLSearchParams();
+      if (date) params.set('date', date);
+      if (upcomingDays) params.set('upcomingDays', String(upcomingDays));
+
+      const url = `${API_BASE}/sales/agenda${params.toString() ? '?' + params.toString() : ''}`;
+      const res = await fetch(url, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch sales agenda`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchSalesAgenda error]', err);
+      return null;
+    }
+  },
+
+  fetchCustomerNextAction: async (customerId: string): Promise<any> => {
+    try {
+      const res = await fetch(`${API_BASE}/customers/${customerId}/next-action`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch next action`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchCustomerNextAction error]', err);
+      return null;
+    }
+  },
+
+  fetchProjectNextAction: async (projectId: string): Promise<any> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${projectId}/next-action`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch next action`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchProjectNextAction error]', err);
+      return null;
+    }
+  },
+
   // Project Commercial Stage Transition
   transitionProjectStage: async (projectId: string, stageId: string, notes?: string): Promise<{ success: boolean; error?: string; code?: string; data?: any }> => {
     try {
