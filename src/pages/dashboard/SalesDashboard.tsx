@@ -10,6 +10,7 @@ export const SalesDashboard: React.FC = () => {
   const tenantId = currentTenant?.id || 'TEN-00001';
 
   const [agenda, setAgenda] = useState<any | null>(null);
+  const [attention, setAttention] = useState<any | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
@@ -18,13 +19,15 @@ export const SalesDashboard: React.FC = () => {
   const loadData = async () => {
     setIsLoading(true);
     try {
-      const [agendaData, cList, pList, aList] = await Promise.all([
+      const [agendaData, attentionData, cList, pList, aList] = await Promise.all([
         crmApi.fetchSalesAgenda(),
+        crmApi.fetchSalesAttention(),
         crmApi.fetchCollection<Customer>('customers', tenantId),
         crmApi.fetchCollection<Project>('projects', tenantId),
         crmApi.fetchCollection<Activity>('activities', tenantId)
       ]);
       setAgenda(agendaData);
+      setAttention(attentionData);
       setCustomers(cList);
       setProjects(pList);
       setActivities(aList);
@@ -48,6 +51,17 @@ export const SalesDashboard: React.FC = () => {
   const upcomingItems = agenda?.upcoming || [];
   const completedTodayItems = agenda?.completedToday || [];
   const stalledProjects = agenda?.stalledProjects || [];
+
+  // Authoritative Attention Data
+  const attentionSummary = attention?.summary || {
+    customersNeedingAttention: 0,
+    projectsNeedingAttention: 0,
+    criticalSignals: 0,
+    warningSignals: 0,
+    overdueActions: 0
+  };
+  const attentionProjects = attention?.projects || [];
+  const attentionCustomers = attention?.customers || [];
 
   const myCustomers = isSalesRep
     ? customers.filter((c) => (c.picId || c.assignedPicId) === currentUser?.id)
@@ -368,6 +382,100 @@ export const SalesDashboard: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* R43: Database-Authoritative Needs Attention Section */}
+      {(attentionProjects.length > 0 || attentionCustomers.length > 0) && (
+        <div className="bg-white p-6 rounded-xl border border-amber-200 shadow-sm space-y-4">
+          <div className="flex justify-between items-center border-b border-amber-200/60 pb-3">
+            <div>
+              <h2 className="text-base font-bold text-amber-900 font-['Hanken_Grotesk'] flex items-center gap-2">
+                <span className="material-symbols-outlined text-[20px] text-amber-600">warning</span>
+                <span>Needs Attention</span>
+              </h2>
+              <p className="text-xs text-[#767587]">Deterministic issues requiring sales rep or management intervention</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="px-2 py-0.5 bg-rose-100 text-rose-800 text-xs font-bold rounded">
+                {attentionSummary.criticalSignals} Critical
+              </span>
+              <span className="px-2 py-0.5 bg-amber-100 text-amber-800 text-xs font-bold rounded">
+                {attentionSummary.warningSignals} Warnings
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Projects Needing Attention */}
+            <div className="space-y-3">
+              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                Projects Needing Attention ({attentionProjects.length})
+              </h3>
+              {attentionProjects.slice(0, 5).map((p: any) => (
+                <div key={p.id} className="p-3 bg-amber-50/50 rounded-lg border border-amber-200 space-y-2">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <Link to={`/projects/${p.id}`} className="font-bold text-xs text-indigo-700 hover:underline">
+                        {p.title}
+                      </Link>
+                      <span className="text-[11px] text-slate-500 block">{p.customerName || 'Customer Account'}</span>
+                    </div>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-mono">
+                      {p.stage}
+                    </span>
+                  </div>
+                  <div className="space-y-1">
+                    {p.signals.map((sig: any, sIdx: number) => (
+                      <div key={sIdx} className="text-[11px] flex items-start gap-1.5 text-slate-800">
+                        <span className={`material-symbols-outlined text-[14px] mt-0.5 ${sig.severity === 'CRITICAL' ? 'text-rose-600' : 'text-amber-600'}`}>
+                          {sig.severity === 'CRITICAL' ? 'error' : 'warning'}
+                        </span>
+                        <span>{sig.reason}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Customers Needing Attention */}
+            <div className="space-y-3">
+              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                Customers Needing Attention ({attentionCustomers.length})
+              </h3>
+              {attentionCustomers.slice(0, 5).map((c: any) => (
+                <div key={c.id} className="p-3 bg-amber-50/50 rounded-lg border border-amber-200 space-y-2">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <Link to={`/customers/${c.id}`} className="font-bold text-xs text-indigo-700 hover:underline">
+                        {c.name}
+                      </Link>
+                      <span className="text-[11px] text-slate-500 block">Code: {c.code || '-'}</span>
+                    </div>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
+                      {c.status}
+                    </span>
+                  </div>
+                  <div className="space-y-1">
+                    {c.signals.map((sig: any, sIdx: number) => (
+                      <div key={sIdx} className="text-[11px] flex items-start gap-1.5 text-slate-800">
+                        <span className={`material-symbols-outlined text-[14px] mt-0.5 ${sig.severity === 'CRITICAL' ? 'text-rose-600' : 'text-amber-600'}`}>
+                          {sig.severity === 'CRITICAL' ? 'error' : 'warning'}
+                        </span>
+                        <span>{sig.reason}</span>
+                      </div>
+                    ))}
+                    {c.projectAttentionSummary && c.projectAttentionSummary.projectsNeedingAttention > 0 && (
+                      <div className="text-[11px] font-medium text-amber-900 bg-amber-100/60 px-2 py-0.5 rounded">
+                        📁 {c.projectAttentionSummary.projectsNeedingAttention} child project(s) require attention
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Activity Timeline Feed */}
       <div className="bg-white p-6 rounded-xl border border-[#E1E1E1] shadow-sm space-y-4">

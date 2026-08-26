@@ -415,3 +415,70 @@ export interface MaintenanceCadence {
   picName?: string;
 }
 
+export type AttentionSignalSeverity = 'CRITICAL' | 'WARNING' | 'INFO';
+
+export type AttentionSignalCode =
+  | 'PROJECT_MISSING_NEXT_ACTION'
+  | 'PROJECT_OVERDUE_ACTION'
+  | 'CUSTOMER_OVERDUE_ACTION'
+  | 'EXPECTED_CLOSE_OVERDUE'
+  | 'CADENCE_BLOCKED_INVALID_PIC'
+  | 'CADENCE_ACTION_CANCELLED'
+  | 'PROJECT_NO_ACTIVE_PIC'
+  | 'CUSTOMER_NO_ACTIVE_PIC';
+
+export interface AttentionSignal {
+  code: AttentionSignalCode;
+  severity: AttentionSignalSeverity;
+  title: string;
+  reason: string;
+  evaluatedAt: string;
+  recommendedAction: string;
+  metadata?: Record<string, any>;
+}
+
+export interface ProjectAttentionSummary {
+  projectsNeedingAttention: number;
+  criticalCount: number;
+  warningCount: number;
+  projects: {
+    id: string;
+    title: string;
+    stage: string;
+    signals: AttentionSignal[];
+  }[];
+}
+
+export interface SalesAttentionSummary {
+  customersNeedingAttention: number;
+  projectsNeedingAttention: number;
+  criticalSignals: number;
+  warningSignals: number;
+  overdueActions: number;
+}
+
+export interface SalesAttentionResponse {
+  evaluatedAt: string;
+  businessDate: string;
+  summary: SalesAttentionSummary;
+  projects: {
+    id: string;
+    title: string;
+    stage: string;
+    customerId?: string;
+    customerName?: string;
+    picId?: string;
+    picName?: string;
+    signals: AttentionSignal[];
+  }[];
+  customers: {
+    id: string;
+    name: string;
+    code?: string;
+    status: string;
+    picId?: string;
+    picName?: string;
+    signals: AttentionSignal[];
+    projectAttentionSummary?: ProjectAttentionSummary;
+  }[];
+}

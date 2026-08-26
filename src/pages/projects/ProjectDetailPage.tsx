@@ -18,6 +18,7 @@ export const ProjectDetailPage: React.FC = () => {
   const [visits, setVisits] = useState<Visit[]>([]);
   const [followups, setFollowups] = useState<FollowUp[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
+  const [attentionSignals, setAttentionSignals] = useState<any[]>([]);
   const [commentText, setCommentText] = useState('');
   const [isLoading, setIsLoading] = useState(true);
 
@@ -25,32 +26,23 @@ export const ProjectDetailPage: React.FC = () => {
     if (!id) return;
     setIsLoading(true);
     try {
-      const proj: any = await crmApi.fetchRecordById<Project>('projects', id);
-      if (proj) {
-        const normalizedProject: Project = {
-          ...proj,
-          name: proj.name || proj.title || 'Untitled Project',
-          title: proj.title || proj.name || 'Untitled Project',
-          estimatedValue: proj.estimatedValue !== undefined ? Number(proj.estimatedValue) : (proj.value !== undefined ? Number(proj.value) : 0),
-          stage: proj.stage || proj.stageId || 'LEAD',
-          expectedCloseDate: proj.expectedCloseDate || proj.expectedClosingDate || proj.createdAt || new Date().toISOString()
-        };
-        setProject(normalizedProject);
+      const summaryRes: any = await crmApi.fetchProjectSummary(id);
+      if (summaryRes && summaryRes.project) {
+        const proj = summaryRes.project;
+        setProject(proj);
+        if (summaryRes.attentionSignals) {
+          setAttentionSignals(summaryRes.attentionSignals);
+        }
         if (proj.customerId) {
           const cust = await crmApi.fetchRecordById<Customer>('customers', proj.customerId);
           if (cust) setCustomer(cust);
         }
-        const [allTasks, allVisits, allFollowups, allActivities, naRes] = await Promise.all([
-          crmApi.fetchCollection<Task>('tasks', tenantId),
-          crmApi.fetchCollection<Visit>('visits', tenantId),
-          crmApi.fetchCollection<FollowUp>('follow_ups', tenantId),
-          crmApi.fetchCollection<Activity>('activities', tenantId),
-          crmApi.fetchProjectNextAction(id)
-        ]);
-        setTasks(allTasks.filter(t => (t as any).relatedProjectId === id).slice(0, 5));
-        setVisits(allVisits.filter(v => (v as any).relatedProjectId === id).slice(0, 5));
-        setFollowups(allFollowups.filter(f => (f as any).relatedProjectId === id).slice(0, 5));
-        setActivities(allActivities.filter(a => (a.entityType === 'PROJECT' && a.entityId === id) || (a.metadata && a.metadata.projectId === id)).slice(0, 15));
+        if (summaryRes.tasks) setTasks(summaryRes.tasks);
+        if (summaryRes.visits) setVisits(summaryRes.visits);
+        if (summaryRes.followups) setFollowups(summaryRes.followups);
+        if (summaryRes.activities) setActivities(summaryRes.activities);
+
+        const naRes = await crmApi.fetchProjectNextAction(id);
         if (naRes && naRes.nextAction) {
           setNextAction(naRes.nextAction);
         } else {
@@ -214,6 +206,50 @@ export const ProjectDetailPage: React.FC = () => {
               </span>
             )}
           </div>
+
+          {/* Database-Authoritative Attention Signals */}
+          {attentionSignals.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {attentionSignals.map((sig, idx) => (
+                <div
+                  key={idx}
+                  className={`p-3 rounded-xl border flex items-start justify-between gap-3 text-xs ${
+                    sig.severity === 'CRITICAL'
+                      ? 'bg-rose-50 border-rose-200 text-rose-900'
+                      : 'bg-amber-50 border-amber-200 text-amber-900'
+                  }`}
+                >
+                  <div className="flex items-start gap-2.5">
+                    <span
+                      className={`material-symbols-outlined text-base mt-0.5 shrink-0 ${
+                        sig.severity === 'CRITICAL' ? 'text-rose-600' : 'text-amber-600'
+                      }`}
+                    >
+                      {sig.severity === 'CRITICAL' ? 'error' : 'warning'}
+                    </span>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold">{sig.title}</span>
+                        <span
+                          className={`px-1.5 py-0.5 text-[9px] font-extrabold rounded uppercase ${
+                            sig.severity === 'CRITICAL'
+                              ? 'bg-rose-200 text-rose-800'
+                              : 'bg-amber-200 text-amber-800'
+                          }`}
+                        >
+                          {sig.severity}
+                        </span>
+                      </div>
+                      <p className="text-[11px] mt-0.5 opacity-90">{sig.reason}</p>
+                      <div className="text-[10px] font-semibold mt-1 opacity-75">
+                        👉 Action: {sig.recommendedAction}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="bg-slate-50 border-t md:border-t-0 md:border-l border-slate-200 p-6 flex flex-row md:flex-col items-center justify-center gap-3 shrink-0">

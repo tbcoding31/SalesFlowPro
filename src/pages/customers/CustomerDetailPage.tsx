@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { DataService } from '../../services/dataService';
 import { usersApi } from '../../services/usersApi';
 import { crmApi } from '../../services/crmApi';
-import { Customer, Visit, Task, FollowUp, Project, Activity, User, TaskPriority, TaskStatus, FollowUpType, FollowUpPriority, FollowUpStatus, ProjectStage } from '../../types';
+import { Customer, Visit, Task, FollowUp, Project, Activity, User, CustomerContact, TaskPriority, TaskStatus, FollowUpType, FollowUpPriority, FollowUpStatus, ProjectStage } from '../../types';
 
 export interface ActivityTimelineItem {
   id: string;
@@ -165,6 +165,8 @@ export const CustomerDetailPage: React.FC = () => {
 
   const [customer, setCustomer] = useState<Customer | undefined>(undefined);
   const [customerNextAction, setCustomerNextAction] = useState<any | null>(null);
+  const [customerAttentionSignals, setCustomerAttentionSignals] = useState<any[]>([]);
+  const [projectAttentionSummary, setProjectAttentionSummary] = useState<any | null>(null);
 
   const [activeTab, setActiveTab] = useState<'overview' | 'visits' | 'tasks' | 'followups' | 'projects' | 'activities'>('overview');
 
@@ -366,8 +368,8 @@ export const CustomerDetailPage: React.FC = () => {
   const loadAllCustomerData = async () => {
     if (!id) return;
     try {
-      const [custData, vList, tList, fList, pList, aList, cList, uList, naRes] = await Promise.all([
-        crmApi.fetchRecordById<Customer>('customers', id),
+      const [custSummary, vList, tList, fList, pList, aList, cList, uList, naRes] = await Promise.all([
+        crmApi.fetchCustomerSummary(id),
         crmApi.fetchCollection<Visit>('visits', tenantId),
         crmApi.fetchCollection<Task>('tasks', tenantId),
         crmApi.fetchCollection<FollowUp>('follow_ups', tenantId),
@@ -378,8 +380,15 @@ export const CustomerDetailPage: React.FC = () => {
         crmApi.fetchCustomerNextAction(id)
       ]);
 
-      if (custData) {
+      if (custSummary && custSummary.customer) {
+        const custData = custSummary.customer;
         setCustomer(custData);
+        if (custSummary.attentionSignals) {
+          setCustomerAttentionSignals(custSummary.attentionSignals);
+        }
+        if (custSummary.projectAttentionSummary) {
+          setProjectAttentionSummary(custSummary.projectAttentionSummary);
+        }
         setEditName(custData.name || '');
         setEditCode(custData.code || '');
         setEditType(custData.type || 'COMPANY');
@@ -2119,6 +2128,82 @@ export const CustomerDetailPage: React.FC = () => {
               </div>
             )}
           </div>
+
+          {/* SECTION 3.6 — DATABASE-AUTHORITATIVE NEEDS ATTENTION */}
+          {(customerAttentionSignals.length > 0 || (projectAttentionSummary && projectAttentionSummary.projectsNeedingAttention > 0)) && (
+            <div className="p-4 bg-amber-50/70 border border-amber-200 rounded-xl space-y-3">
+              <div className="flex items-center justify-between border-b border-amber-200/60 pb-2">
+                <h3 className="text-xs font-bold text-amber-900 uppercase tracking-wider flex items-center gap-2">
+                  <span className="material-symbols-outlined text-base text-amber-700">warning</span>
+                  <span>Account Attention Signals</span>
+                </h3>
+                <span className="text-[10px] font-bold text-amber-800 bg-white px-2 py-0.5 rounded border border-amber-200">
+                  {customerAttentionSignals.length + (projectAttentionSummary?.projectsNeedingAttention || 0)} Signals
+                </span>
+              </div>
+
+              {/* Direct Customer Signals */}
+              {customerAttentionSignals.map((sig, idx) => (
+                <div
+                  key={`c-sig-${idx}`}
+                  className={`p-2.5 rounded-lg border text-xs flex items-start justify-between gap-3 ${
+                    sig.severity === 'CRITICAL' ? 'bg-rose-50 border-rose-200 text-rose-900' : 'bg-white border-amber-200 text-amber-900'
+                  }`}
+                >
+                  <div className="flex items-start gap-2">
+                    <span className={`material-symbols-outlined text-base mt-0.5 ${sig.severity === 'CRITICAL' ? 'text-rose-600' : 'text-amber-600'}`}>
+                      {sig.severity === 'CRITICAL' ? 'error' : 'warning'}
+                    </span>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold">{sig.title}</span>
+                        <span className={`px-1.5 py-0.2 text-[9px] font-extrabold rounded uppercase ${
+                          sig.severity === 'CRITICAL' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
+                        }`}>
+                          {sig.severity}
+                        </span>
+                      </div>
+                      <p className="text-[11px] mt-0.5 opacity-90">{sig.reason}</p>
+                      <div className="text-[10px] font-semibold mt-1 opacity-75">
+                        👉 Action: {sig.recommendedAction}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {/* Related Child Projects Attention Summary */}
+              {projectAttentionSummary && projectAttentionSummary.projectsNeedingAttention > 0 && (
+                <div className="p-2.5 bg-white rounded-lg border border-amber-200 text-xs space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-900">
+                      📁 {projectAttentionSummary.projectsNeedingAttention} Child Project{projectAttentionSummary.projectsNeedingAttention > 1 ? 's' : ''} Require Attention
+                    </span>
+                    <button
+                      onClick={() => setActiveTab('projects')}
+                      className="text-[11px] font-bold text-indigo-600 hover:underline"
+                    >
+                      View Projects →
+                    </button>
+                  </div>
+                  <div className="space-y-1">
+                    {projectAttentionSummary.projects.map((p: any) => (
+                      <div key={p.id} className="text-[11px] text-slate-700 flex items-center justify-between bg-slate-50 px-2 py-1 rounded">
+                        <span className="font-medium truncate max-w-[200px]">{p.title}</span>
+                        <div className="flex gap-1">
+                          {p.signals.map((s: any, sIdx: number) => (
+                            <span key={sIdx} className="text-[9px] font-bold px-1 rounded bg-amber-100 text-amber-800">
+                              {s.code.replace('PROJECT_', '').replace(/_/g, ' ')}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* SECTION 4 & 5 — RECENT ACTIVITIES & UPCOMING ACTIVITIES */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

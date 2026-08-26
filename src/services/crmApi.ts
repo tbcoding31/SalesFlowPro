@@ -270,6 +270,21 @@ export const crmApi = {
       throw new Error(errJson.error || `HTTP ${res.status}: Failed to toggle cadence status`);
     }
     return await res.json();
+  },
+
+  fetchSalesAttention: async (date?: string): Promise<any> => {
+    try {
+      const params = new URLSearchParams();
+      if (date) params.set('date', date);
+      const url = `${API_BASE}/sales/attention${params.toString() ? '?' + params.toString() : ''}`;
+      const res = await fetch(url, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch sales attention`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchSalesAttention error]', err);
+      return null;
+    }
   }
 };
+
 
