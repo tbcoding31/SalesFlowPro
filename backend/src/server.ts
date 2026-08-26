@@ -2580,6 +2580,33 @@ app.patch('/api/projects/:id/stage', async (req, res) => {
   }
 });
 
+// Shared Timezone-Aware Business Date Helper (Asia/Jakarta / WIB, UTC+7)
+export const getBusinessDate = (dateOrVal: any = new Date(), timeZone = 'Asia/Jakarta'): string | null => {
+  if (!dateOrVal) return null;
+  if (typeof dateOrVal === 'string') {
+    // If already in YYYY-MM-DD format, return the date slice
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateOrVal)) return dateOrVal;
+    // If ISO timestamp string or MySQL datetime string, parse to date object
+    const parsed = new Date(dateOrVal);
+    if (!isNaN(parsed.getTime())) {
+      dateOrVal = parsed;
+    } else {
+      return dateOrVal.slice(0, 10);
+    }
+  }
+
+  if (dateOrVal instanceof Date) {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+    return formatter.format(dateOrVal);
+  }
+  return String(dateOrVal).slice(0, 10);
+};
+
 // ==========================================
 // R40.3 SALES REPRESENTATIVE DAILY AGENDA & NEXT-ACTION WORKFLOW
 // ==========================================
@@ -2597,9 +2624,9 @@ app.get(['/api/sales/agenda', '/api/agenda'], async (req, res) => {
   const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
 
   try {
-    const todayStr = (req.query.date as string) || new Date().toISOString().split('T')[0];
+    const todayStr = (req.query.date as string) || getBusinessDate(new Date())!;
     const upcomingDays = parseInt((req.query.upcomingDays as string) || '7', 10);
-    const upcomingEnd = new Date(Date.parse(todayStr) + (upcomingDays * 86400000)).toISOString().split('T')[0];
+    const upcomingEnd = getBusinessDate(new Date(Date.parse(todayStr) + (upcomingDays * 86400000)))!;
 
     const { where: taskWhere, params: taskParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 't.picId');
     const { where: visitWhere, params: visitParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'v.picId');
@@ -2652,20 +2679,8 @@ app.get(['/api/sales/agenda', '/api/agenda'], async (req, res) => {
       ${fuWhere.replace(/WHERE tenantId/g, 'WHERE f.tenantId')}
     `, fuParams);
 
-    // Helper to format Date or Date-string reliably to 'YYYY-MM-DD'
-    const toLocalDateStr = (val: any) => {
-      if (!val) return null;
-      if (typeof val === 'string') {
-        return val.slice(0, 10);
-      }
-      if (val instanceof Date) {
-        const year = val.getFullYear();
-        const month = String(val.getMonth() + 1).padStart(2, '0');
-        const day = String(val.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
-      }
-      return String(val).slice(0, 10);
-    };
+    // Helper to format Date or Date-string reliably to 'YYYY-MM-DD' in Asia/Jakarta
+    const toLocalDateStr = (val: any) => getBusinessDate(val);
 
     // 4. Normalized Aggregation
     const overdue: any[] = [];
@@ -2675,7 +2690,9 @@ app.get(['/api/sales/agenda', '/api/agenda'], async (req, res) => {
 
     // Process Tasks
     taskRows.forEach((t: any) => {
-      const isCompleted = t.status === 'COMPLETED' || t.status === 'CANCELLED';
+      const isCompleted = t.status === 'COMPLETED';
+      const isCancelled = t.status === 'CANCELLED';
+      const isTerminal = isCompleted || isCancelled;
       const actionDate = toLocalDateStr(t.dueDate);
       const completedDate = toLocalDateStr(t.completedAt);
 
@@ -2703,7 +2720,7 @@ app.get(['/api/sales/agenda', '/api/agenda'], async (req, res) => {
         if (completedDate === todayStr) {
           completedToday.push(item);
         }
-      } else if (actionDate) {
+      } else if (!isTerminal && actionDate) {
         if (actionDate < todayStr) {
           overdue.push(item);
         } else if (actionDate === todayStr) {
@@ -2716,7 +2733,9 @@ app.get(['/api/sales/agenda', '/api/agenda'], async (req, res) => {
 
     // Process Visits
     visitRows.forEach((v: any) => {
-      const isCompleted = v.status === 'COMPLETED' || v.status === 'CANCELLED';
+      const isCompleted = v.status === 'COMPLETED';
+      const isCancelled = v.status === 'CANCELLED';
+      const isTerminal = isCompleted || isCancelled;
       const actionDate = toLocalDateStr(v.visitDate);
       const completedDate = toLocalDateStr(v.completedAt);
 
@@ -2748,7 +2767,7 @@ app.get(['/api/sales/agenda', '/api/agenda'], async (req, res) => {
         if (completedDate === todayStr) {
           completedToday.push(item);
         }
-      } else if (actionDate) {
+      } else if (!isTerminal && actionDate) {
         if (actionDate < todayStr) {
           overdue.push(item);
         } else if (actionDate === todayStr) {
@@ -2761,7 +2780,9 @@ app.get(['/api/sales/agenda', '/api/agenda'], async (req, res) => {
 
     // Process Follow-ups
     fuRows.forEach((f: any) => {
-      const isCompleted = f.status === 'COMPLETED' || f.status === 'CANCELLED';
+      const isCompleted = f.status === 'COMPLETED';
+      const isCancelled = f.status === 'CANCELLED';
+      const isTerminal = isCompleted || isCancelled;
       const actionDate = toLocalDateStr(f.followUpDate);
       const completedDate = toLocalDateStr(f.completedAt);
 
@@ -2790,7 +2811,7 @@ app.get(['/api/sales/agenda', '/api/agenda'], async (req, res) => {
         if (completedDate === todayStr) {
           completedToday.push(item);
         }
-      } else if (actionDate) {
+      } else if (!isTerminal && actionDate) {
         if (actionDate < todayStr) {
           overdue.push(item);
         } else if (actionDate === todayStr) {
@@ -2901,17 +2922,7 @@ app.get('/api/customers/:id/next-action', async (req, res) => {
       return res.status(404).json({ error: 'Customer not found or access denied.' });
     }
 
-    const toLocalDateStr = (val: any) => {
-      if (!val) return null;
-      if (typeof val === 'string') return val.slice(0, 10);
-      if (val instanceof Date) {
-        const year = val.getFullYear();
-        const month = String(val.getMonth() + 1).padStart(2, '0');
-        const day = String(val.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
-      }
-      return String(val).slice(0, 10);
-    };
+    const toLocalDateStr = (val: any) => getBusinessDate(val);
 
     const [tasks]: any = await pool.query(
       'SELECT id, title, dueDate as actionDate, priorityId as priority, statusId as status, createdAt FROM tasks WHERE customerId = ? AND statusId NOT IN ("COMPLETED", "CANCELLED") ORDER BY dueDate ASC LIMIT 10',
@@ -2979,17 +2990,7 @@ app.get('/api/projects/:id/next-action', async (req, res) => {
       return res.status(404).json({ error: 'Project not found or access denied.' });
     }
 
-    const toLocalDateStr = (val: any) => {
-      if (!val) return null;
-      if (typeof val === 'string') return val.slice(0, 10);
-      if (val instanceof Date) {
-        const year = val.getFullYear();
-        const month = String(val.getMonth() + 1).padStart(2, '0');
-        const day = String(val.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
-      }
-      return String(val).slice(0, 10);
-    };
+    const toLocalDateStr = (val: any) => getBusinessDate(val);
 
     const [tasks]: any = await pool.query(
       'SELECT id, title, dueDate as actionDate, priorityId as priority, statusId as status, createdAt FROM tasks WHERE relatedProjectId = ? AND statusId NOT IN ("COMPLETED", "CANCELLED") ORDER BY dueDate ASC LIMIT 10',
@@ -3966,10 +3967,14 @@ if (process.env.APP_ENV === 'test') {
   }
 }
 
-const port = env.PORT || 5000;
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
-  console.log(`[Startup] Backend started`);
-  console.log(`[Startup] Database: ${env.DB_NAME}`);
-  console.log(`[Startup] Environment: ${process.env.NODE_ENV || 'development'}`);
-});
+export { app };
+
+if (require.main === module) {
+  const port = env.PORT || 5000;
+  app.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
+    console.log(`[Startup] Backend started`);
+    console.log(`[Startup] Database: ${env.DB_NAME}`);
+    console.log(`[Startup] Environment: ${process.env.NODE_ENV || 'development'}`);
+  });
+}
