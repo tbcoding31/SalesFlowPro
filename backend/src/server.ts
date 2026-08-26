@@ -629,7 +629,7 @@ const sendRes = (res: express.Response, promise: Promise<any>) => {
 const criticalTables = ['users', 'tenant_users', 'tenant_user_roles', 'roles', 'tenants', 'role_permissions', 'role_assignment_policies'];
 const tenantSpecificTables = [
   'users', 'tenant_users', 'roles', 'departments', 'positions',
-  'customers', 'visits', 'tasks', 'projects', 'activities', 'follow_ups', 'sales_targets', 'reports', 'audit_logs', 'notifications'
+  'customers', 'customer_contacts', 'visits', 'tasks', 'projects', 'activities', 'follow_ups', 'sales_targets', 'reports', 'audit_logs', 'notifications'
 ];
 
 const setupEndpoint = (table: string) => {
@@ -819,6 +819,7 @@ const setupEndpoint = (table: string) => {
   const getRequiredPermissions = (table: string) => {
     const map: Record<string, { base: string, own: string | null, ownerCol: string | null }> = {
       'customers': { base: 'MANAGE_CUSTOMERS', own: 'MANAGE_OWN_CUSTOMERS', ownerCol: 'picId' },
+      'customer_contacts': { base: 'MANAGE_CUSTOMERS', own: 'MANAGE_OWN_CUSTOMERS', ownerCol: null },
       'projects': { base: 'MANAGE_PROJECTS', own: 'MANAGE_OWN_PROJECTS', ownerCol: 'picId' },
       'tasks': { base: 'MANAGE_TASKS', own: 'MANAGE_OWN_TASKS', ownerCol: 'picId' },
       'visits': { base: 'MANAGE_TASKS', own: 'MANAGE_OWN_TASKS', ownerCol: 'picId' },
@@ -894,7 +895,7 @@ const setupEndpoint = (table: string) => {
       }
       
       // Cross-tenant Customer relationship validation & PIC inheritance fallback
-      if (data.customerId && tenantSpecificTables.includes(table) && ['projects', 'tasks', 'visits', 'follow_ups'].includes(table)) {
+      if (data.customerId && tenantSpecificTables.includes(table) && ['projects', 'tasks', 'visits', 'follow_ups', 'customer_contacts'].includes(table)) {
         const targetTenant = data.tenantId || actorTenant;
         const [custRows]: any = await pool.query('SELECT id, tenantId, picId, statusId FROM customers WHERE id = ?', [data.customerId]);
         if (custRows.length === 0) {
@@ -903,8 +904,13 @@ const setupEndpoint = (table: string) => {
         if (targetTenant !== 'SYSTEM' && custRows[0].tenantId !== targetTenant) {
           return res.status(403).json({ error: 'Cross-tenant customer reference forbidden.', code: 'CROSS_TENANT_CUSTOMER' });
         }
+        // If customer_contacts is marked isPrimary = true (or 1), unset other contacts for this customer
+        if (table === 'customer_contacts' && (data.isPrimary === true || data.isPrimary === 1 || data.isPrimary === '1')) {
+          await pool.query('UPDATE customer_contacts SET isPrimary = 0 WHERE customerId = ?', [data.customerId]);
+          data.isPrimary = 1;
+        }
         // If picId is not explicitly provided on child entity, inherit from Customer PIC
-        if (!data.picId && custRows[0].picId) {
+        if (!data.picId && custRows[0].picId && table !== 'customer_contacts') {
           data.picId = custRows[0].picId;
         }
       }
@@ -1071,6 +1077,14 @@ const setupEndpoint = (table: string) => {
           );
         }
 
+        // If updating customer_contacts to isPrimary = true, unset other contacts for the same customer
+        if (table === 'customer_contacts' && (data.isPrimary === true || data.isPrimary === 1 || data.isPrimary === '1')) {
+          const [contactRows]: any = await connection.query('SELECT customerId FROM customer_contacts WHERE id = ?', [id]);
+          if (contactRows.length > 0 && contactRows[0].customerId) {
+            await connection.query('UPDATE customer_contacts SET isPrimary = 0 WHERE customerId = ? AND id != ?', [contactRows[0].customerId, id]);
+          }
+        }
+
         // Domain Activity Emission and completion timestamp handling on specific PUT mutations
         const targetTenant = actorTenant !== 'SYSTEM' ? actorTenant : (data.tenantId || 'SYSTEM');
         const nowFormatted = new Date().toISOString().slice(0, 19).replace('T', ' ');
@@ -1219,7 +1233,7 @@ const setupEndpoint = (table: string) => {
 
 const tables = [
   'tenants', 'users', 'follow_ups', 'notifications',
-  'customers', 'projects', 'tasks', 'visits', 'activities', 'sales_targets', 'audit_logs',
+  'customers', 'customer_contacts', 'projects', 'tasks', 'visits', 'activities', 'sales_targets', 'audit_logs',
   'task_priorities', 'task_statuses', 'project_stages', 'visit_purposes', 'visit_statuses',
   'activity_types', 'customer_types', 'customer_statuses', 'departments', 'positions',
   'permissions', 'role_permissions', 'role_data_scopes'
@@ -3042,6 +3056,142 @@ app.get('/api/projects/:id/next-action', async (req, res) => {
 
     const nextAction = candidates.length > 0 ? candidates[0] : null;
     res.json({ projectId, nextAction, totalPending: candidates.length });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
+// GET /api/customers/:id/summary
+app.get('/api/customers/:id/summary', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const customerId = req.params.id;
+  try {
+    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+    const { where: custWhere, params: custParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'c.picId');
+
+    const [custRows]: any = await pool.query(`
+      SELECT c.*
+      FROM customers c
+      ${custWhere.replace(/WHERE tenantId/g, 'WHERE c.tenantId')}
+      AND c.id = ?
+    `, [...custParams, customerId]);
+
+    if (custRows.length === 0) {
+      return res.status(404).json({ error: 'Customer not found or access denied.' });
+    }
+    const customer = custRows[0];
+
+    const [contacts]: any = await pool.query('SELECT * FROM customer_contacts WHERE customerId = ? ORDER BY isPrimary DESC, createdAt ASC', [customerId]);
+    const [projects]: any = await pool.query('SELECT * FROM projects WHERE customerId = ? ORDER BY createdAt DESC', [customerId]);
+    const [tasks]: any = await pool.query('SELECT * FROM tasks WHERE customerId = ? ORDER BY dueDate ASC', [customerId]);
+    const [visits]: any = await pool.query('SELECT * FROM visits WHERE customerId = ? ORDER BY visitDate DESC', [customerId]);
+    const [followups]: any = await pool.query('SELECT * FROM follow_ups WHERE customerId = ? ORDER BY followUpDate DESC', [customerId]);
+    const [activities]: any = await pool.query('SELECT * FROM activities WHERE customerId = ? ORDER BY occurredAt DESC LIMIT 20', [customerId]);
+
+    const activeProjects = projects.filter((p: any) => !['WON', 'LOST'].includes(p.stageId));
+    const wonProjects = projects.filter((p: any) => p.stageId === 'WON');
+    const lostProjects = projects.filter((p: any) => p.stageId === 'LOST');
+    const pipelineValue = activeProjects.reduce((acc: number, curr: any) => acc + (Number(curr.value) || 0), 0);
+
+    const openTasks = tasks.filter((t: any) => !['COMPLETED', 'CANCELLED'].includes(t.statusId)).length;
+    const completedTasks = tasks.filter((t: any) => t.statusId === 'COMPLETED').length;
+    const pendingFollowups = followups.filter((f: any) => !['COMPLETED', 'CANCELLED'].includes(f.status)).length;
+    const totalVisits = visits.length;
+
+    // Calculate authoritative last interaction
+    let lastInteractionAt: string | null = customer.lastVisitAt ? getBusinessDate(customer.lastVisitAt) : null;
+    if (activities.length > 0 && activities[0].occurredAt) {
+      const actDate = getBusinessDate(activities[0].occurredAt);
+      if (actDate && (!lastInteractionAt || actDate > lastInteractionAt)) {
+        lastInteractionAt = actDate;
+      }
+    }
+
+    res.json({
+      customer,
+      contacts,
+      primaryContact: contacts.find((c: any) => c.isPrimary) || contacts[0] || null,
+      projectsSummary: {
+        total: projects.length,
+        active: activeProjects.length,
+        won: wonProjects.length,
+        lost: lostProjects.length,
+        pipelineValue
+      },
+      workOverview: {
+        totalVisits,
+        openTasks,
+        completedTasks,
+        pendingFollowups
+      },
+      lastInteractionAt,
+      projects,
+      tasks: tasks.slice(0, 10),
+      visits: visits.slice(0, 10),
+      followups: followups.slice(0, 10),
+      activities
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
+// GET /api/projects/:id/summary
+app.get('/api/projects/:id/summary', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const projectId = req.params.id;
+  try {
+    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+    const { where: projWhere, params: projParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'p.picId');
+
+    const [projRows]: any = await pool.query(`
+      SELECT p.*, c.name as customerName, c.code as customerCode, c.industry as customerIndustry
+      FROM projects p
+      LEFT JOIN customers c ON c.id = p.customerId
+      ${projWhere.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
+      AND p.id = ?
+    `, [...projParams, projectId]);
+
+    if (projRows.length === 0) {
+      return res.status(404).json({ error: 'Project not found or access denied.' });
+    }
+    const project = projRows[0];
+
+    const [tasks]: any = await pool.query('SELECT * FROM tasks WHERE relatedProjectId = ? ORDER BY dueDate ASC', [projectId]);
+    const [visits]: any = await pool.query('SELECT * FROM visits WHERE relatedProjectId = ? ORDER BY visitDate DESC', [projectId]);
+    const [followups]: any = await pool.query('SELECT * FROM follow_ups WHERE relatedProjectId = ? ORDER BY followUpDate DESC', [projectId]);
+    const [stageHistories]: any = await pool.query('SELECT * FROM project_stage_histories WHERE projectId = ? ORDER BY changedAt DESC', [projectId]);
+    const [activities]: any = await pool.query('SELECT * FROM activities WHERE (entityType = "PROJECT" AND entityId = ?) OR JSON_EXTRACT(metadata, "$.projectId") = ? ORDER BY occurredAt DESC LIMIT 20', [projectId, projectId]);
+
+    res.json({
+      project: {
+        ...project,
+        name: project.title || project.name,
+        title: project.title || project.name,
+        estimatedValue: Number(project.value) || 0,
+        stage: project.stageId,
+        expectedCloseDate: project.expectedCloseDate || project.expectedClosingDate
+      },
+      stageHistories,
+      tasks: tasks.slice(0, 10),
+      visits: visits.slice(0, 10),
+      followups: followups.slice(0, 10),
+      activities
+    });
   } catch (err: any) {
     res.status(500).json({ error: 'Internal Server Error', message: err.message });
   }

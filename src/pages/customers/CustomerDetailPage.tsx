@@ -360,18 +360,20 @@ export const CustomerDetailPage: React.FC = () => {
   const [tasksList, setTasksList] = useState<Task[]>([]);
   const [oppsList, setOppsList] = useState<Project[]>([]);
   const [activitiesList, setActivitiesList] = useState<Activity[]>([]);
+  const [contactsList, setContactsList] = useState<CustomerContact[]>([]);
   const [tenantUsers, setTenantUsers] = useState<User[]>([]);
 
   const loadAllCustomerData = async () => {
     if (!id) return;
     try {
-      const [custData, vList, tList, fList, pList, aList, uList, naRes] = await Promise.all([
+      const [custData, vList, tList, fList, pList, aList, cList, uList, naRes] = await Promise.all([
         crmApi.fetchRecordById<Customer>('customers', id),
         crmApi.fetchCollection<Visit>('visits', tenantId),
         crmApi.fetchCollection<Task>('tasks', tenantId),
         crmApi.fetchCollection<FollowUp>('follow_ups', tenantId),
         crmApi.fetchCollection<Project>('projects', tenantId),
         crmApi.fetchCollection<Activity>('activities', tenantId),
+        crmApi.fetchCollection<CustomerContact>('customer_contacts', tenantId),
         usersApi.fetchUsers(tenantId),
         crmApi.fetchCustomerNextAction(id)
       ]);
@@ -394,6 +396,7 @@ export const CustomerDetailPage: React.FC = () => {
       setFollowupsList(fList.filter((f: any) => f.customerId === id));
       setOppsList(pList.filter((p: any) => p.customerId === id));
       setActivitiesList(aList.filter((a: any) => a.customerId === id || a.entityId === id));
+      setContactsList(cList.filter((c: any) => c.customerId === id));
       setTenantUsers(uList || []);
       if (naRes && naRes.nextAction) {
         setCustomerNextAction(naRes.nextAction);
@@ -1754,12 +1757,13 @@ export const CustomerDetailPage: React.FC = () => {
     loadAllCustomerData();
   };
 
-  const primaryContact = customer.contacts?.[0] || {
-    name: 'Hendra Wijaya',
-    position: 'Procurement Director',
-    email: customer.email,
-    phone: customer.phone,
-  };
+  const primaryContact = contactsList.find(c => c.isPrimary) || contactsList[0] || (customer.phone || customer.email ? {
+    name: customer.contactPerson || customer.name || 'Primary Contact',
+    position: 'Main Contact',
+    email: customer.email || '',
+    phone: customer.phone || '',
+    isPrimary: true
+  } : null);
 
   return (
     <div className="space-y-6 font-['Inter',sans-serif]">
@@ -1934,23 +1938,23 @@ export const CustomerDetailPage: React.FC = () => {
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-[#767587] font-medium">Department / Team</span>
-                  <span className="font-semibold text-[#1a1c1c]">{customer.teamName || 'Sales West'}</span>
+                  <span className="font-semibold text-[#1a1c1c]">{customer.teamName || '-'}</span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-[#767587] font-medium">Customer Since</span>
-                  <span className="font-medium text-[#1a1c1c]">{customer.createdAt}</span>
+                  <span className="font-medium text-[#1a1c1c]">{customer.createdAt ? new Date(customer.createdAt).toLocaleDateString('en-GB') : '-'}</span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-[#767587] font-medium">Last Activity</span>
-                  <span className="font-medium text-[#1a1c1c]">{customer.lastVisitAt || 'Recent'}</span>
+                  <span className="font-medium text-[#1a1c1c]">{customer.lastVisitAt ? new Date(customer.lastVisitAt).toLocaleDateString('en-GB') : (lastVisitDate !== '-' ? lastVisitDate : 'None')}</span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-[#767587] font-medium">Next Follow-up</span>
-                  <span className="font-bold text-[#4744e5]">{customer.nextFollowUpAt || '15 Aug 2026'}</span>
+                  <span className="text-[#767587] font-medium">Next Action</span>
+                  <span className="font-bold text-[#4744e5]">{customerNextAction?.actionAt || nextVisitDate || 'None Scheduled'}</span>
                 </div>
                 <div className="pt-2 border-t border-[#E1E1E1]">
                   <span className="text-[#767587] font-medium block mb-1">Location / Region</span>
-                  <span className="text-[#1a1c1c] font-medium">{customer.address} ({customer.region})</span>
+                  <span className="text-[#1a1c1c] font-medium">{customer.address || '-'} {customer.region ? `(${customer.region})` : ''}</span>
                 </div>
               </div>
             </div>
@@ -1992,12 +1996,12 @@ export const CustomerDetailPage: React.FC = () => {
 
               <div className="bg-white p-4 rounded-xl border border-[#E1E1E1] shadow-xs flex flex-col justify-between">
                 <div className="flex items-center justify-between text-[#767587]">
-                  <span className="text-[11px] font-bold uppercase tracking-wider">Active Opps</span>
-                  <span className="material-symbols-outlined text-[20px] text-[#10b981]">monetization_on</span>
+                  <span className="text-[11px] font-bold uppercase tracking-wider">Active Projects</span>
+                  <span className="material-symbols-outlined text-[20px] text-[#10b981]">folder_open</span>
                 </div>
                 <div className="mt-3">
                   <span className="text-2xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">{activeOpps.length}</span>
-                  <p className="text-[10px] text-[#767587] mt-0.5">Deals in pipeline</p>
+                  <p className="text-[10px] text-[#767587] mt-0.5">Projects in pipeline</p>
                 </div>
               </div>
 
@@ -2018,7 +2022,7 @@ export const CustomerDetailPage: React.FC = () => {
                   onClick={() => setShowOppModal(true)}
                   className="px-3.5 py-2 bg-white text-[#4744e5] font-bold text-xs rounded-lg hover:bg-opacity-90 transition-colors shadow-xs cursor-pointer whitespace-nowrap"
                 >
-                  + Add Deal
+                  + Add Project
                 </button>
               </div>
             </div>
@@ -2031,42 +2035,54 @@ export const CustomerDetailPage: React.FC = () => {
                 <span className="material-symbols-outlined text-[18px] text-[#4744e5]">contacts</span>
                 <span>Main Contact Person</span>
               </h2>
-              <span className="px-2 py-0.5 bg-[#4744e5]/10 text-[#4744e5] text-[10px] font-bold rounded">
-                Primary Contact
-              </span>
+              {primaryContact && (
+                <span className="px-2 py-0.5 bg-[#4744e5]/10 text-[#4744e5] text-[10px] font-bold rounded">
+                  Primary Contact
+                </span>
+              )}
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
-              <div className="space-y-1">
-                <span className="text-base font-bold text-[#1a1c1c] block">{primaryContact.name}</span>
-                <span className="text-xs text-[#767587] font-medium block">{primaryContact.position}</span>
-                <span className="text-xs text-[#464555] block font-mono">{primaryContact.phone}</span>
-                <span className="text-xs text-[#4744e5] block font-semibold">{primaryContact.email}</span>
-              </div>
+            {primaryContact ? (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+                <div className="space-y-1">
+                  <span className="text-base font-bold text-[#1a1c1c] block">{primaryContact.name}</span>
+                  <span className="text-xs text-[#767587] font-medium block">{primaryContact.position || 'Contact'}</span>
+                  {primaryContact.phone && <span className="text-xs text-[#464555] block font-mono">{primaryContact.phone}</span>}
+                  {primaryContact.email && <span className="text-xs text-[#4744e5] block font-semibold">{primaryContact.email}</span>}
+                </div>
 
-              <div className="space-y-1 md:border-l md:border-r border-[#E1E1E1] md:px-4">
-                <span className="text-xs font-bold text-[#1a1c1c] block mb-1">Office Address</span>
-                <p className="text-xs text-[#767587] leading-relaxed">{customer.address}</p>
-                <span className="text-xs text-[#1a1c1c] font-semibold block">{customer.region}</span>
-              </div>
+                <div className="space-y-1 md:border-l md:border-r border-[#E1E1E1] md:px-4">
+                  <span className="text-xs font-bold text-[#1a1c1c] block mb-1">Office Address</span>
+                  <p className="text-xs text-[#767587] leading-relaxed">{customer.address || '-'}</p>
+                  <span className="text-xs text-[#1a1c1c] font-semibold block">{customer.region || '-'}</span>
+                </div>
 
-              <div className="flex flex-wrap md:flex-col gap-2 justify-center">
-                <a
-                  href={`tel:${primaryContact.phone}`}
-                  className="flex-1 md:flex-none px-3 py-1.5 bg-[#f3f3f3] hover:bg-[#e1dfff] text-[#1a1c1c] hover:text-[#09006b] font-bold text-xs rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <span className="material-symbols-outlined text-[16px]">call</span>
-                  <span>Call Contact</span>
-                </a>
-                <a
-                  href={`mailto:${primaryContact.email}`}
-                  className="flex-1 md:flex-none px-3 py-1.5 bg-[#f3f3f3] hover:bg-[#e1dfff] text-[#1a1c1c] hover:text-[#09006b] font-bold text-xs rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <span className="material-symbols-outlined text-[16px]">mail</span>
-                  <span>Send Email</span>
-                </a>
+                <div className="flex flex-wrap md:flex-col gap-2 justify-center">
+                  {primaryContact.phone && (
+                    <a
+                      href={`tel:${primaryContact.phone}`}
+                      className="flex-1 md:flex-none px-3 py-1.5 bg-[#f3f3f3] hover:bg-[#e1dfff] text-[#1a1c1c] hover:text-[#09006b] font-bold text-xs rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">call</span>
+                      <span>Call Contact</span>
+                    </a>
+                  )}
+                  {primaryContact.email && (
+                    <a
+                      href={`mailto:${primaryContact.email}`}
+                      className="flex-1 md:flex-none px-3 py-1.5 bg-[#f3f3f3] hover:bg-[#e1dfff] text-[#1a1c1c] hover:text-[#09006b] font-bold text-xs rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-[16px]">mail</span>
+                      <span>Send Email</span>
+                    </a>
+                  )}
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="text-xs text-slate-500 italic py-2">
+                No contact person registered for this customer account.
+              </div>
+            )}
           </div>
 
           {/* SECTION 3.5 — DATABASE-AUTHORITATIVE NEXT ACTION */}

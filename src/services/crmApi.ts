@@ -182,5 +182,36 @@ export const crmApi = {
       console.error('[crmApi.fetchCustomerReport error]', err);
       return null;
     }
+  },
+
+  // 360 Workspace Summary Fetchers
+  fetchCustomerSummary: async (customerId: string, tenantId?: string): Promise<any> => {
+    try {
+      const params = new URLSearchParams();
+      if (tenantId && tenantId !== 'ALL') params.set('tenantId', tenantId);
+
+      const url = `${API_BASE}/customers/${customerId}/summary${params.toString() ? '?' + params.toString() : ''}`;
+      const res = await fetch(url, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch customer summary`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchCustomerSummary error]', err);
+      return null;
+    }
+  },
+
+  fetchProjectSummary: async (projectId: string, tenantId?: string): Promise<any> => {
+    try {
+      const params = new URLSearchParams();
+      if (tenantId && tenantId !== 'ALL') params.set('tenantId', tenantId);
+
+      const url = `${API_BASE}/projects/${projectId}/summary${params.toString() ? '?' + params.toString() : ''}`;
+      const res = await fetch(url, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch project summary`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchProjectSummary error]', err);
+      return null;
+    }
   }
 };

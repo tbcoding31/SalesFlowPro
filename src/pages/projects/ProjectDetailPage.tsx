@@ -25,9 +25,17 @@ export const ProjectDetailPage: React.FC = () => {
     if (!id) return;
     setIsLoading(true);
     try {
-      const proj = await crmApi.fetchRecordById<Project>('projects', id);
+      const proj: any = await crmApi.fetchRecordById<Project>('projects', id);
       if (proj) {
-        setProject(proj);
+        const normalizedProject: Project = {
+          ...proj,
+          name: proj.name || proj.title || 'Untitled Project',
+          title: proj.title || proj.name || 'Untitled Project',
+          estimatedValue: proj.estimatedValue !== undefined ? Number(proj.estimatedValue) : (proj.value !== undefined ? Number(proj.value) : 0),
+          stage: proj.stage || proj.stageId || 'LEAD',
+          expectedCloseDate: proj.expectedCloseDate || proj.expectedClosingDate || proj.createdAt || new Date().toISOString()
+        };
+        setProject(normalizedProject);
         if (proj.customerId) {
           const cust = await crmApi.fetchRecordById<Customer>('customers', proj.customerId);
           if (cust) setCustomer(cust);
@@ -152,7 +160,7 @@ export const ProjectDetailPage: React.FC = () => {
               <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">Customer</div>
               <div className="font-semibold text-indigo-600 flex items-center gap-1">
                 <span className="material-symbols-outlined text-[16px]">domain</span>
-                {project.customerName}
+                {customer?.name || project.customerName || 'Customer Account'}
               </div>
             </div>
             <div>
@@ -165,13 +173,13 @@ export const ProjectDetailPage: React.FC = () => {
               <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">PIC</div>
               <div className="flex items-center gap-2">
                 {project.picAvatar ? (
-                  <img src={project.picAvatar} alt={project.picName} className="w-6 h-6 rounded-full object-cover border border-slate-200" />
+                  <img src={project.picAvatar} alt={project.picName || 'PIC'} className="w-6 h-6 rounded-full object-cover border border-slate-200" />
                 ) : (
                   <div className="w-6 h-6 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-[10px] font-bold border border-slate-300">
-                    {project.picName.charAt(0)}
+                    {(project.picName || 'P').charAt(0)}
                   </div>
                 )}
-                <span className="text-sm font-semibold text-slate-700">{project.picName}</span>
+                <span className="text-sm font-semibold text-slate-700">{project.picName || 'Assigned PIC'}</span>
               </div>
             </div>
             <div>
