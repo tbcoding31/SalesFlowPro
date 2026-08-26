@@ -2580,22 +2580,35 @@ app.patch('/api/projects/:id/stage', async (req, res) => {
   }
 });
 
-// Shared Timezone-Aware Business Date Helper (Asia/Jakarta / WIB, UTC+7)
+// Authoritative Timezone-Aware Business Date Helper (Asia/Jakarta / WIB, UTC+7)
 export const getBusinessDate = (dateOrVal: any = new Date(), timeZone = 'Asia/Jakarta'): string | null => {
   if (!dateOrVal) return null;
+
   if (typeof dateOrVal === 'string') {
-    // If already in YYYY-MM-DD format, return the date slice
-    if (/^\d{4}-\d{2}-\d{2}$/.test(dateOrVal)) return dateOrVal;
-    // If ISO timestamp string or MySQL datetime string, parse to date object
-    const parsed = new Date(dateOrVal);
+    const trimmed = dateOrVal.trim();
+    // A. Plain DATE string: YYYY-MM-DD (Preserve without timezone shift)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      return trimmed;
+    }
+
+    // B. MySQL DATETIME without timezone: 'YYYY-MM-DD HH:mm:ss' (Interpreted explicitly as Asia/Jakarta wall-clock time)
+    const mysqlDateTimeMatch = /^(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/.exec(trimmed);
+    if (mysqlDateTimeMatch) {
+      return mysqlDateTimeMatch[1];
+    }
+
+    // C. ISO Timestamp with timezone: 'YYYY-MM-DDTHH:mm:ss...Z' or with offset
+    const parsed = new Date(trimmed);
     if (!isNaN(parsed.getTime())) {
       dateOrVal = parsed;
     } else {
-      return dateOrVal.slice(0, 10);
+      return null;
     }
   }
 
+  // D. JavaScript Date: Format strictly according to specified timeZone (Asia/Jakarta)
   if (dateOrVal instanceof Date) {
+    if (isNaN(dateOrVal.getTime())) return null;
     const formatter = new Intl.DateTimeFormat('en-CA', {
       timeZone,
       year: 'numeric',
@@ -2604,7 +2617,8 @@ export const getBusinessDate = (dateOrVal: any = new Date(), timeZone = 'Asia/Ja
     });
     return formatter.format(dateOrVal);
   }
-  return String(dateOrVal).slice(0, 10);
+
+  return null;
 };
 
 // ==========================================
