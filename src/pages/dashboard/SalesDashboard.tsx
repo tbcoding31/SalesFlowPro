@@ -203,7 +203,7 @@ export const SalesDashboard: React.FC = () => {
               {stalledProjects.length}
             </span>
             <span className="text-xs text-[#9a4600] font-bold">
-              Open Deals
+              Open Projects
             </span>
           </div>
           <div className="text-[11px] text-[#767587] mt-1">
@@ -322,7 +322,7 @@ export const SalesDashboard: React.FC = () => {
                         <span className="font-bold text-xs text-[#1a1c1c]">{item.title}</span>
                       </div>
                       <span className="text-[11px] text-[#4744e5] font-bold block mt-1">
-                        {item.customerName} {item.projectName ? `• Deal: ${item.projectName}` : ''}
+                        {item.customerName} {item.projectName ? `• Project: ${item.projectName}` : ''}
                       </span>
                     </div>
                     {item.startTime ? (

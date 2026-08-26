@@ -1071,13 +1071,21 @@ const setupEndpoint = (table: string) => {
           );
         }
 
-        // Domain Activity Emission on specific PUT mutations
+        // Domain Activity Emission and completion timestamp handling on specific PUT mutations
         const targetTenant = actorTenant !== 'SYSTEM' ? actorTenant : (data.tenantId || 'SYSTEM');
-        if (table === 'visits' && (data.statusId === 'COMPLETED' || data.status === 'COMPLETED')) {
+        const nowFormatted = new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+        if (table === 'tasks' && (data.statusId === 'COMPLETED' || data.status === 'COMPLETED')) {
+          if (!data.completedAt) {
+            await connection.query('UPDATE tasks SET completedAt = ? WHERE id = ?', [nowFormatted, id]);
+          }
+        } else if (table === 'visits' && (data.statusId === 'COMPLETED' || data.status === 'COMPLETED')) {
+          if (!data.completedAt) {
+            await connection.query('UPDATE visits SET completedAt = ? WHERE id = ?', [nowFormatted, id]);
+          }
           const [vRows]: any = await connection.query('SELECT customerId, title, result, nextAction FROM visits WHERE id = ?', [id]);
           if (vRows.length > 0) {
             const v = vRows[0];
-            const nowFormatted = new Date().toISOString().slice(0, 19).replace('T', ' ');
             // 1. Record Visit Completed activity
             await recordBusinessActivity(connection, {
               tenantId: targetTenant,
@@ -1096,6 +1104,9 @@ const setupEndpoint = (table: string) => {
             }
           }
         } else if (table === 'follow_ups' && (data.status === 'COMPLETED' || data.statusId === 'COMPLETED')) {
+          if (!data.completedAt) {
+            await connection.query('UPDATE follow_ups SET completedAt = ? WHERE id = ?', [nowFormatted, id]);
+          }
           const [fRows]: any = await connection.query('SELECT customerId, title, outcome, notes FROM follow_ups WHERE id = ?', [id]);
           if (fRows.length > 0) {
             const f = fRows[0];
@@ -2614,7 +2625,7 @@ app.get(['/api/sales/agenda', '/api/agenda'], async (req, res) => {
       SELECT 
         v.id, v.title, v.customerId, v.relatedProjectId, v.purposeId as purpose,
         v.statusId as status, v.visitDate, v.startTime, v.endTime, v.location,
-        v.result, v.nextAction, v.picId,
+        v.result, v.nextAction, v.picId, v.completedAt,
         c.name as customerName, c.code as customerCode,
         p.title as projectName, p.stageId as projectStage,
         u.name as picName, u.avatar as picAvatar
@@ -2689,7 +2700,7 @@ app.get(['/api/sales/agenda', '/api/agenda'], async (req, res) => {
       };
 
       if (isCompleted) {
-        if (completedDate === todayStr || actionDate === todayStr) {
+        if (completedDate === todayStr) {
           completedToday.push(item);
         }
       } else if (actionDate) {
@@ -2707,6 +2718,7 @@ app.get(['/api/sales/agenda', '/api/agenda'], async (req, res) => {
     visitRows.forEach((v: any) => {
       const isCompleted = v.status === 'COMPLETED' || v.status === 'CANCELLED';
       const actionDate = toLocalDateStr(v.visitDate);
+      const completedDate = toLocalDateStr(v.completedAt);
 
       const item = {
         id: v.id,
@@ -2733,7 +2745,7 @@ app.get(['/api/sales/agenda', '/api/agenda'], async (req, res) => {
       };
 
       if (isCompleted) {
-        if (actionDate === todayStr) {
+        if (completedDate === todayStr) {
           completedToday.push(item);
         }
       } else if (actionDate) {
@@ -2775,7 +2787,7 @@ app.get(['/api/sales/agenda', '/api/agenda'], async (req, res) => {
       };
 
       if (isCompleted) {
-        if (completedDate === todayStr || actionDate === todayStr) {
+        if (completedDate === todayStr) {
           completedToday.push(item);
         }
       } else if (actionDate) {
@@ -2868,18 +2880,26 @@ app.get(['/api/sales/agenda', '/api/agenda'], async (req, res) => {
 app.get('/api/customers/:id/next-action', async (req, res) => {
   const actorRole = (req as any).userRole;
   const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
   const isPlatformUser = (req as any).isPlatformUser;
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
   const customerId = req.params.id;
   try {
-    const [custRows]: any = await pool.query('SELECT id, tenantId, name FROM customers WHERE id = ?', [customerId]);
-    if (custRows.length === 0) return res.status(404).json({ error: 'Customer not found' });
-    if (actorTenant && actorTenant !== 'SYSTEM' && custRows[0].tenantId !== actorTenant) {
-      return res.status(403).json({ error: 'Forbidden' });
-    }
+    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+    const { where: custWhere, params: custParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'c.picId');
 
-    const todayStr = new Date().toISOString().split('T')[0];
+    const [custRows]: any = await pool.query(`
+      SELECT c.id, c.tenantId, c.name, c.picId FROM customers c
+      ${custWhere.replace(/WHERE tenantId/g, 'WHERE c.tenantId')}
+      AND c.id = ?
+    `, [...custParams, customerId]);
+
+    if (custRows.length === 0) {
+      return res.status(404).json({ error: 'Customer not found or access denied.' });
+    }
 
     const toLocalDateStr = (val: any) => {
       if (!val) return null;
@@ -2894,25 +2914,38 @@ app.get('/api/customers/:id/next-action', async (req, res) => {
     };
 
     const [tasks]: any = await pool.query(
-      'SELECT id, title, dueDate as actionDate, priorityId as priority, statusId as status FROM tasks WHERE customerId = ? AND statusId NOT IN ("COMPLETED", "CANCELLED") ORDER BY dueDate ASC LIMIT 5',
+      'SELECT id, title, dueDate as actionDate, priorityId as priority, statusId as status, createdAt FROM tasks WHERE customerId = ? AND statusId NOT IN ("COMPLETED", "CANCELLED") ORDER BY dueDate ASC LIMIT 10',
       [customerId]
     );
     const [visits]: any = await pool.query(
-      'SELECT id, title, visitDate as actionDate, startTime, purposeId as purpose, statusId as status FROM visits WHERE customerId = ? AND statusId NOT IN ("COMPLETED", "CANCELLED") ORDER BY visitDate ASC LIMIT 5',
+      'SELECT id, title, visitDate as actionDate, startTime, endTime, purposeId as purpose, statusId as status, createdAt FROM visits WHERE customerId = ? AND statusId NOT IN ("COMPLETED", "CANCELLED") ORDER BY visitDate ASC LIMIT 10',
       [customerId]
     );
     const [followups]: any = await pool.query(
-      'SELECT id, title, followUpDate as actionDate, priorityId as priority, status FROM follow_ups WHERE customerId = ? AND status NOT IN ("COMPLETED", "CANCELLED") ORDER BY followUpDate ASC LIMIT 5',
+      'SELECT id, title, followUpDate as actionDate, priorityId as priority, status, createdAt FROM follow_ups WHERE customerId = ? AND status NOT IN ("COMPLETED", "CANCELLED") ORDER BY followUpDate ASC LIMIT 10',
       [customerId]
     );
 
     const candidates: any[] = [
-      ...tasks.map((t: any) => ({ ...t, type: 'TASK', actionAt: toLocalDateStr(t.actionDate) })),
-      ...visits.map((v: any) => ({ ...v, type: 'VISIT', actionAt: toLocalDateStr(v.actionDate) })),
-      ...followups.map((f: any) => ({ ...f, type: 'FOLLOW_UP', actionAt: toLocalDateStr(f.actionDate) }))
+      ...tasks.map((t: any) => ({ ...t, type: 'TASK', actionAt: toLocalDateStr(t.actionDate), time: '23:59' })),
+      ...visits.map((v: any) => ({ ...v, type: 'VISIT', actionAt: toLocalDateStr(v.actionDate), time: v.startTime || '00:00' })),
+      ...followups.map((f: any) => ({ ...f, type: 'FOLLOW_UP', actionAt: toLocalDateStr(f.actionDate), time: '12:00' }))
     ].filter(i => i.actionAt);
 
-    candidates.sort((a, b) => (a.actionAt || '').localeCompare(b.actionAt || ''));
+    const priorityWeight: Record<string, number> = { 'URGENT': 1, 'HIGH': 2, 'NORMAL': 3, 'MEDIUM': 3, 'LOW': 4 };
+    const typeWeight: Record<string, number> = { 'VISIT': 1, 'FOLLOW_UP': 2, 'TASK': 3 };
+
+    candidates.sort((a, b) => {
+      if (a.actionAt !== b.actionAt) return (a.actionAt || '').localeCompare(b.actionAt || '');
+      if (a.time !== b.time) return (a.time || '').localeCompare(b.time || '');
+      const pA = priorityWeight[a.priority] || 5;
+      const pB = priorityWeight[b.priority] || 5;
+      if (pA !== pB) return pA - pB;
+      const tA = typeWeight[a.type] || 5;
+      const tB = typeWeight[b.type] || 5;
+      if (tA !== tB) return tA - tB;
+      return (a.id || '').localeCompare(b.id || '');
+    });
 
     const nextAction = candidates.length > 0 ? candidates[0] : null;
     res.json({ customerId, nextAction, totalPending: candidates.length });
@@ -2925,15 +2958,25 @@ app.get('/api/customers/:id/next-action', async (req, res) => {
 app.get('/api/projects/:id/next-action', async (req, res) => {
   const actorRole = (req as any).userRole;
   const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
   const isPlatformUser = (req as any).isPlatformUser;
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
   const projectId = req.params.id;
   try {
-    const [projRows]: any = await pool.query('SELECT id, tenantId, title FROM projects WHERE id = ?', [projectId]);
-    if (projRows.length === 0) return res.status(404).json({ error: 'Project not found' });
-    if (actorTenant && actorTenant !== 'SYSTEM' && projRows[0].tenantId !== actorTenant) {
-      return res.status(403).json({ error: 'Forbidden' });
+    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+    const { where: projWhere, params: projParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'p.picId');
+
+    const [projRows]: any = await pool.query(`
+      SELECT p.id, p.tenantId, p.title, p.picId FROM projects p
+      ${projWhere.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
+      AND p.id = ?
+    `, [...projParams, projectId]);
+
+    if (projRows.length === 0) {
+      return res.status(404).json({ error: 'Project not found or access denied.' });
     }
 
     const toLocalDateStr = (val: any) => {
@@ -2949,25 +2992,38 @@ app.get('/api/projects/:id/next-action', async (req, res) => {
     };
 
     const [tasks]: any = await pool.query(
-      'SELECT id, title, dueDate as actionDate, priorityId as priority, statusId as status FROM tasks WHERE relatedProjectId = ? AND statusId NOT IN ("COMPLETED", "CANCELLED") ORDER BY dueDate ASC LIMIT 5',
+      'SELECT id, title, dueDate as actionDate, priorityId as priority, statusId as status, createdAt FROM tasks WHERE relatedProjectId = ? AND statusId NOT IN ("COMPLETED", "CANCELLED") ORDER BY dueDate ASC LIMIT 10',
       [projectId]
     );
     const [visits]: any = await pool.query(
-      'SELECT id, title, visitDate as actionDate, startTime, purposeId as purpose, statusId as status FROM visits WHERE relatedProjectId = ? AND statusId NOT IN ("COMPLETED", "CANCELLED") ORDER BY visitDate ASC LIMIT 5',
+      'SELECT id, title, visitDate as actionDate, startTime, endTime, purposeId as purpose, statusId as status, createdAt FROM visits WHERE relatedProjectId = ? AND statusId NOT IN ("COMPLETED", "CANCELLED") ORDER BY visitDate ASC LIMIT 10',
       [projectId]
     );
     const [followups]: any = await pool.query(
-      'SELECT id, title, followUpDate as actionDate, priorityId as priority, status FROM follow_ups WHERE relatedProjectId = ? AND status NOT IN ("COMPLETED", "CANCELLED") ORDER BY followUpDate ASC LIMIT 5',
+      'SELECT id, title, followUpDate as actionDate, priorityId as priority, status, createdAt FROM follow_ups WHERE relatedProjectId = ? AND status NOT IN ("COMPLETED", "CANCELLED") ORDER BY followUpDate ASC LIMIT 10',
       [projectId]
     );
 
     const candidates: any[] = [
-      ...tasks.map((t: any) => ({ ...t, type: 'TASK', actionAt: toLocalDateStr(t.actionDate) })),
-      ...visits.map((v: any) => ({ ...v, type: 'VISIT', actionAt: toLocalDateStr(v.actionDate) })),
-      ...followups.map((f: any) => ({ ...f, type: 'FOLLOW_UP', actionAt: toLocalDateStr(f.actionDate) }))
+      ...tasks.map((t: any) => ({ ...t, type: 'TASK', actionAt: toLocalDateStr(t.actionDate), time: '23:59' })),
+      ...visits.map((v: any) => ({ ...v, type: 'VISIT', actionAt: toLocalDateStr(v.actionDate), time: v.startTime || '00:00' })),
+      ...followups.map((f: any) => ({ ...f, type: 'FOLLOW_UP', actionAt: toLocalDateStr(f.actionDate), time: '12:00' }))
     ].filter(i => i.actionAt);
 
-    candidates.sort((a, b) => (a.actionAt || '').localeCompare(b.actionAt || ''));
+    const priorityWeight: Record<string, number> = { 'URGENT': 1, 'HIGH': 2, 'NORMAL': 3, 'MEDIUM': 3, 'LOW': 4 };
+    const typeWeight: Record<string, number> = { 'VISIT': 1, 'FOLLOW_UP': 2, 'TASK': 3 };
+
+    candidates.sort((a, b) => {
+      if (a.actionAt !== b.actionAt) return (a.actionAt || '').localeCompare(b.actionAt || '');
+      if (a.time !== b.time) return (a.time || '').localeCompare(b.time || '');
+      const pA = priorityWeight[a.priority] || 5;
+      const pB = priorityWeight[b.priority] || 5;
+      if (pA !== pB) return pA - pB;
+      const tA = typeWeight[a.type] || 5;
+      const tB = typeWeight[b.type] || 5;
+      if (tA !== tB) return tA - tB;
+      return (a.id || '').localeCompare(b.id || '');
+    });
 
     const nextAction = candidates.length > 0 ? candidates[0] : null;
     res.json({ projectId, nextAction, totalPending: candidates.length });
