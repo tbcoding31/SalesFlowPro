@@ -379,3 +379,39 @@ export interface RolePermissions {
     moveStage?: boolean;
   }[];
 }
+
+export type CadenceActionType = 'VISIT' | 'FOLLOW_UP' | 'TASK';
+export type CadenceFrequencyUnit = 'DAY' | 'WEEK' | 'MONTH';
+export type CadenceStatus = 'ACTIVE' | 'PAUSED';
+export type CadenceExecutionHealth = 'IN_FLIGHT' | 'READY_TO_GENERATE' | 'BLOCKED_INVALID_PIC' | 'ACTION_CANCELLED' | 'PAUSED';
+
+export interface MaintenanceCadence {
+  id: string;
+  tenantId: string;
+  customerId?: string | null;
+  customerName?: string;
+  customerCode?: string;
+  projectId?: string | null;
+  projectName?: string;
+  actionType: CadenceActionType;
+  actionTypeDetails?: string;
+  frequencyUnit: CadenceFrequencyUnit;
+  frequencyInterval: number;
+  title?: string;
+  notes?: string;
+  startDate: string;
+  nextDueAt: string;
+  status: CadenceStatus;
+  lastGeneratedActionId?: string | null;
+  lastGeneratedActionType?: string | null;
+  lastOccurrenceIndex: number;
+  lastCompletedAt?: string | null;
+  createdById?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  // Derived metadata for UI
+  executionHealth?: CadenceExecutionHealth;
+  picId?: string;
+  picName?: string;
+}
+

@@ -213,5 +213,63 @@ export const crmApi = {
       console.error('[crmApi.fetchProjectSummary error]', err);
       return null;
     }
+  },
+
+  // Maintenance Cadence APIs
+  fetchCadences: async (filters: { customerId?: string; projectId?: string; tenantId?: string }): Promise<any[]> => {
+    try {
+      const params = new URLSearchParams();
+      if (filters.tenantId && filters.tenantId !== 'ALL') params.set('tenantId', filters.tenantId);
+      if (filters.customerId) params.set('customerId', filters.customerId);
+      if (filters.projectId) params.set('projectId', filters.projectId);
+
+      const url = `${API_BASE}/maintenance_cadences${params.toString() ? '?' + params.toString() : ''}`;
+      const res = await fetch(url, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch cadences`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchCadences error]', err);
+      return [];
+    }
+  },
+
+  createCadence: async (cadenceData: any): Promise<any> => {
+    const res = await fetch(`${API_BASE}/maintenance_cadences`, {
+      method: 'POST',
+      headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(cadenceData)
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.error || `HTTP ${res.status}: Failed to create cadence`);
+    }
+    return await res.json();
+  },
+
+  updateCadence: async (id: string, cadenceData: any): Promise<any> => {
+    const res = await fetch(`${API_BASE}/maintenance_cadences/${id}`, {
+      method: 'PUT',
+      headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(cadenceData)
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.error || `HTTP ${res.status}: Failed to update cadence`);
+    }
+    return await res.json();
+  },
+
+  toggleCadenceStatus: async (id: string, status: 'ACTIVE' | 'PAUSED'): Promise<any> => {
+    const res = await fetch(`${API_BASE}/maintenance_cadences/${id}`, {
+      method: 'PUT',
+      headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status })
+    });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.error || `HTTP ${res.status}: Failed to toggle cadence status`);
+    }
+    return await res.json();
   }
 };
+

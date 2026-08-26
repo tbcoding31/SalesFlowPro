@@ -629,7 +629,8 @@ const sendRes = (res: express.Response, promise: Promise<any>) => {
 const criticalTables = ['users', 'tenant_users', 'tenant_user_roles', 'roles', 'tenants', 'role_permissions', 'role_assignment_policies'];
 const tenantSpecificTables = [
   'users', 'tenant_users', 'roles', 'departments', 'positions',
-  'customers', 'customer_contacts', 'visits', 'tasks', 'projects', 'activities', 'follow_ups', 'sales_targets', 'reports', 'audit_logs', 'notifications'
+  'customers', 'customer_contacts', 'visits', 'tasks', 'projects', 'activities', 'follow_ups', 'sales_targets', 'reports', 'audit_logs', 'notifications',
+  'maintenance_cadences'
 ];
 
 const setupEndpoint = (table: string) => {
@@ -820,6 +821,7 @@ const setupEndpoint = (table: string) => {
     const map: Record<string, { base: string, own: string | null, ownerCol: string | null }> = {
       'customers': { base: 'MANAGE_CUSTOMERS', own: 'MANAGE_OWN_CUSTOMERS', ownerCol: 'picId' },
       'customer_contacts': { base: 'MANAGE_CUSTOMERS', own: 'MANAGE_OWN_CUSTOMERS', ownerCol: null },
+      'maintenance_cadences': { base: 'MANAGE_CUSTOMERS', own: 'MANAGE_OWN_CUSTOMERS', ownerCol: null },
       'projects': { base: 'MANAGE_PROJECTS', own: 'MANAGE_OWN_PROJECTS', ownerCol: 'picId' },
       'tasks': { base: 'MANAGE_TASKS', own: 'MANAGE_OWN_TASKS', ownerCol: 'picId' },
       'visits': { base: 'MANAGE_TASKS', own: 'MANAGE_OWN_TASKS', ownerCol: 'picId' },
@@ -930,6 +932,85 @@ const setupEndpoint = (table: string) => {
         data.passwordHash = await bcrypt.hash(data.passwordHash, salt);
       }
 
+      // Custom logic for maintenance_cadences creation
+      if (table === 'maintenance_cadences') {
+        const targetTenant = data.tenantId || actorTenant;
+        // Exactly one target invariant
+        if ((!data.customerId && !data.projectId) || (data.customerId && data.projectId)) {
+          return res.status(400).json({ error: 'Maintenance Cadence must target exactly one Customer or Project.', code: 'INVALID_CADENCE_TARGET' });
+        }
+        if (!data.id) data.id = `CAD-${Date.now()}-${Math.random().toString(36).slice(-4)}`;
+        if (!data.startDate) data.startDate = getBusinessDate(new Date())!;
+        if (!data.nextDueAt) data.nextDueAt = data.startDate;
+        if (!data.status) data.status = 'ACTIVE';
+        if (!data.frequencyInterval || data.frequencyInterval < 1) data.frequencyInterval = 1;
+        data.createdById = actorUserId;
+        data.createdAt = new Date().toISOString().slice(0, 19).replace('T', ' ');
+        data.updatedAt = data.createdAt;
+
+        // Transaction for cadence + initial occurrence creation
+        const connection = await pool.getConnection();
+        await connection.beginTransaction();
+        try {
+          // Validate parent resource and scope
+          if (data.customerId) {
+            const [custs]: any = await connection.query('SELECT * FROM customers WHERE id = ?', [data.customerId]);
+            if (custs.length === 0) {
+              await connection.rollback();
+              return res.status(404).json({ error: 'Referenced customer does not exist.', code: 'CUSTOMER_NOT_FOUND' });
+            }
+            if (targetTenant !== 'SYSTEM' && custs[0].tenantId !== targetTenant) {
+              await connection.rollback();
+              return res.status(403).json({ error: 'Cross-tenant customer reference forbidden.', code: 'CROSS_TENANT_CUSTOMER' });
+            }
+            if (authZ.restrictToOwn && custs[0].picId !== actorUserId) {
+              await connection.rollback();
+              return res.status(403).json({ error: 'Forbidden. You do not own this customer.' });
+            }
+          } else if (data.projectId) {
+            const [projs]: any = await connection.query('SELECT * FROM projects WHERE id = ?', [data.projectId]);
+            if (projs.length === 0) {
+              await connection.rollback();
+              return res.status(404).json({ error: 'Referenced project does not exist.', code: 'PROJECT_NOT_FOUND' });
+            }
+            if (targetTenant !== 'SYSTEM' && projs[0].tenantId !== targetTenant) {
+              await connection.rollback();
+              return res.status(403).json({ error: 'Cross-tenant project reference forbidden.', code: 'CROSS_TENANT_PROJECT' });
+            }
+            if (authZ.restrictToOwn && projs[0].picId !== actorUserId) {
+              await connection.rollback();
+              return res.status(403).json({ error: 'Forbidden. You do not own this project.' });
+            }
+          }
+
+          // Insert cadence
+          const keys = Object.keys(data);
+          const values = Object.values(data);
+          const escapedKeys = keys.map(k => mysql.escapeId(k));
+          await connection.query(`INSERT INTO maintenance_cadences (${escapedKeys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`, values);
+
+          // If ACTIVE, generate the first canonical occurrence
+          if (data.status === 'ACTIVE') {
+            const genRes = await generateNextCadenceOccurrence(connection, data, data.nextDueAt, actorUserId);
+            if (!genRes.success) {
+              await connection.rollback();
+              return res.status(400).json({ error: genRes.error || 'Failed to generate initial cadence occurrence', code: genRes.code });
+            }
+            data.lastGeneratedActionId = genRes.actionId;
+            data.lastGeneratedActionType = genRes.actionType;
+            data.lastOccurrenceIndex = genRes.occurrenceIndex;
+          }
+
+          await connection.commit();
+          return res.json({ success: true, data });
+        } catch (err: any) {
+          await connection.rollback();
+          throw err;
+        } finally {
+          connection.release();
+        }
+      }
+
       const keys = Object.keys(data);
       const values = Object.values(data);
       const placeholders = keys.map(() => '?').join(', ');
@@ -968,7 +1049,7 @@ const setupEndpoint = (table: string) => {
       res.json({ success: true, data });
     } catch (err: any) {
       console.error(`Error POST ${table}:`, err.message);
-      res.status(500).json({ error: 'Internal Server Error' });
+      res.status(500).json({ error: 'Internal Server Error', message: err.message });
     }
   });
 
@@ -993,13 +1074,18 @@ const setupEndpoint = (table: string) => {
       const id = req.params.id;
       const data = req.body;
       
+      let existing: any[] = [];
+      if (tenantSpecificTables.includes(table) || criticalTables.includes(table)) {
+        const [rows]: any = await pool.query(`SELECT * FROM ${table} WHERE id = ?`, [id]);
+        existing = rows;
+      }
+      
       // Ownership check for BOLA protection
       if (table === 'tenants' && actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM') {
         if (id !== actorTenant) {
           return res.status(403).json({ error: 'Cross-tenant mutation forbidden (BOLA).' });
         }
       } else if (tenantSpecificTables.includes(table) && actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM') {
-        const [existing]: any = await pool.query(`SELECT * FROM ${table} WHERE id = ?`, [id]);
         if (existing.length === 0) {
           return res.status(404).json({ error: 'Record not found' });
         }
@@ -1137,6 +1223,78 @@ const setupEndpoint = (table: string) => {
             });
           }
         }
+        // R42: Cadence Progression upon operational action completion
+        if (['tasks', 'visits', 'follow_ups'].includes(table) && (data.statusId === 'COMPLETED' || data.status === 'COMPLETED')) {
+          const prevStatus = existing[0].statusId || existing[0].status;
+          // Only trigger if actually transitioning from non-COMPLETED to COMPLETED
+          if (prevStatus !== 'COMPLETED') {
+            const cadenceId = existing[0].maintenanceCadenceId;
+            if (cadenceId) {
+              // 1. Lock cadence row
+              const [cadenceRows]: any = await connection.query('SELECT * FROM maintenance_cadences WHERE id = ? FOR UPDATE', [cadenceId]);
+              if (cadenceRows.length > 0) {
+                const cadence = cadenceRows[0];
+                const actionOccurrence = existing[0].cadenceOccurrenceIndex;
+                
+                // Only advance if cadence is ACTIVE and this occurrence has not already been surpassed
+                if (cadence.status === 'ACTIVE' && (!cadence.lastCompletedOccurrenceIndex || actionOccurrence >= cadence.lastCompletedOccurrenceIndex)) {
+                  const compDateStr = getBusinessDate(nowFormatted)!;
+                  const nextDueStr = computeNextCadenceDate(compDateStr, cadence.frequencyUnit, cadence.frequencyInterval);
+                  
+                  // Update cadence completion record
+                  await connection.query(`
+                    UPDATE maintenance_cadences 
+                    SET lastCompletedAt = ?, lastCompletedOccurrenceIndex = ?, nextDueAt = ?, updatedAt = NOW()
+                    WHERE id = ?
+                  `, [nowFormatted, actionOccurrence, nextDueStr, cadence.id]);
+
+                  // Generate the next single canonical occurrence
+                  await generateNextCadenceOccurrence(connection, cadence, nextDueStr, actorUserId);
+                }
+              }
+            }
+          }
+        }
+
+        // R42: Customer Lifecycle Hook: If Customer status becomes INACTIVE, pause all active Customer-specific cadences
+        if (table === 'customers' && (data.statusId === 'INACTIVE' || data.status === 'INACTIVE')) {
+          await connection.query(`
+            UPDATE maintenance_cadences 
+            SET status = 'PAUSED', updatedAt = NOW()
+            WHERE customerId = ? AND status = 'ACTIVE'
+          `, [id]);
+        }
+
+        // R42: If updating maintenance_cadences status to ACTIVE (Resume), check if next occurrence needs to be generated
+        if (table === 'maintenance_cadences' && data.status === 'ACTIVE') {
+          const [cadRows]: any = await connection.query('SELECT * FROM maintenance_cadences WHERE id = ? FOR UPDATE', [id]);
+          if (cadRows.length > 0) {
+            const cadence = cadRows[0];
+            // Check if an unresolved action already exists
+            let hasActiveOccurrence = false;
+            if (cadence.lastGeneratedActionId && cadence.lastGeneratedActionType) {
+              const actTable = cadence.lastGeneratedActionType === 'VISIT' ? 'visits' : cadence.lastGeneratedActionType === 'FOLLOW_UP' ? 'follow_ups' : 'tasks';
+              const statusCol = actTable === 'follow_ups' ? 'status' : 'statusId';
+              const [openRows]: any = await connection.query(`SELECT id FROM ${actTable} WHERE id = ? AND ${statusCol} NOT IN ('COMPLETED', 'CANCELLED')`, [cadence.lastGeneratedActionId]);
+              if (openRows.length > 0) hasActiveOccurrence = true;
+            }
+
+            if (!hasActiveOccurrence) {
+              const todayStr = getBusinessDate(new Date())!;
+              let targetDue = cadence.nextDueAt;
+              if (cadence.lastCompletedAt) {
+                const compDateStr = getBusinessDate(cadence.lastCompletedAt)!;
+                targetDue = computeNextCadenceDate(compDateStr, cadence.frequencyUnit, cadence.frequencyInterval);
+              } else {
+                targetDue = cadence.startDate;
+              }
+              if (targetDue < todayStr) {
+                targetDue = todayStr;
+              }
+              await generateNextCadenceOccurrence(connection, cadence, targetDue, actorUserId);
+            }
+          }
+        }
 
         await connection.commit();
         if (result.affectedRows === 0) {
@@ -1236,7 +1394,7 @@ const tables = [
   'customers', 'customer_contacts', 'projects', 'tasks', 'visits', 'activities', 'sales_targets', 'audit_logs',
   'task_priorities', 'task_statuses', 'project_stages', 'visit_purposes', 'visit_statuses',
   'activity_types', 'customer_types', 'customer_statuses', 'departments', 'positions',
-  'permissions', 'role_permissions', 'role_data_scopes'
+  'permissions', 'role_permissions', 'role_data_scopes', 'maintenance_cadences'
 ];
 
 
@@ -2561,6 +2719,12 @@ app.patch('/api/projects/:id/stage', async (req, res) => {
     } else if (toStageId === 'LOST') {
       actSubject = 'Project Marked as Lost';
       actDesc = `Project "${project.title}" marked as LOST.${reason || notes ? ' Reason: ' + (reason || notes) : ''}`;
+      // R42: Auto-pause all active cadences belonging to this lost project
+      await connection.query(`
+        UPDATE maintenance_cadences 
+        SET status = 'PAUSED', updatedAt = NOW()
+        WHERE projectId = ? AND status = 'ACTIVE'
+      `, [projectId]);
     }
 
     await recordBusinessActivity(connection, {
@@ -2634,6 +2798,124 @@ export const getBusinessDate = (dateOrVal: any = new Date(), timeZone = 'Asia/Ja
 
   return null;
 };
+
+// Authoritative Timezone-Aware Cadence Date Progression (Asia/Jakarta / WIB, UTC+7)
+export const computeNextCadenceDate = (baseDateStr: string, unit: 'DAY' | 'WEEK' | 'MONTH', interval: number): string => {
+  const [year, month, day] = baseDateStr.split('-').map(Number); // 1-indexed month
+  if (unit === 'DAY') {
+    const d = new Date(Date.UTC(year, month - 1, day + interval));
+    return d.toISOString().slice(0, 10);
+  }
+  if (unit === 'WEEK') {
+    const d = new Date(Date.UTC(year, month - 1, day + (interval * 7)));
+    return d.toISOString().slice(0, 10);
+  }
+  if (unit === 'MONTH') {
+    let targetYear = year;
+    let targetMonth = month + interval; // 1-based
+    while (targetMonth > 12) {
+      targetYear += 1;
+      targetMonth -= 12;
+    }
+    // Clamping to last day of target month (e.g. Jan 31 -> Feb 28/29)
+    const daysInTargetMonth = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+    const targetDay = Math.min(day, daysInTargetMonth);
+    const mm = String(targetMonth).padStart(2, '0');
+    const dd = String(targetDay).padStart(2, '0');
+    return `${targetYear}-${mm}-${dd}`;
+  }
+  throw new Error(`Unsupported cadence frequencyUnit: ${unit}`);
+};
+
+/**
+ * Authoritative Transactional Cadence Action Generator.
+ * Creates exactly ONE canonical Task, Visit, or Follow-up with provenance.
+ */
+export const generateNextCadenceOccurrence = async (
+  connection: any,
+  cadence: any,
+  targetDueDate: string,
+  actorUserId: string
+): Promise<{ success: boolean; actionId?: string; actionType?: string; occurrenceIndex?: number; error?: string; code?: string }> => {
+  const tenantId = cadence.tenantId;
+  let picId: string | null = null;
+  let customerName = 'Customer';
+  let projectTitle: string | null = null;
+
+  // 1. Resolve target parent & PIC
+  if (cadence.customerId) {
+    const [cRows]: any = await connection.query('SELECT id, name, statusId, picId FROM customers WHERE id = ? AND tenantId = ?', [cadence.customerId, tenantId]);
+    if (cRows.length === 0) return { success: false, error: 'Customer not found', code: 'CUSTOMER_NOT_FOUND' };
+    if (cRows[0].statusId === 'INACTIVE') return { success: false, error: 'Customer is inactive', code: 'CUSTOMER_INACTIVE' };
+    picId = cRows[0].picId;
+    customerName = cRows[0].name;
+  } else if (cadence.projectId) {
+    const [pRows]: any = await connection.query(`
+      SELECT p.id, p.title, p.stageId, p.picId, p.customerId, c.name as customerName
+      FROM projects p
+      LEFT JOIN customers c ON c.id = p.customerId
+      WHERE p.id = ? AND p.tenantId = ?
+    `, [cadence.projectId, tenantId]);
+    if (pRows.length === 0) return { success: false, error: 'Project not found', code: 'PROJECT_NOT_FOUND' };
+    if (pRows[0].stageId === 'LOST') return { success: false, error: 'Project is lost', code: 'PROJECT_LOST' };
+    picId = pRows[0].picId;
+    projectTitle = pRows[0].title;
+    customerName = pRows[0].customerName || 'Customer';
+  } else {
+    return { success: false, error: 'Invalid cadence target', code: 'INVALID_CADENCE_TARGET' };
+  }
+
+  // 2. Authoritative PIC Validation
+  if (!picId) {
+    return { success: false, error: 'Target has no assigned PIC', code: 'BLOCKED_INVALID_PIC' };
+  }
+  const picCheck = await validateAssignableTenantUser(connection, tenantId, picId);
+  if (!picCheck.valid) {
+    return { success: false, error: picCheck.error, code: 'BLOCKED_INVALID_PIC' };
+  }
+
+  // 3. Increment occurrence index
+  const nextOccurrenceIndex = (Number(cadence.lastOccurrenceIndex) || 0) + 1;
+  const actionType = cadence.actionType;
+  const cadenceTitle = cadence.title || `${actionType === 'VISIT' ? 'Maintenance Visit' : actionType === 'FOLLOW_UP' ? 'Routine Follow-up' : 'Maintenance Task'} - ${customerName}`;
+  const notes = cadence.notes || `Generated from maintenance cadence #${cadence.id}`;
+
+  let actionId: string;
+  const nowStr = new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+  if (actionType === 'VISIT') {
+    actionId = `VIS-${Date.now()}-${Math.random().toString(36).slice(-4)}`;
+    await connection.query(`
+      INSERT INTO visits (id, tenantId, title, customerId, relatedProjectId, purposeId, statusId, visitDate, picId, location, maintenanceCadenceId, cadenceOccurrenceIndex, createdAt)
+      VALUES (?, ?, ?, ?, ?, 'MAINTENANCE', 'PLANNED', ?, ?, 'Customer Site', ?, ?, ?)
+    `, [actionId, tenantId, cadenceTitle, cadence.customerId || null, cadence.projectId || null, targetDueDate, picId, cadence.id, nextOccurrenceIndex, nowStr]);
+  } else if (actionType === 'FOLLOW_UP') {
+    actionId = `FLW-${Date.now()}-${Math.random().toString(36).slice(-4)}`;
+    const fType = cadence.actionTypeDetails || 'CALL';
+    await connection.query(`
+      INSERT INTO follow_ups (id, tenantId, title, customerId, relatedProjectId, typeId, status, followUpDate, picId, notes, maintenanceCadenceId, cadenceOccurrenceIndex, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?)
+    `, [actionId, tenantId, cadenceTitle, cadence.customerId || null, cadence.projectId || null, fType, targetDueDate, picId, notes, cadence.id, nextOccurrenceIndex, nowStr]);
+  } else if (actionType === 'TASK') {
+    actionId = `TSK-${Date.now()}-${Math.random().toString(36).slice(-4)}`;
+    await connection.query(`
+      INSERT INTO tasks (id, tenantId, title, customerId, relatedProjectId, priorityId, statusId, dueDate, picId, description, maintenanceCadenceId, cadenceOccurrenceIndex, createdAt)
+      VALUES (?, ?, ?, ?, ?, 'NORMAL', 'TODO', ?, ?, ?, ?, ?, ?)
+    `, [actionId, tenantId, cadenceTitle, cadence.customerId || null, cadence.projectId || null, targetDueDate, picId, notes, cadence.id, nextOccurrenceIndex, nowStr]);
+  } else {
+    return { success: false, error: 'Unsupported action type', code: 'UNSUPPORTED_ACTION_TYPE' };
+  }
+
+  // 4. Update cadence pointer
+  await connection.query(`
+    UPDATE maintenance_cadences 
+    SET lastGeneratedActionId = ?, lastGeneratedActionType = ?, lastOccurrenceIndex = ?, nextDueAt = ?, updatedAt = NOW()
+    WHERE id = ?
+  `, [actionId, actionType, nextOccurrenceIndex, targetDueDate, cadence.id]);
+
+  return { success: true, actionId, actionType, occurrenceIndex: nextOccurrenceIndex };
+};
+
 
 // ==========================================
 // R40.3 SALES REPRESENTATIVE DAILY AGENDA & NEXT-ACTION WORKFLOW
@@ -3094,6 +3376,7 @@ app.get('/api/customers/:id/summary', async (req, res) => {
     const [visits]: any = await pool.query('SELECT * FROM visits WHERE customerId = ? ORDER BY visitDate DESC', [customerId]);
     const [followups]: any = await pool.query('SELECT * FROM follow_ups WHERE customerId = ? ORDER BY followUpDate DESC', [customerId]);
     const [activities]: any = await pool.query('SELECT * FROM activities WHERE customerId = ? ORDER BY occurredAt DESC LIMIT 20', [customerId]);
+    const [cadences]: any = await pool.query('SELECT * FROM maintenance_cadences WHERE customerId = ? ORDER BY createdAt DESC', [customerId]);
 
     const activeProjects = projects.filter((p: any) => !['WON', 'LOST'].includes(p.stageId));
     const wonProjects = projects.filter((p: any) => p.stageId === 'WON');
@@ -3118,6 +3401,7 @@ app.get('/api/customers/:id/summary', async (req, res) => {
       customer,
       contacts,
       primaryContact: contacts.find((c: any) => c.isPrimary) || contacts[0] || null,
+      cadences,
       projectsSummary: {
         total: projects.length,
         active: activeProjects.length,
@@ -3176,6 +3460,7 @@ app.get('/api/projects/:id/summary', async (req, res) => {
     const [followups]: any = await pool.query('SELECT * FROM follow_ups WHERE relatedProjectId = ? ORDER BY followUpDate DESC', [projectId]);
     const [stageHistories]: any = await pool.query('SELECT * FROM project_stage_histories WHERE projectId = ? ORDER BY changedAt DESC', [projectId]);
     const [activities]: any = await pool.query('SELECT * FROM activities WHERE (entityType = "PROJECT" AND entityId = ?) OR JSON_EXTRACT(metadata, "$.projectId") = ? ORDER BY occurredAt DESC LIMIT 20', [projectId, projectId]);
+    const [cadences]: any = await pool.query('SELECT * FROM maintenance_cadences WHERE projectId = ? ORDER BY createdAt DESC', [projectId]);
 
     res.json({
       project: {
@@ -3187,6 +3472,7 @@ app.get('/api/projects/:id/summary', async (req, res) => {
         expectedCloseDate: project.expectedCloseDate || project.expectedClosingDate
       },
       stageHistories,
+      cadences,
       tasks: tasks.slice(0, 10),
       visits: visits.slice(0, 10),
       followups: followups.slice(0, 10),
