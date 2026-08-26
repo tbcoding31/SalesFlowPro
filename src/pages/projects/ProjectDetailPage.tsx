@@ -244,6 +244,83 @@ export const ProjectDetailPage: React.FC = () => {
                       <div className="text-[10px] font-semibold mt-1 opacity-75">
                         👉 Action: {sig.recommendedAction}
                       </div>
+                      <div className="flex gap-1.5 mt-2">
+                        {sig.code === 'PROJECT_MISSING_NEXT_ACTION' && (
+                          <div className="flex gap-1">
+                            <button
+                              onClick={() => {
+                                const desc = prompt('Enter task description:');
+                                if (desc) {
+                                  crmApi.createRecord('tasks', {
+                                    id: `TSK-${Date.now()}`,
+                                    tenantId,
+                                    title: desc,
+                                    customerId: project.customerId,
+                                    relatedProjectId: project.id,
+                                    dueDate: new Date().toISOString().split('T')[0],
+                                    priorityId: 'HIGH',
+                                    statusId: 'TODO'
+                                  }).then(() => loadData());
+                                }
+                              }}
+                              className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold rounded"
+                            >
+                              + Task
+                            </button>
+                            <button
+                              onClick={() => {
+                                const title = prompt('Enter follow-up topic:');
+                                if (title) {
+                                  crmApi.createRecord('follow_ups', {
+                                    id: `FLW-${Date.now()}`,
+                                    tenantId,
+                                    title,
+                                    customerId: project.customerId,
+                                    relatedProjectId: project.id,
+                                    followUpDate: new Date().toISOString().split('T')[0],
+                                    typeId: 'CALL',
+                                    status: 'PENDING'
+                                  }).then(() => loadData());
+                                }
+                              }}
+                              className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold rounded"
+                            >
+                              + Follow-up
+                            </button>
+                          </div>
+                        )}
+                        {sig.code === 'EXPECTED_CLOSE_OVERDUE' && (
+                          <button
+                            onClick={() => {
+                              const newDate = prompt('Enter new Expected Close Date (YYYY-MM-DD):', new Date().toISOString().split('T')[0]);
+                              if (newDate) {
+                                crmApi.updateRecord('projects', project.id, {
+                                  expectedCloseDate: newDate,
+                                  expectedClosingDate: newDate
+                                }).then(() => loadData());
+                              }
+                            }}
+                            className="px-2 py-0.5 bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold rounded"
+                          >
+                            Update Close Date
+                          </button>
+                        )}
+                        {sig.code === 'PROJECT_NO_ACTIVE_PIC' && (
+                          <button
+                            onClick={() => {
+                              const newPic = prompt('Enter Active Sales Rep User ID:');
+                              if (newPic) {
+                                crmApi.updateRecord('projects', project.id, {
+                                  picId: newPic
+                                }).then(() => loadData());
+                              }
+                            }}
+                            className="px-2 py-0.5 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold rounded"
+                          >
+                            Assign PIC
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>

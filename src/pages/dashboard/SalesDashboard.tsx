@@ -433,6 +433,14 @@ export const SalesDashboard: React.FC = () => {
                       </div>
                     ))}
                   </div>
+                  <div className="flex gap-1.5 pt-1 border-t border-amber-200/50">
+                    <Link
+                      to={`/projects/${p.id}`}
+                      className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold rounded"
+                    >
+                      Remediate →
+                    </Link>
+                  </div>
                 </div>
               ))}
             </div>
@@ -469,6 +477,14 @@ export const SalesDashboard: React.FC = () => {
                         📁 {c.projectAttentionSummary.projectsNeedingAttention} child project(s) require attention
                       </div>
                     )}
+                  </div>
+                  <div className="flex gap-1.5 pt-1 border-t border-amber-200/50">
+                    <Link
+                      to={`/customers/${c.id}`}
+                      className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold rounded"
+                    >
+                      Remediate →
+                    </Link>
                   </div>
                 </div>
               ))}

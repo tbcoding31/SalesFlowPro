@@ -2167,6 +2167,32 @@ export const CustomerDetailPage: React.FC = () => {
                       <div className="text-[10px] font-semibold mt-1 opacity-75">
                         👉 Action: {sig.recommendedAction}
                       </div>
+                      <div className="flex gap-1.5 mt-2">
+                        {sig.code === 'CUSTOMER_NO_ACTIVE_PIC' && (
+                          <button
+                            onClick={() => setShowChangePicModal(true)}
+                            className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold rounded"
+                          >
+                            Assign Active PIC
+                          </button>
+                        )}
+                        {sig.code === 'CUSTOMER_OVERDUE_ACTION' && (
+                          <button
+                            onClick={() => setActiveTab('tasks')}
+                            className="px-2 py-1 bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold rounded"
+                          >
+                            Review Overdue Work
+                          </button>
+                        )}
+                        {sig.code === 'CADENCE_BLOCKED_INVALID_PIC' && (
+                          <button
+                            onClick={() => setShowChangePicModal(true)}
+                            className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold rounded"
+                          >
+                            Update PIC to Unblock
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>

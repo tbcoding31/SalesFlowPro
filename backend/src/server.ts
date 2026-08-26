@@ -1135,8 +1135,16 @@ const setupEndpoint = (table: string) => {
       }
 
       const keys = Object.keys(data).filter(k => k !== 'id');
-      const values = keys.map(k => data[k]);
-      const setClause = keys.map(k => `${mysql.escapeId(k)} = ?`).join(', ');
+      // For projects table, normalize expectedClosingDate if present
+      if (table === 'projects' && data.expectedClosingDate && !data.expectedCloseDate) {
+        data.expectedCloseDate = data.expectedClosingDate;
+        delete data.expectedClosingDate;
+      } else if (table === 'projects' && data.expectedClosingDate) {
+        delete data.expectedClosingDate;
+      }
+      const actualKeys = Object.keys(data).filter(k => k !== 'id');
+      const values = actualKeys.map(k => data[k]);
+      const setClause = actualKeys.map(k => `${mysql.escapeId(k)} = ?`).join(', ');
 
       let query = `UPDATE ${table} SET ${setClause} WHERE id = ?`;
       const queryValues = [...values, id];
@@ -2916,6 +2924,75 @@ export const generateNextCadenceOccurrence = async (
   return { success: true, actionId, actionType, occurrenceIndex: nextOccurrenceIndex };
 };
 
+// POST /api/maintenance_cadences/:id/generate-next: Authoritative Recovery Generation
+app.post('/api/maintenance_cadences/:id/generate-next', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const cadenceId = req.params.id;
+  const connection = await pool.getConnection();
+  await connection.beginTransaction();
+
+  try {
+    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+
+    // 1. Row Lock Cadence
+    const [cadRows]: any = await connection.query(`
+      SELECT * FROM maintenance_cadences WHERE id = ? AND tenantId = ? FOR UPDATE
+    `, [cadenceId, targetTenant]);
+
+    if (cadRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Cadence not found or access denied.' });
+    }
+
+    const cadence = cadRows[0];
+    if (cadence.status !== 'ACTIVE') {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Cannot generate occurrence for non-active cadence.', code: 'CADENCE_NOT_ACTIVE' });
+    }
+
+    // 2. Check if last occurrence is unresolved/in-flight
+    if (cadence.lastGeneratedActionId && cadence.lastGeneratedActionType) {
+      const actTable = cadence.lastGeneratedActionType === 'VISIT' ? 'visits' : cadence.lastGeneratedActionType === 'FOLLOW_UP' ? 'follow_ups' : 'tasks';
+      const statusCol = actTable === 'follow_ups' ? 'status' : 'statusId';
+      const [lastActRows]: any = await connection.query(`
+        SELECT id, ${statusCol} as st FROM ${actTable} WHERE id = ?
+      `, [cadence.lastGeneratedActionId]);
+
+      if (lastActRows.length > 0 && lastActRows[0].st !== 'COMPLETED' && lastActRows[0].st !== 'CANCELLED') {
+        await connection.rollback();
+        return res.status(400).json({
+          error: `Occurrence #${cadence.lastOccurrenceIndex} (${cadence.lastGeneratedActionType} #${cadence.lastGeneratedActionId}) is still in flight (${lastActRows[0].st}).`,
+          code: 'OCCURRENCE_IN_FLIGHT'
+        });
+      }
+    }
+
+    // 3. Generate Next Canonical Occurrence
+    const targetDate = getBusinessDate(new Date())!;
+    const genRes = await generateNextCadenceOccurrence(connection, cadence, targetDate, actorUserId);
+    if (!genRes.success) {
+      await connection.rollback();
+      return res.status(400).json({ error: genRes.error, code: genRes.code });
+    }
+
+    await connection.commit();
+    res.json(genRes);
+  } catch (err: any) {
+    await connection.rollback();
+    console.error('Error in /api/maintenance_cadences/:id/generate-next:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  } finally {
+    connection.release();
+  }
+});
+
 
 // ==========================================
 // R43 ATTENTION SIGNALS & HEALTH ENGINE (COMPUTED ON READ)
@@ -3105,29 +3182,46 @@ export const computeCustomerAttentionSignals = async (
   const isInactive = customer.statusId === 'INACTIVE' || customer.status === 'INACTIVE';
 
   // 1. PIC Validation Signal
-  if (customer.picId) {
-    const picCheck = await validateAssignableTenantUser(connectionOrPool, tenantId, customer.picId);
-    if (!picCheck.valid) {
+  // INACTIVE customer policy (R44): Suppress NO_ACTIVE_PIC if customer is INACTIVE and has no active operational work
+  const [openTasks]: any = await connectionOrPool.query(
+    'SELECT id FROM tasks WHERE customerId = ? AND statusId NOT IN ("COMPLETED", "CANCELLED") LIMIT 1',
+    [customer.id]
+  );
+  const [openVisits]: any = await connectionOrPool.query(
+    'SELECT id FROM visits WHERE customerId = ? AND statusId NOT IN ("COMPLETED", "CANCELLED") LIMIT 1',
+    [customer.id]
+  );
+  const [openFollowups]: any = await connectionOrPool.query(
+    'SELECT id FROM follow_ups WHERE customerId = ? AND status NOT IN ("COMPLETED", "CANCELLED") LIMIT 1',
+    [customer.id]
+  );
+  const hasOpenWork = openTasks.length > 0 || openVisits.length > 0 || openFollowups.length > 0;
+
+  if (!isInactive || hasOpenWork) {
+    if (customer.picId) {
+      const picCheck = await validateAssignableTenantUser(connectionOrPool, tenantId, customer.picId);
+      if (!picCheck.valid) {
+        customerSignals.push({
+          code: 'CUSTOMER_NO_ACTIVE_PIC',
+          severity: 'CRITICAL',
+          title: 'Customer PIC Inactive or Suspended',
+          reason: `Assigned PIC (${customer.picId}) is inactive, suspended, or invalid in this tenant.`,
+          evaluatedAt,
+          recommendedAction: 'Assign an active account manager to this customer.',
+          metadata: { picId: customer.picId, error: picCheck.error }
+        });
+      }
+    } else {
       customerSignals.push({
         code: 'CUSTOMER_NO_ACTIVE_PIC',
         severity: 'CRITICAL',
-        title: 'Customer PIC Inactive or Suspended',
-        reason: `Assigned PIC (${customer.picId}) is inactive, suspended, or invalid in this tenant.`,
+        title: 'No PIC Assigned to Customer',
+        reason: 'Customer account lacks an assigned account representative.',
         evaluatedAt,
-        recommendedAction: 'Assign an active account manager to this customer.',
-        metadata: { picId: customer.picId, error: picCheck.error }
+        recommendedAction: 'Assign an active account representative.',
+        metadata: { picId: null }
       });
     }
-  } else {
-    customerSignals.push({
-      code: 'CUSTOMER_NO_ACTIVE_PIC',
-      severity: 'CRITICAL',
-      title: 'No PIC Assigned to Customer',
-      reason: 'Customer account lacks an assigned account representative.',
-      evaluatedAt,
-      recommendedAction: 'Assign an active account representative.',
-      metadata: { picId: null }
-    });
   }
 
   // 2. Customer-level Overdue Actions (Direct + Project-linked unique operational items)
@@ -4059,22 +4153,24 @@ app.get('/api/sales/attention', async (req, res) => {
     for (const cust of custRows) {
       const cSignals: any[] = [];
       const isInactive = cust.statusId === 'INACTIVE' || cust.status === 'INACTIVE';
+      const custOverdue = overdueByCustomer[cust.id] || [];
 
-      // Customer PIC Check
-      if (!cust.picId || !validTenantUserIds.has(cust.picId)) {
-        cSignals.push({
-          code: 'CUSTOMER_NO_ACTIVE_PIC',
-          severity: 'CRITICAL',
-          title: cust.picId ? 'Customer PIC Inactive or Suspended' : 'No PIC Assigned to Customer',
-          reason: cust.picId ? `Assigned PIC (${cust.picId}) is inactive, suspended, or invalid.` : 'Customer account lacks an assigned account representative.',
-          evaluatedAt,
-          recommendedAction: 'Assign an active account manager to this customer.',
-          metadata: { picId: cust.picId }
-        });
+      // Customer PIC Check (Suppressed for INACTIVE customers with zero overdue/open work)
+      if (!isInactive || custOverdue.length > 0) {
+        if (!cust.picId || !validTenantUserIds.has(cust.picId)) {
+          cSignals.push({
+            code: 'CUSTOMER_NO_ACTIVE_PIC',
+            severity: 'CRITICAL',
+            title: cust.picId ? 'Customer PIC Inactive or Suspended' : 'No PIC Assigned to Customer',
+            reason: cust.picId ? `Assigned PIC (${cust.picId}) is inactive, suspended, or invalid.` : 'Customer account lacks an assigned account representative.',
+            evaluatedAt,
+            recommendedAction: 'Assign an active account manager to this customer.',
+            metadata: { picId: cust.picId }
+          });
+        }
       }
 
       // Customer Overdue Actions
-      const custOverdue = overdueByCustomer[cust.id] || [];
       if (custOverdue.length > 0) {
         const dates = custOverdue.map(o => getBusinessDate(o.actionDate)).filter(Boolean).sort();
         cSignals.push({
