@@ -64,7 +64,7 @@ async function setupDatabase() {
     `CREATE TABLE IF NOT EXISTS visit_statuses (id VARCHAR(50) PRIMARY KEY, code VARCHAR(50), name VARCHAR(100))`,
     
     // CUSTOMERS
-    `CREATE TABLE IF NOT EXISTS customers (id VARCHAR(50) PRIMARY KEY, tenantId VARCHAR(50), code VARCHAR(50), name VARCHAR(255), typeId VARCHAR(50), statusId VARCHAR(50), industry VARCHAR(100), website VARCHAR(255), phone VARCHAR(50), email VARCHAR(255), notes TEXT, picId VARCHAR(50), createdAt DATETIME DEFAULT CURRENT_TIMESTAMP)`,
+    `CREATE TABLE IF NOT EXISTS customers (id VARCHAR(50) PRIMARY KEY, tenantId VARCHAR(50), code VARCHAR(50), name VARCHAR(255), typeId VARCHAR(50), statusId VARCHAR(50), industry VARCHAR(100), website VARCHAR(255), phone VARCHAR(50), email VARCHAR(255), notes TEXT, picId VARCHAR(50), lastVisitAt DATETIME, createdAt DATETIME DEFAULT CURRENT_TIMESTAMP)`,
     `CREATE TABLE IF NOT EXISTS customer_addresses (id VARCHAR(50) PRIMARY KEY, customerId VARCHAR(50), type VARCHAR(50), address TEXT, city VARCHAR(100), province VARCHAR(100), postalCode VARCHAR(20), country VARCHAR(100), isPrimary BOOLEAN)`,
     `CREATE TABLE IF NOT EXISTS customer_contacts (id VARCHAR(50) PRIMARY KEY, customerId VARCHAR(50), name VARCHAR(255), position VARCHAR(100), email VARCHAR(255), phone VARCHAR(50), isPrimary BOOLEAN)`,
     `CREATE TABLE IF NOT EXISTS customer_assignments (id VARCHAR(50) PRIMARY KEY, customerId VARCHAR(50), userId VARCHAR(50), role VARCHAR(50), assignedAt DATETIME DEFAULT CURRENT_TIMESTAMP)`,

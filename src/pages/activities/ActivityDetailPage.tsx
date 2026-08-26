@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { DataService } from '../../services/dataService';
 import { Activity } from '../../types';
+import { crmApi } from '../../services/crmApi';
 
 export const ActivityDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -14,33 +15,11 @@ export const ActivityDetailPage: React.FC = () => {
 
   useEffect(() => {
     if (id) {
-      const allActivities = DataService.getActivities(tenantId);
-      const found = allActivities.find(a => a.id === id);
-      
-      if (found) {
-        // If it's a mock activity without changes, and the subject implies an update, we can parse it for demo purposes.
-        let enrichedActivity = { ...found };
-        
-        if (!enrichedActivity.changes && (enrichedActivity.subject || '').toLowerCase().includes('reassign')) {
-           enrichedActivity.changes = [
-             { field: 'PIC', oldValue: 'Ahmad', newValue: 'Budi' }
-           ];
-           enrichedActivity.metadata = {
-             ipAddress: '192.168.1.104',
-             browser: 'Chrome 115.0.0.0 (macOS)',
-             location: 'Jakarta, ID',
-             actionSource: 'Web Dashboard'
-           };
-        } else if (!enrichedActivity.metadata) {
-           enrichedActivity.metadata = {
-             ipAddress: '114.120.32.55',
-             browser: 'Safari 16.5 (iOS)',
-             actionSource: 'Mobile API'
-           };
+      crmApi.fetchRecordById<Activity>('activities', id).then((data) => {
+        if (data) {
+          setActivity(data);
         }
-
-        setActivity(enrichedActivity);
-      }
+      });
     }
   }, [id, tenantId]);
 

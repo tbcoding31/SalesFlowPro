@@ -37,10 +37,10 @@ export const ProjectDetailPage: React.FC = () => {
           crmApi.fetchCollection<FollowUp>('follow_ups', tenantId),
           crmApi.fetchCollection<Activity>('activities', tenantId)
         ]);
-        setTasks(allTasks.filter(t => (t as any).relatedProjectId === id || t.customerId === proj.customerId).slice(0, 5));
-        setVisits(allVisits.filter(v => (v as any).relatedProjectId === id || v.customerId === proj.customerId).slice(0, 5));
-        setFollowups(allFollowups.filter(f => (f as any).relatedProjectId === id || f.customerId === proj.customerId).slice(0, 5));
-        setActivities(allActivities.filter(a => a.customerId === proj.customerId).slice(0, 10));
+        setTasks(allTasks.filter(t => (t as any).relatedProjectId === id).slice(0, 5));
+        setVisits(allVisits.filter(v => (v as any).relatedProjectId === id).slice(0, 5));
+        setFollowups(allFollowups.filter(f => (f as any).relatedProjectId === id).slice(0, 5));
+        setActivities(allActivities.filter(a => (a.entityType === 'PROJECT' && a.entityId === id) || (a.metadata && a.metadata.projectId === id)).slice(0, 15));
       }
     } catch (err) {
       console.error('Error loading project details from DB:', err);

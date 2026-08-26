@@ -3,54 +3,85 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { DataService } from '../../services/dataService';
 import { Customer, Visit, Task, Project, Activity } from '../../types';
+import { crmApi } from '../../services/crmApi';
 
 export const SalesDashboard: React.FC = () => {
   const { currentUser, currentTenant } = useAuth();
   const tenantId = currentTenant?.id || 'TEN-00001';
 
-  const [customers] = useState<Customer[]>(DataService.getCustomers(tenantId));
-  const [visits, setVisits] = useState<Visit[]>(DataService.getVisits(tenantId));
-  const [tasks, setTasks] = useState<Task[]>(DataService.getTasks(tenantId));
-  const [projects] = useState<Project[]>(DataService.getProjects(tenantId));
-  const [activities] = useState<Activity[]>(DataService.getActivities(tenantId));
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [visits, setVisits] = useState<Visit[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const loadData = async () => {
+    setIsLoading(true);
+    try {
+      const [cList, vList, tList, pList, aList] = await Promise.all([
+        crmApi.fetchCollection<Customer>('customers', tenantId),
+        crmApi.fetchCollection<Visit>('visits', tenantId),
+        crmApi.fetchCollection<Task>('tasks', tenantId),
+        crmApi.fetchCollection<Project>('projects', tenantId),
+        crmApi.fetchCollection<Activity>('activities', tenantId)
+      ]);
+      setCustomers(cList);
+      setVisits(vList);
+      setTasks(tList);
+      setProjects(pList);
+      setActivities(aList);
+    } catch (err) {
+      console.error('Failed to load dashboard data from DB:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  React.useEffect(() => {
+    loadData();
+  }, [tenantId]);
 
   const { hasPermission } = useAuth();
   const isSalesRep = !hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS');
 
   // Metrics
   const myCustomers = isSalesRep
-    ? customers.filter((c) => c.assignedPicId === currentUser?.id)
+    ? customers.filter((c) => (c.picId || c.assignedPicId) === currentUser?.id)
     : customers;
 
+  const todayIso = new Date().toISOString().split('T')[0];
   const plannedVisitsToday = visits.filter(
-    (v) => (v.visitDate === '2026-08-12' || v.visitDate === new Date().toISOString().split('T')[0])
+    (v) => (v.visitDate === todayIso || v.visitDate === '2026-08-12')
   );
 
-  const pendingTasks = tasks.filter((t) => t.status !== 'COMPLETED');
+  const pendingTasks = tasks.filter((t) => t.status !== 'COMPLETED' && (t as any).statusId !== 'COMPLETED');
 
   const totalPipelineValue = projects
-    .filter((o) => o.stage !== 'LOST')
-    .reduce((acc, o) => acc + o.estimatedValue, 0);
+    .filter((o) => (o as any).stageId !== 'LOST' && o.stage !== 'LOST')
+    .reduce((acc, o) => acc + (Number((o as any).value) || Number(o.estimatedValue) || 0), 0);
 
-  const toggleTaskComplete = (taskId: string) => {
+  const toggleTaskComplete = async (taskId: string) => {
     const task = tasks.find((t) => t.id === taskId);
     if (task) {
-      const updated: Task = {
-        ...task,
-        status: task.status === 'COMPLETED' ? 'TODO' : 'COMPLETED',
-        completedAt: new Date().toISOString().split('T')[0],
-      };
-      DataService.saveTask(updated);
-      setTasks(DataService.getTasks(tenantId));
+      const nextStatus = (task.status === 'COMPLETED' || (task as any).statusId === 'COMPLETED') ? 'TODO' : 'COMPLETED';
+      await crmApi.updateRecord('tasks', taskId, {
+        statusId: nextStatus,
+        status: nextStatus,
+        completedAt: nextStatus === 'COMPLETED' ? new Date().toISOString() : null
+      });
+      loadData();
     }
   };
 
-  const updateVisitStatus = (visitId: string, status: Visit['status']) => {
+  const updateVisitStatus = async (visitId: string, status: Visit['status']) => {
     const visit = visits.find((v) => v.id === visitId);
     if (visit) {
-      const updated: Visit = { ...visit, status };
-      DataService.saveVisit(updated);
-      setVisits(DataService.getVisits(tenantId));
+      await crmApi.updateRecord('visits', visitId, {
+        statusId: status,
+        status
+      });
+      loadData();
     }
   };
 

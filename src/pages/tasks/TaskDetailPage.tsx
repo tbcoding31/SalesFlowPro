@@ -3,6 +3,8 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { DataService } from '../../services/dataService';
 import { Task, Activity, User } from '../../types';
+import { crmApi } from '../../services/crmApi';
+import { usersApi } from '../../services/usersApi';
 
 export const TaskDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -19,10 +21,28 @@ export const TaskDetailPage: React.FC = () => {
   const [picSearch, setPicSearch] = useState('');
   const [newPicId, setNewPicId] = useState<string>('');
   
-  const [users] = useState<User[]>(DataService.getUsers(tenantId));
-  const [allTasks] = useState<Task[]>(DataService.getTasks(tenantId));
+  const [users, setUsers] = useState<User[]>([]);
+  const [allTasks, setAllTasks] = useState<Task[]>([]);
 
   const today = new Date().toISOString().split('T')[0];
+
+  const loadData = async () => {
+    if (!id) return;
+    const [taskData, taskList, userList, allActs] = await Promise.all([
+      crmApi.fetchRecordById<Task>('tasks', id),
+      crmApi.fetchCollection<Task>('tasks', tenantId),
+      usersApi.fetchUsers(tenantId),
+      crmApi.fetchCollection<Activity>('activities', tenantId)
+    ]);
+    if (taskData) setTask(taskData);
+    setAllTasks(taskList);
+    setUsers(userList);
+    setActivities(allActs.filter(a => a.entityType === 'TASK' && a.entityId === id));
+  };
+
+  useEffect(() => {
+    loadData();
+  }, [id, tenantId]);
 
   const enrichedUsers = useMemo(() => {
     return users.map(user => {
@@ -54,25 +74,11 @@ export const TaskDetailPage: React.FC = () => {
   const filteredUsers = useMemo(() => {
     if (!picSearch) return enrichedUsers;
     const lower = picSearch.toLowerCase();
-    return enrichedUsers.filter(u => u.name.toLowerCase().includes(lower) || u.role.toLowerCase().includes(lower));
+    return enrichedUsers.filter(u => u.name.toLowerCase().includes(lower) || (u.role && u.role.toLowerCase().includes(lower)));
   }, [enrichedUsers, picSearch]);
 
   const currentPic = enrichedUsers.find(u => u.id === task?.picId);
   const selectedNewPic = enrichedUsers.find(u => u.id === newPicId);
-
-  useEffect(() => {
-    if (id) {
-      const allTasks = DataService.getTasks(tenantId);
-      const foundTask = allTasks.find(t => t.id === id);
-      setTask(foundTask || null);
-
-      if (foundTask) {
-        const allActivities = DataService.getActivities(tenantId);
-        const taskActivities = allActivities.filter(a => a.entityType === 'TASK' && a.entityId === id);
-        setActivities(taskActivities);
-      }
-    }
-  }, [id, tenantId]);
 
   if (!task) {
     return (
@@ -87,88 +93,69 @@ export const TaskDetailPage: React.FC = () => {
     );
   }
 
-  const handleReassign = () => {
+  const handleReassign = async () => {
     if (!newPicId || !selectedNewPic || !task) return;
 
     const oldPicName = task.picName;
 
-    const updatedTask = {
-      ...task,
-      picId: selectedNewPic.id,
-      picName: selectedNewPic.name,
-      picAvatar: selectedNewPic.avatar,
-    };
+    await crmApi.updateRecord('tasks', task.id, {
+      picId: selectedNewPic.id
+    });
 
-    DataService.saveTask(updatedTask);
-    setTask(updatedTask);
-
-    DataService.addActivity({
+    await crmApi.createRecord('activities', {
       tenantId,
       customerId: task.customerId,
-      customerName: task.customerName,
       userId: currentUser?.id || 'SYSTEM',
-      userName: currentUser?.name || 'System User',
-      type: 'TASK',
+      typeId: 'TASK',
       subject: 'PIC Reassigned',
-      description: `Reassigned task from ${oldPicName} to ${selectedNewPic.name}`,
-      occurredAt: new Date().toISOString(),
+      description: `Reassigned task from ${oldPicName || 'previous PIC'} to ${selectedNewPic.name}`,
       entityType: 'TASK',
       entityId: task.id
     });
 
-    // Refresh activities
-    const updatedActivities = DataService.getActivities(tenantId).filter(a => a.entityType === 'TASK' && a.entityId === id);
-    setActivities(updatedActivities);
-    
     setShowReassignModal(false);
     setNewPicId('');
     setPicSearch('');
+    loadData();
   };
 
-  const handleComplete = () => {
-    const updatedTask = { ...task, status: 'COMPLETED' as const, completedAt: new Date().toISOString() };
-    DataService.saveTask(updatedTask);
-    setTask(updatedTask);
+  const handleComplete = async () => {
+    await crmApi.updateRecord('tasks', task.id, {
+      statusId: 'COMPLETED',
+      status: 'COMPLETED',
+      completedAt: new Date().toISOString()
+    });
     
-    DataService.addActivity({
+    await crmApi.createRecord('activities', {
       tenantId,
       customerId: task.customerId,
-      customerName: task.customerName,
       userId: currentUser?.id || 'SYSTEM',
-      userName: currentUser?.name || 'System User',
-      type: 'TASK',
+      typeId: 'TASK',
       subject: 'Task Completed',
       description: `Marked task "${task.title}" as completed`,
-      occurredAt: new Date().toISOString(),
       entityType: 'TASK',
       entityId: task.id
     });
     
-    // Refresh activities
-    const updatedActivities = DataService.getActivities(tenantId).filter(a => a.entityType === 'TASK' && a.entityId === id);
-    setActivities(updatedActivities);
+    loadData();
   };
 
-  const handleAddComment = () => {
+  const handleAddComment = async () => {
     if (!comment.trim()) return;
     
-    DataService.addActivity({
+    await crmApi.createRecord('activities', {
       tenantId,
       customerId: task.customerId,
-      customerName: task.customerName,
       userId: currentUser?.id || 'SYSTEM',
-      userName: currentUser?.name || 'System User',
-      type: 'NOTE',
+      typeId: 'NOTE',
       subject: 'Comment Added',
       description: comment,
-      occurredAt: new Date().toISOString(),
       entityType: 'TASK',
       entityId: task.id
     });
     
     setComment('');
-    const updatedActivities = DataService.getActivities(tenantId).filter(a => a.entityType === 'TASK' && a.entityId === id);
-    setActivities(updatedActivities);
+    loadData();
   };
 
   return (

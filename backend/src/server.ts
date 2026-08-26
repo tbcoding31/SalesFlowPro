@@ -228,6 +228,49 @@ export const resolveUserAccessContext = async (pool: any, userId: string) => {
   };
 };
 
+/**
+ * Authoritative Centralized Business Activity Writer.
+ * Persists an immutable CRM business interaction event to the activities table.
+ */
+export const recordBusinessActivity = async (
+  connectionOrPool: any,
+  params: {
+    tenantId: string;
+    customerId?: string | null;
+    userId: string;
+    typeId: string; // 'CALL' | 'EMAIL' | 'MEETING' | 'NOTE' | 'VISIT' | 'TASK' | 'STAGE_CHANGE' | 'REASSIGNMENT'
+    subject: string;
+    description: string;
+    entityType: 'CUSTOMER' | 'PROJECT' | 'VISIT' | 'FOLLOW_UP' | 'TASK';
+    entityId: string;
+    occurredAt?: string;
+    metadata?: any;
+  }
+) => {
+  const id = `ACT-${Date.now()}-${Math.random().toString(36).slice(-4)}`;
+  const occurredAt = params.occurredAt || new Date().toISOString().slice(0, 19).replace('T', ' ');
+  const metadataJson = params.metadata ? JSON.stringify(params.metadata) : null;
+
+  await connectionOrPool.query(
+    `INSERT INTO activities (id, tenantId, customerId, userId, typeId, subject, description, occurredAt, entityType, entityId, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      id,
+      params.tenantId,
+      params.customerId || null,
+      params.userId,
+      params.typeId,
+      params.subject,
+      params.description,
+      occurredAt,
+      params.entityType,
+      params.entityId,
+      metadataJson
+    ]
+  );
+  return id;
+};
+
 app.use(helmet({
   // Keep CSP off — frontend uses inline scripts/styles (Vite bundled)
   contentSecurityPolicy: false,
@@ -888,6 +931,34 @@ const setupEndpoint = (table: string) => {
       const escapedKeys = keys.map(k => mysql.escapeId(k));
       const query = `INSERT INTO ${table} (${escapedKeys.join(', ')}) VALUES (${placeholders})`;
       await pool.query(query, values);
+
+      // Automatic Business Activity Event Emission on entity creation
+      const targetTenant = data.tenantId || actorTenant;
+      if (table === 'customers') {
+        await recordBusinessActivity(pool, {
+          tenantId: targetTenant,
+          customerId: data.id,
+          userId: actorUserId,
+          typeId: 'NOTE',
+          subject: 'Customer Account Created',
+          description: `Customer account "${data.name}" was registered.`,
+          entityType: 'CUSTOMER',
+          entityId: data.id
+        }).catch(err => console.error('[ACTIVITY] Failed to record customer created activity:', err.message));
+      } else if (table === 'projects') {
+        await recordBusinessActivity(pool, {
+          tenantId: targetTenant,
+          customerId: data.customerId || null,
+          userId: actorUserId,
+          typeId: 'STAGE_CHANGE',
+          subject: 'Project Created',
+          description: `Project "${data.title || data.name || data.id}" initiated at stage ${data.stageId || 'LEAD'}.`,
+          entityType: 'PROJECT',
+          entityId: data.id,
+          metadata: { initialStage: data.stageId || 'LEAD', value: data.value || 0 }
+        }).catch(err => console.error('[ACTIVITY] Failed to record project created activity:', err.message));
+      }
+
       res.json({ success: true, data });
     } catch (err: any) {
       console.error(`Error POST ${table}:`, err.message);
@@ -999,6 +1070,49 @@ const setupEndpoint = (table: string) => {
             [id]
           );
         }
+
+        // Domain Activity Emission on specific PUT mutations
+        const targetTenant = actorTenant !== 'SYSTEM' ? actorTenant : (data.tenantId || 'SYSTEM');
+        if (table === 'visits' && (data.statusId === 'COMPLETED' || data.status === 'COMPLETED')) {
+          const [vRows]: any = await connection.query('SELECT customerId, title, result, nextAction FROM visits WHERE id = ?', [id]);
+          if (vRows.length > 0) {
+            const v = vRows[0];
+            const nowFormatted = new Date().toISOString().slice(0, 19).replace('T', ' ');
+            // 1. Record Visit Completed activity
+            await recordBusinessActivity(connection, {
+              tenantId: targetTenant,
+              customerId: v.customerId,
+              userId: actorUserId,
+              typeId: 'VISIT',
+              subject: 'Field Visit Completed',
+              description: `Visit "${v.title}" completed.${v.result ? ' Result: ' + v.result : ''}${v.nextAction ? ' Next Action: ' + v.nextAction : ''}`,
+              entityType: 'VISIT',
+              entityId: id,
+              metadata: { result: v.result || null, nextAction: v.nextAction || null }
+            });
+            // 2. Update Customer lastVisitAt timestamp
+            if (v.customerId) {
+              await connection.query('UPDATE customers SET lastVisitAt = ? WHERE id = ?', [nowFormatted, v.customerId]);
+            }
+          }
+        } else if (table === 'follow_ups' && (data.status === 'COMPLETED' || data.statusId === 'COMPLETED')) {
+          const [fRows]: any = await connection.query('SELECT customerId, title, outcome, notes FROM follow_ups WHERE id = ?', [id]);
+          if (fRows.length > 0) {
+            const f = fRows[0];
+            await recordBusinessActivity(connection, {
+              tenantId: targetTenant,
+              customerId: f.customerId,
+              userId: actorUserId,
+              typeId: 'CALL',
+              subject: 'Follow-up Interaction Completed',
+              description: `Follow-up "${f.title}" completed.${f.outcome ? ' Outcome: ' + f.outcome : ''}`,
+              entityType: 'FOLLOW_UP',
+              entityId: id,
+              metadata: { outcome: f.outcome || null }
+            });
+          }
+        }
+
         await connection.commit();
         if (result.affectedRows === 0) {
            return res.status(404).json({ error: 'Not found or forbidden' });
@@ -1012,7 +1126,7 @@ const setupEndpoint = (table: string) => {
       }
     } catch (err: any) {
       console.error(`Error PUT ${table}:`, err.message);
-      res.status(500).json({ error: 'Internal Server Error' });
+      res.status(500).json({ error: 'Internal Server Error', message: err.message });
     }
   });
   // DELETE
@@ -2157,6 +2271,8 @@ app.get('/api/reports/sales', async (req, res) => {
     const openProjects = parseInt(kpiRows[0]?.openProjects || 0, 10);
     const pipelineValue = parseFloat(kpiRows[0]?.pipelineValue || 0);
     const wonValue = parseFloat(kpiRows[0]?.wonValue || 0);
+    const closedProjects = wonProjects + lostProjects;
+    const winRate = closedProjects > 0 ? parseFloat(((wonProjects / closedProjects) * 100).toFixed(1)) : 0;
     const conversionRate = totalProjects > 0 ? parseFloat(((wonProjects / totalProjects) * 100).toFixed(1)) : 0;
 
     // 2. Sales Pipeline by Stage
@@ -2205,6 +2321,7 @@ app.get('/api/reports/sales', async (req, res) => {
         openProjects,
         pipelineValue,
         wonValue,
+        winRate,
         conversionRate
       },
       salesPipeline: stageRows.map((r: any) => ({ stage: r.stage, count: parseInt(r.count, 10), value: parseFloat(r.value) })),
@@ -2408,6 +2525,30 @@ app.patch('/api/projects/:id/stage', async (req, res) => {
         customerActivated = true;
       }
     }
+
+    // 5. Emit STAGE_CHANGE Business Activity into activities table
+    let actSubject = `Project moved to ${toStageId}`;
+    let actDesc = `Project "${project.title}" transitioned from ${fromStageId} to ${toStageId}.`;
+    if (toStageId === 'WON') {
+      actSubject = 'Project Marked as Won';
+      const formattedVal = project.value ? ` with contract value Rp ${Number(project.value).toLocaleString('id-ID')}` : '';
+      actDesc = `Project "${project.title}" successfully closed as WON${formattedVal}.${customerActivated ? ' Customer activated.' : ''}`;
+    } else if (toStageId === 'LOST') {
+      actSubject = 'Project Marked as Lost';
+      actDesc = `Project "${project.title}" marked as LOST.${reason || notes ? ' Reason: ' + (reason || notes) : ''}`;
+    }
+
+    await recordBusinessActivity(connection, {
+      tenantId: projectTenant,
+      customerId: project.customerId,
+      userId: actorUserId,
+      typeId: 'STAGE_CHANGE',
+      subject: actSubject,
+      description: actDesc,
+      entityType: 'PROJECT',
+      entityId: projectId,
+      metadata: { fromStageId, toStageId, notes: notes || reason || null, customerActivated }
+    });
 
     await connection.commit();
 

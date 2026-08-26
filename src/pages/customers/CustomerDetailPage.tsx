@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { DataService } from '../../services/dataService';
 import { usersApi } from '../../services/usersApi';
+import { crmApi } from '../../services/crmApi';
 import { Customer, Visit, Task, FollowUp, Project, Activity, User, TaskPriority, TaskStatus, FollowUpType, FollowUpPriority, FollowUpStatus, ProjectStage } from '../../types';
 
 export interface ActivityTimelineItem {
@@ -361,34 +362,64 @@ export const CustomerDetailPage: React.FC = () => {
     );
   }
 
-  const [visitsList, setVisitsList] = useState<Visit[]>(() => DataService.getVisits(tenantId, customer.id));
-  const refreshVisits = () => {
-    setVisitsList(DataService.getVisits(tenantId, customer.id));
-  };
+  const [visitsList, setVisitsList] = useState<Visit[]>([]);
+  const [tasksList, setTasksList] = useState<Task[]>([]);
+  const [followupsList, setFollowupsList] = useState<FollowUp[]>([]);
+  const [oppsList, setOppsList] = useState<Project[]>([]);
+  const [activitiesList, setActivitiesList] = useState<Activity[]>([]);
+  const [tenantUsers, setTenantUsers] = useState<User[]>([]);
 
-  const [tasksList, setTasksList] = useState<Task[]>(() => DataService.getTasks(tenantId, customer.id));
-  const refreshTasks = () => {
-    setTasksList(DataService.getTasks(tenantId, customer.id));
-  };
+  const loadAllCustomerData = async () => {
+    if (!id) return;
+    try {
+      const [custData, vList, tList, fList, pList, aList, uList] = await Promise.all([
+        crmApi.fetchRecordById<Customer>('customers', id),
+        crmApi.fetchCollection<Visit>('visits', tenantId),
+        crmApi.fetchCollection<Task>('tasks', tenantId),
+        crmApi.fetchCollection<FollowUp>('follow_ups', tenantId),
+        crmApi.fetchCollection<Project>('projects', tenantId),
+        crmApi.fetchCollection<Activity>('activities', tenantId),
+        usersApi.fetchUsers(tenantId)
+      ]);
 
-  const [oppsList, setOppsList] = useState<Project[]>(() => DataService.getProjects(tenantId, customer ? customer.id : undefined));
-  const refreshOpps = () => {
-    if (customer) {
-      setOppsList(DataService.getProjects(tenantId, customer.id));
+      if (custData) {
+        setCustomer(custData);
+        setEditName(custData.name || '');
+        setEditCode(custData.code || '');
+        setEditType(custData.type || 'COMPANY');
+        setEditStatus(custData.status || 'ACTIVE');
+        setEditPhone(custData.phone || '');
+        setEditEmail(custData.email || '');
+        setEditRegion(custData.region || '');
+        setEditAddress(custData.address || '');
+        setSelectedPicId(custData.picId || (custData as any).assignedPicId || '');
+      }
+
+      setVisitsList(vList.filter((v: any) => v.customerId === id));
+      setTasksList(tList.filter((t: any) => t.customerId === id));
+      setFollowupsList(fList.filter((f: any) => f.customerId === id));
+      setOppsList(pList.filter((p: any) => p.customerId === id));
+      setActivitiesList(aList.filter((a: any) => a.customerId === id || a.entityId === id));
+      setTenantUsers(uList || []);
+    } catch (err) {
+      console.error('Error loading customer detail data:', err);
     }
   };
+
+  useEffect(() => {
+    loadAllCustomerData();
+  }, [id, tenantId]);
+
+  const refreshVisits = () => loadAllCustomerData();
+  const refreshTasks = () => loadAllCustomerData();
+  const refreshFollowups = () => loadAllCustomerData();
+  const refreshOpps = () => loadAllCustomerData();
 
   const visits: Visit[] = visitsList;
   const tasks: Task[] = tasksList;
   const followups: FollowUp[] = followupsList;
   const projects: Project[] = oppsList;
-  const activities: Activity[] = DataService.getActivities(tenantId, customer.id);
-  const [tenantUsers, setTenantUsers] = useState<User[]>(() => DataService.getUsers(tenantId));
-  useEffect(() => {
-    usersApi.fetchUsers(tenantId).then(users => {
-      if (users && users.length > 0) setTenantUsers(users);
-    });
-  }, [tenantId]);
+  const activities: Activity[] = activitiesList;
 
   // Compute Unified Customer Activity Timeline
   const rawActivities: ActivityTimelineItem[] = [];
@@ -1703,22 +1734,25 @@ export const CustomerDetailPage: React.FC = () => {
       notes: existingNotes,
     };
 
-    DataService.saveCustomer(updated);
-    DataService.addActivity({
+    await crmApi.updateRecord('customers', customer.id, {
+      notes: existingNotes
+    });
+
+    await crmApi.createRecord('activities', {
       tenantId,
       customerId: customer.id,
-      customerName: customer.name,
       userId: currentUser?.id || 'USR-005',
-      userName: currentUser?.name || 'Budi Santoso',
-      type: 'NOTE',
+      typeId: 'NOTE',
       subject: 'Customer Note Added',
       description: newNoteText,
-      occurredAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+      entityType: 'CUSTOMER',
+      entityId: customer.id
     });
 
     setCustomer(updated);
     setNewNoteText('');
     setShowNoteModal(false);
+    loadAllCustomerData();
   };
 
   const primaryContact = customer.contacts?.[0] || {
