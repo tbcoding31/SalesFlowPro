@@ -850,6 +850,22 @@ const setupEndpoint = (table: string) => {
         data[authZ.ownerCol] = actorUserId;
       }
       
+      // Cross-tenant Customer relationship validation & PIC inheritance fallback
+      if (data.customerId && tenantSpecificTables.includes(table) && ['projects', 'tasks', 'visits', 'follow_ups'].includes(table)) {
+        const targetTenant = data.tenantId || actorTenant;
+        const [custRows]: any = await pool.query('SELECT id, tenantId, picId, statusId FROM customers WHERE id = ?', [data.customerId]);
+        if (custRows.length === 0) {
+          return res.status(400).json({ error: 'Referenced customer does not exist.', code: 'CUSTOMER_NOT_FOUND' });
+        }
+        if (targetTenant !== 'SYSTEM' && custRows[0].tenantId !== targetTenant) {
+          return res.status(403).json({ error: 'Cross-tenant customer reference forbidden.', code: 'CROSS_TENANT_CUSTOMER' });
+        }
+        // If picId is not explicitly provided on child entity, inherit from Customer PIC
+        if (!data.picId && custRows[0].picId) {
+          data.picId = custRows[0].picId;
+        }
+      }
+
       // Authoritative PIC validation on creation
       if (data.picId) {
         const targetTenant = data.tenantId || actorTenant;
@@ -2276,6 +2292,146 @@ app.get('/api/reports/customers', async (req, res) => {
     console.error('Error GET /api/reports/customers:', err);
     res.status(500).json({ error: 'Internal Server Error', message: err.message });
   }
+});
+
+// ==========================================
+// R40.1 PROJECT COMMERCIAL STAGE TRANSITION
+// ==========================================
+
+app.patch('/api/projects/:id/stage', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const projectId = req.params.id;
+  const { stageId, notes, reason } = req.body;
+
+  if (!stageId) {
+    return res.status(400).json({ error: 'Target stageId is required.', code: 'STAGE_REQUIRED' });
+  }
+
+  const validStages = ['LEAD', 'QUALIFICATION', 'PROPOSAL', 'NEGOTIATION', 'WON', 'LOST'];
+  if (!validStages.includes(stageId)) {
+    return res.status(400).json({ error: `Invalid stageId: ${stageId}. Must be one of ${validStages.join(', ')}`, code: 'INVALID_STAGE' });
+  }
+
+  const connection = await pool.getConnection();
+  await connection.beginTransaction();
+
+  try {
+    // 1. Fetch current project record
+    const [projRows]: any = await connection.query('SELECT * FROM projects WHERE id = ?', [projectId]);
+    if (projRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Project not found.', code: 'PROJECT_NOT_FOUND' });
+    }
+
+    const project = projRows[0];
+    const projectTenant = project.tenantId;
+
+    // BOLA Check
+    if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && projectTenant !== actorTenant) {
+      await connection.rollback();
+      return res.status(403).json({ error: 'Cross-tenant mutation forbidden (BOLA).' });
+    }
+
+    // Permission & Scope Check
+    const hasAdminPerms = actorPermissions.includes('ALL') || actorPermissions.includes('MANAGE_TENANT') || actorPermissions.includes('MANAGE_PROJECTS');
+    const hasOwnPerm = actorPermissions.includes('MANAGE_OWN_PROJECTS');
+
+    if (!hasAdminPerms && !hasOwnPerm) {
+      await connection.rollback();
+      return res.status(403).json({ error: 'Forbidden. Requires MANAGE_PROJECTS capability.' });
+    }
+
+    if (!hasAdminPerms) {
+      if (actorDataScope === 'OWN' && project.picId !== actorUserId) {
+        await connection.rollback();
+        return res.status(403).json({ error: 'Forbidden. You do not own this project.' });
+      } else if (actorDataScope === 'TEAM') {
+        const [teamMatch]: any = await connection.query(`
+          SELECT 1 FROM team_members tm1
+          JOIN tenant_users tu1 ON tu1.id = tm1.tenantUserId
+          JOIN team_members tm2 ON tm2.teamId = tm1.teamId
+          JOIN tenant_users tu2 ON tu2.id = tm2.tenantUserId
+          WHERE tu1.userId = ? AND tu2.userId = ? AND tu1.tenantId = ? AND tu2.tenantId = ?
+            AND tu1.status = 'ACTIVE' AND tu2.status = 'ACTIVE'
+        `, [actorUserId, project.picId, actorTenant, actorTenant]);
+
+        if (teamMatch.length === 0) {
+          await connection.rollback();
+          return res.status(403).json({ error: 'Forbidden. Project does not belong to an active member of your team.' });
+        }
+      } else if (actorDataScope === 'DEPARTMENT') {
+        await connection.rollback();
+        return res.status(403).json({ error: 'Forbidden. DEPARTMENT data scope is inactive.', code: 'DEPARTMENT_SCOPE_NOT_ACTIVE' });
+      }
+    }
+
+    const fromStageId = project.stageId || 'LEAD';
+    const toStageId = stageId;
+
+    // Determine probability based on target stage
+    let targetProbability = project.probability;
+    if (toStageId === 'WON') targetProbability = 100;
+    else if (toStageId === 'LOST') targetProbability = 0;
+    else if (toStageId === 'LEAD') targetProbability = 10;
+    else if (toStageId === 'QUALIFICATION') targetProbability = 30;
+    else if (toStageId === 'PROPOSAL') targetProbability = 60;
+    else if (toStageId === 'NEGOTIATION') targetProbability = 80;
+
+    // 2. Update Project stage and probability
+    await connection.query(
+      'UPDATE projects SET stageId = ?, probability = ? WHERE id = ?',
+      [toStageId, targetProbability, projectId]
+    );
+
+    // 3. Record Project Stage History
+    const historyId = `PSH-${Date.now()}-${Math.random().toString(36).slice(-4)}`;
+    await connection.query(
+      'INSERT INTO project_stage_histories (id, projectId, fromStageId, toStageId, changedById, notes) VALUES (?, ?, ?, ?, ?, ?)',
+      [historyId, projectId, fromStageId, toStageId, actorUserId, notes || reason || `Stage changed from ${fromStageId} to ${toStageId}`]
+    );
+
+    // 4. Customer Activation Rule on WON:
+    // If target stage is WON and customer status is PROSPECT, activate customer to ACTIVE
+    let customerActivated = false;
+    if (toStageId === 'WON' && project.customerId) {
+      const [custRows]: any = await connection.query('SELECT statusId FROM customers WHERE id = ?', [project.customerId]);
+      if (custRows.length > 0 && (custRows[0].statusId === 'PROSPECT' || custRows[0].statusId === 'INACTIVE')) {
+        await connection.query('UPDATE customers SET statusId = "ACTIVE" WHERE id = ?', [project.customerId]);
+        customerActivated = true;
+      }
+    }
+
+    await connection.commit();
+
+    res.json({
+      success: true,
+      projectId,
+      fromStageId,
+      toStageId,
+      probability: targetProbability,
+      customerActivated
+    });
+  } catch (err: any) {
+    await connection.rollback();
+    console.error('Error in PATCH /api/projects/:id/stage:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  } finally {
+    connection.release();
+  }
+});
+
+// Alias for PUT /api/projects/:id/stage
+app.put('/api/projects/:id/stage', async (req, res) => {
+  req.url = `/api/projects/${req.params.id}/stage`;
+  return app._router.handle(req, res, () => {});
 });
 
 tables.forEach(table => setupEndpoint(table));

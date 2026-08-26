@@ -95,6 +95,25 @@ export const crmApi = {
     }
   },
 
+  // Project Commercial Stage Transition
+  transitionProjectStage: async (projectId: string, stageId: string, notes?: string): Promise<{ success: boolean; error?: string; code?: string; data?: any }> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${projectId}/stage`, {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ stageId, notes })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to update stage', code: data.code };
+      }
+      return { success: true, data };
+    } catch (err: any) {
+      console.error('[crmApi.transitionProjectStage error]', err);
+      return { success: false, error: err.message || 'Network error' };
+    }
+  },
+
   // Specialized Reports Fetchers
   fetchSalesReport: async (tenantId?: string): Promise<any> => {
     try {

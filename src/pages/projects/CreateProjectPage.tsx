@@ -4,6 +4,8 @@ import { useAuth } from '../../context/AuthContext';
 import { DataService } from '../../services/dataService';
 import { masterDataApi } from '../../services/masterDataApi';
 import { Customer, User, ProjectStage, Project, MasterDataItem } from '../../types';
+import { crmApi } from '../../services/crmApi';
+import { usersApi } from '../../services/usersApi';
 
 export const CreateProjectPage: React.FC = () => {
   const navigate = useNavigate();
@@ -24,6 +26,7 @@ export const CreateProjectPage: React.FC = () => {
   const [expectedCloseDate, setExpectedCloseDate] = useState('');
   const [picId, setPicId] = useState('');
   const [description, setDescription] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // PIC Dropdown State
   const [isPicDropdownOpen, setIsPicDropdownOpen] = useState(false);
@@ -31,8 +34,9 @@ export const CreateProjectPage: React.FC = () => {
   const picDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setCustomers(DataService.getCustomers(tenantId));
-    setUsers(DataService.getUsers(tenantId));
+    crmApi.fetchCollection<Customer>('customers', tenantId).then(setCustomers);
+    usersApi.fetchUsers(tenantId).then(setUsers);
+    
     // Default PIC to current user
     if (currentUser) {
       setPicId(currentUser.id);
@@ -45,6 +49,14 @@ export const CreateProjectPage: React.FC = () => {
     });
   }, [tenantId, currentUser]);
 
+  const handleCustomerChange = (selectedId: string) => {
+    setCustomerId(selectedId);
+    const found = customers.find(c => c.id === selectedId);
+    if (found?.picId || found?.assignedPicId) {
+      setPicId(found.picId || found.assignedPicId);
+    }
+  };
+
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (picDropdownRef.current && !picDropdownRef.current.contains(event.target as Node)) {
@@ -55,39 +67,38 @@ export const CreateProjectPage: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const handleSave = (isDraft: boolean = false) => {
-    if (!name || !customerId || !picId) {
-      alert('Please fill in the required fields: Project Name, Customer, and PIC.');
+  const handleSave = async (isDraft: boolean = false) => {
+    if (!name || !customerId) {
+      alert('Please fill in the required fields: Project Name and Customer.');
       return;
     }
 
     const selectedCustomer = customers.find(c => c.id === customerId);
-    const selectedPic = users.find(u => u.id === picId);
+    const targetPicId = picId || selectedCustomer?.picId || selectedCustomer?.assignedPicId || currentUser?.id;
 
-    if (!selectedCustomer || !selectedPic) return;
-
-    const newOpp: Project = {
-      id: `OPP-${Date.now()}`,
+    const newProjectPayload = {
+      id: `PRJ-${Date.now()}`,
       tenantId,
-      name,
-      customerId: selectedCustomer.id,
-      customerName: selectedCustomer.name,
-      customerCode: selectedCustomer.code,
-      picId: selectedPic.id,
-      picName: selectedPic.name,
-      picAvatar: selectedPic.avatar,
-      estimatedValue: Number(estimatedValue.replace(/[^0-9]/g, '')) || 0,
+      customerId: selectedCustomer?.id || customerId,
+      title: name,
+      value: Number(estimatedValue.replace(/[^0-9]/g, '')) || 0,
       probability,
       expectedCloseDate: expectedCloseDate || new Date().toISOString().split('T')[0],
-      stage: isDraft ? (projectStages[0]?.code_value || 'LEAD') : stage,
+      stageId: isDraft ? (projectStages[0]?.codeValue || 'LEAD') : (stage || 'LEAD'),
       source: 'Direct',
       description,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      picId: targetPicId
     };
 
-    DataService.saveProject(newOpp);
-    navigate('/projects');
+    setIsSubmitting(true);
+    const res = await crmApi.createRecord('projects', newProjectPayload);
+    setIsSubmitting(false);
+
+    if (res.success) {
+      navigate('/projects');
+    } else {
+      alert(`Failed to create project: ${res.error}`);
+    }
   };
 
   const formatMoneyInput = (val: string) => {
@@ -188,7 +199,7 @@ export const CreateProjectPage: React.FC = () => {
                 <label className="block text-xs font-bold text-slate-700 mb-1.5">Customer <span className="text-rose-500">*</span></label>
                 <select 
                   value={customerId}
-                  onChange={(e) => setCustomerId(e.target.value)}
+                  onChange={(e) => handleCustomerChange(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-shadow"
                 >
                   <option value="" disabled>Select a customer</option>

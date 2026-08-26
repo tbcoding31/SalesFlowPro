@@ -3,11 +3,12 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { DataService } from '../../services/dataService';
 import { Project, Customer, Task, Visit, FollowUp, Activity, ProjectStage } from '../../types';
+import { crmApi } from '../../services/crmApi';
 
 export const ProjectDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { currentTenant } = useAuth();
+  const { currentTenant, currentUser } = useAuth();
   const tenantId = currentTenant?.id || 'TEN-00001';
 
   const [project, setProject] = useState<Project | null>(null);
@@ -17,53 +18,68 @@ export const ProjectDetailPage: React.FC = () => {
   const [followups, setFollowups] = useState<FollowUp[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [commentText, setCommentText] = useState('');
-  const { currentUser } = useAuth();
+  const [isLoading, setIsLoading] = useState(true);
 
-  const handleAddComment = () => {
+  const loadData = async () => {
+    if (!id) return;
+    setIsLoading(true);
+    try {
+      const proj = await crmApi.fetchRecordById<Project>('projects', id);
+      if (proj) {
+        setProject(proj);
+        if (proj.customerId) {
+          const cust = await crmApi.fetchRecordById<Customer>('customers', proj.customerId);
+          if (cust) setCustomer(cust);
+        }
+        const [allTasks, allVisits, allFollowups, allActivities] = await Promise.all([
+          crmApi.fetchCollection<Task>('tasks', tenantId),
+          crmApi.fetchCollection<Visit>('visits', tenantId),
+          crmApi.fetchCollection<FollowUp>('follow_ups', tenantId),
+          crmApi.fetchCollection<Activity>('activities', tenantId)
+        ]);
+        setTasks(allTasks.filter(t => (t as any).relatedProjectId === id || t.customerId === proj.customerId).slice(0, 5));
+        setVisits(allVisits.filter(v => (v as any).relatedProjectId === id || v.customerId === proj.customerId).slice(0, 5));
+        setFollowups(allFollowups.filter(f => (f as any).relatedProjectId === id || f.customerId === proj.customerId).slice(0, 5));
+        setActivities(allActivities.filter(a => a.customerId === proj.customerId).slice(0, 10));
+      }
+    } catch (err) {
+      console.error('Error loading project details from DB:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleStageChange = async (targetStage: string) => {
+    if (!project) return;
+    const res = await crmApi.transitionProjectStage(project.id, targetStage);
+    if (res.success) {
+      loadData();
+    } else {
+      alert(`Failed to move stage: ${res.error}`);
+    }
+  };
+
+  const handleAddComment = async () => {
     if (!commentText.trim() || !project) return;
     
-    const newActivity = DataService.addActivity({
+    await crmApi.createRecord('activities', {
+      id: `ACT-${Date.now()}`,
       tenantId,
       customerId: project.customerId,
-      customerName: project.customerName,
       userId: currentUser?.id || 'SYS-001',
-      userName: currentUser?.name || 'System',
-      type: 'NOTE',
+      typeId: 'NOTE',
       subject: 'Comment',
       description: commentText,
-      occurredAt: new Date().toISOString(),
       entityType: 'PROJECT',
       entityId: project.id
     });
 
-    setActivities(prev => [newActivity, ...prev]);
     setCommentText('');
+    loadData();
   };
 
   useEffect(() => {
-    if (id) {
-      const opp = DataService.getProjects(tenantId).find(o => o.id === id);
-      if (opp) {
-        setProject(opp);
-        const cust = DataService.getCustomerById(opp.customerId);
-        if (cust) setCustomer(cust);
-
-        // Fetch related data
-        const allTasks = DataService.getTasks(tenantId, opp.customerId);
-        // We'll just mock filter related tasks if they have relatedProjectId, 
-        // or just show all customer tasks for now if no specific link exists
-        setTasks(allTasks.filter(t => t.relatedProjectId === opp.id || t.customerId === opp.customerId).slice(0, 5));
-
-        const allVisits = DataService.getVisits(tenantId, opp.customerId);
-        setVisits(allVisits.filter(v => v.customerId === opp.customerId).slice(0, 5));
-
-        const allFollowups = DataService.getFollowUps(tenantId, opp.customerId);
-        setFollowups(allFollowups.filter(f => f.relatedProjectId === opp.id || f.customerId === opp.customerId).slice(0, 5));
-
-        const allActivities = DataService.getActivities(tenantId, opp.customerId);
-        setActivities(allActivities.filter(a => a.customerId === opp.customerId).slice(0, 10));
-      }
-    }
+    loadData();
   }, [id, tenantId]);
 
   if (!project) {
@@ -211,12 +227,16 @@ export const ProjectDetailPage: React.FC = () => {
               const isPending = idx > currentStageIndex;
 
               return (
-                <div key={stage.key} className="relative z-10 flex flex-col items-center gap-2 min-w-[80px]">
+                <button 
+                  key={stage.key} 
+                  onClick={() => handleStageChange(stage.key)}
+                  className="relative z-10 flex flex-col items-center gap-2 min-w-[80px] hover:scale-105 transition-transform"
+                >
                   <div 
                     className={`w-8 h-8 rounded-full flex items-center justify-center border-2 transition-colors
                       ${isCompleted ? 'bg-indigo-500 border-indigo-500 text-white' : ''}
                       ${isCurrent ? 'bg-white border-indigo-500 text-indigo-600 shadow-md ring-4 ring-indigo-50' : ''}
-                      ${isPending ? 'bg-white border-slate-200 text-slate-300' : ''}
+                      ${isPending ? 'bg-white border-slate-200 text-slate-300 hover:border-indigo-200' : ''}
                     `}
                   >
                     {isCompleted ? (
@@ -230,7 +250,7 @@ export const ProjectDetailPage: React.FC = () => {
                   <span className={`text-xs font-bold ${isCurrent ? 'text-indigo-700' : isCompleted ? 'text-slate-700' : 'text-slate-400'}`}>
                     {stage.label}
                   </span>
-                </div>
+                </button>
               );
             })}
           </div>
