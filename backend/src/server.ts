@@ -4710,6 +4710,7 @@ app.get('/api/tenant/analytics-settings', async (req, res) => {
 app.put('/api/tenant/analytics-settings', async (req, res) => {
   const actorRole = (req as any).userRole;
   const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
   const actorPermissions = (req as any).userPermissions || [];
   const isPlatformUser = (req as any).isPlatformUser;
 
@@ -4750,6 +4751,13 @@ app.put('/api/tenant/analytics-settings', async (req, res) => {
         ON DUPLICATE KEY UPDATE settingValue = VALUES(settingValue)
       `, [settingId, targetTenant, String(numVal)]);
     }
+
+    // R53R: Bulk reconcile tenant intervention history on velocity policy changes
+    synchronizeProjectInterventionHistory(pool, {
+      tenantId: targetTenant,
+      triggerEventType: 'VELOCITY_POLICY_UPDATED',
+      actorUserId: actorUserId || null
+    }).catch(syncErr => console.error('[R53R] Sync intervention history error on analytics-settings PUT:', syncErr.message));
 
     res.json({
       success: true,
@@ -5146,27 +5154,51 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
       // R53: If policy status changed to INACTIVE, close active episodes for this policy
       if (status === 'INACTIVE') {
         const nowIso = new Date().toISOString().slice(0, 19).replace('T', ' ');
-        await conn.query(`
-          UPDATE project_intervention_episodes
-          SET isActive = FALSE,
-              endedAt = ?,
-              endReason = 'POLICY_DEACTIVATED',
-              endedByEventType = 'POLICY_DEACTIVATED',
-              endedByUserId = ?
-          WHERE policyId = ? AND tenantId = ? AND isActive = TRUE
-        `, [nowIso, actorUserId || null, policyId, targetTenant]);
+        const [activePies]: any = await conn.query(
+          `SELECT id, startedAt FROM project_intervention_episodes WHERE policyId = ? AND tenantId = ? AND isActive = TRUE`,
+          [policyId, targetTenant]
+        );
+        for (const pie of activePies) {
+          const diffMs = new Date(nowIso).getTime() - new Date(pie.startedAt).getTime();
+          const durationHours = Math.max(0, Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100);
+          const durationDays = Math.max(0, Math.round((diffMs / (1000 * 60 * 60 * 24)) * 100) / 100);
+          await conn.query(`
+            UPDATE project_intervention_episodes
+            SET isActive = FALSE,
+                activeKey = NULL,
+                endedAt = ?,
+                durationHours = ?,
+                durationDays = ?,
+                endReason = 'POLICY_DEACTIVATED',
+                endedByEventType = 'POLICY_DEACTIVATED',
+                endedByUserId = ?
+            WHERE id = ?
+          `, [nowIso, durationHours, durationDays, actorUserId || null, pie.id]);
+        }
       } else if (validatedConditions || severity) {
         // If conditions or severity changed, close existing episodes with POLICY_CHANGED and re-evaluate
         const nowIso = new Date().toISOString().slice(0, 19).replace('T', ' ');
-        await conn.query(`
-          UPDATE project_intervention_episodes
-          SET isActive = FALSE,
-              endedAt = ?,
-              endReason = 'POLICY_CHANGED',
-              endedByEventType = 'POLICY_CHANGED',
-              endedByUserId = ?
-          WHERE policyId = ? AND tenantId = ? AND isActive = TRUE
-        `, [nowIso, actorUserId || null, policyId, targetTenant]);
+        const [activePies]: any = await conn.query(
+          `SELECT id, startedAt FROM project_intervention_episodes WHERE policyId = ? AND tenantId = ? AND isActive = TRUE`,
+          [policyId, targetTenant]
+        );
+        for (const pie of activePies) {
+          const diffMs = new Date(nowIso).getTime() - new Date(pie.startedAt).getTime();
+          const durationHours = Math.max(0, Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100);
+          const durationDays = Math.max(0, Math.round((diffMs / (1000 * 60 * 60 * 24)) * 100) / 100);
+          await conn.query(`
+            UPDATE project_intervention_episodes
+            SET isActive = FALSE,
+                activeKey = NULL,
+                endedAt = ?,
+                durationHours = ?,
+                durationDays = ?,
+                endReason = 'POLICY_CHANGED',
+                endedByEventType = 'POLICY_CHANGED',
+                endedByUserId = ?
+            WHERE id = ?
+          `, [nowIso, durationHours, durationDays, actorUserId || null, pie.id]);
+        }
       }
 
       await conn.commit();
@@ -5859,10 +5891,17 @@ export async function synchronizeProjectInterventionHistory(
     // If project is terminal, close any open episodes
     if (isTerminal) {
       for (const ep of activeEpisodes.filter((e: any) => e.projectId === p.id)) {
+        const diffMs = new Date(observedAt).getTime() - new Date(ep.startedAt).getTime();
+        const durationHours = Math.max(0, Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100);
+        const durationDays = Math.max(0, Math.round((diffMs / (1000 * 60 * 60 * 24)) * 100) / 100);
+
         await connectionOrPool.query(`
           UPDATE project_intervention_episodes
           SET isActive = FALSE,
+              activeKey = NULL,
               endedAt = ?,
+              durationHours = ?,
+              durationDays = ?,
               endReason = 'PROJECT_BECAME_TERMINAL',
               endedByEventType = ?,
               endedByEntityId = ?,
@@ -5871,6 +5910,8 @@ export async function synchronizeProjectInterventionHistory(
           WHERE id = ?
         `, [
           observedAt,
+          durationHours,
+          durationDays,
           triggerEventType,
           triggerEntityId || null,
           actorUserId || null,
@@ -5974,50 +6015,73 @@ export async function synchronizeProjectInterventionHistory(
 
       const key = `${p.id}:${pol.id}`;
       const activeEp = activeEpisodeMap[key];
+      const activeKey = `${tenantId}:${p.id}:${pol.id}`;
 
       if (policyOutcome === 'MATCHED') {
         if (!activeEp) {
           // ENTER boundary
           const epId = `PIE-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-          await connectionOrPool.query(`
-            INSERT INTO project_intervention_episodes (
-              id, tenantId, projectId, policyId, policyCodeSnapshot, policyNameSnapshot,
-              severitySnapshot, matchModeSnapshot, conditionSnapshot, startFacts,
-              startReason, startedByEventType, startedByEntityId, startedByUserId, startedAt, isActive
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)
-          `, [
-            epId,
-            tenantId,
-            p.id,
-            pol.id,
-            pol.code,
-            pol.name,
-            pol.severity,
-            pol.matchMode,
-            JSON.stringify(condList),
-            JSON.stringify(currentFacts),
-            'CONDITIONS_MATCHED',
-            triggerEventType,
-            triggerEntityId || null,
-            actorUserId || null,
-            observedAt
-          ]);
+          const startProv = triggerEventType === 'R53_ACTIVATION' ? 'OBSERVED_ON_R53_ACTIVATION' : triggerEventType === 'SYSTEM_RECONCILIATION' ? 'RECONCILIATION_OBSERVED' : 'TRANSITION_DETECTED';
+
+          try {
+            await connectionOrPool.query(`
+              INSERT INTO project_intervention_episodes (
+                id, tenantId, projectId, policyId, policyCodeSnapshot, policyNameSnapshot,
+                severitySnapshot, matchModeSnapshot, conditionSnapshot, startFacts,
+                startReason, startProvenance, startedByEventType, startedByEntityId, startedByUserId,
+                picIdSnapshot, startedAt, isActive, activeKey
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?)
+            `, [
+              epId,
+              tenantId,
+              p.id,
+              pol.id,
+              pol.code,
+              pol.name,
+              pol.severity,
+              pol.matchMode,
+              JSON.stringify(condList),
+              JSON.stringify(currentFacts),
+              'CONDITIONS_MATCHED',
+              startProv,
+              triggerEventType,
+              triggerEntityId || null,
+              actorUserId || null,
+              p.picId || null,
+              observedAt,
+              activeKey
+            ]);
+          } catch (insertErr: any) {
+            // Concurrency protection: Ignore duplicate activeKey if another process inserted concurrently
+            if (!insertErr.message.includes('Duplicate entry') && insertErr.code !== 'ER_DUP_ENTRY') {
+              throw insertErr;
+            }
+          }
         }
       } else if (policyOutcome === 'NOT_MATCHED') {
         if (activeEp) {
           // EXIT boundary
+          const diffMs = new Date(observedAt).getTime() - new Date(activeEp.startedAt).getTime();
+          const durationHours = Math.max(0, Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100);
+          const durationDays = Math.max(0, Math.round((diffMs / (1000 * 60 * 60 * 24)) * 100) / 100);
+
           await connectionOrPool.query(`
             UPDATE project_intervention_episodes
             SET isActive = FALSE,
+                activeKey = NULL,
                 endedAt = ?,
+                durationHours = ?,
+                durationDays = ?,
                 endReason = 'BUSINESS_STATE_CHANGED',
                 endedByEventType = ?,
                 endedByEntityId = ?,
                 endedByUserId = ?,
                 endFacts = ?
-            WHERE id = ?
+            WHERE id = ? AND isActive = TRUE
           `, [
             observedAt,
+            durationHours,
+            durationDays,
             triggerEventType,
             triggerEntityId || null,
             actorUserId || null,
@@ -6028,18 +6092,27 @@ export async function synchronizeProjectInterventionHistory(
       } else if (policyOutcome === 'UNKNOWN') {
         if (activeEp) {
           // MATCHED -> UNKNOWN boundary
+          const diffMs = new Date(observedAt).getTime() - new Date(activeEp.startedAt).getTime();
+          const durationHours = Math.max(0, Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100);
+          const durationDays = Math.max(0, Math.round((diffMs / (1000 * 60 * 60 * 24)) * 100) / 100);
+
           await connectionOrPool.query(`
             UPDATE project_intervention_episodes
             SET isActive = FALSE,
+                activeKey = NULL,
                 endedAt = ?,
+                durationHours = ?,
+                durationDays = ?,
                 endReason = 'EVALUATION_BECAME_UNKNOWN',
                 endedByEventType = ?,
                 endedByEntityId = ?,
                 endedByUserId = ?,
                 endFacts = ?
-            WHERE id = ?
+            WHERE id = ? AND isActive = TRUE
           `, [
             observedAt,
+            durationHours,
+            durationDays,
             triggerEventType,
             triggerEntityId || null,
             actorUserId || null,
@@ -6154,13 +6227,8 @@ app.get('/api/management/project-intervention-history', async (req, res) => {
     const [rows]: any = await pool.query(sql, params);
 
     const episodes = rows.map((r: any) => {
-      let durationHours: number | null = null;
-      let durationDays: number | null = null;
-      if (r.endedAt && r.startedAt) {
-        const diffMs = new Date(r.endedAt).getTime() - new Date(r.startedAt).getTime();
-        durationHours = Math.max(0, Math.round((diffMs / (1000 * 60 * 60)) * 10) / 10);
-        durationDays = Math.max(0, Math.round((diffMs / (1000 * 60 * 60 * 24)) * 10) / 10);
-      }
+      const durationHours = r.durationHours !== null ? Number(r.durationHours) : null;
+      const durationDays = r.durationDays !== null ? Number(r.durationDays) : null;
 
       return {
         id: r.id,
@@ -6170,6 +6238,7 @@ app.get('/api/management/project-intervention-history', async (req, res) => {
         customerName: r.customerName || 'Unknown Customer',
         currentPicId: r.currentPicId,
         picName: r.picName || 'Unassigned',
+        picIdSnapshot: r.picIdSnapshot,
         policyId: r.policyId,
         policyCode: r.policyCodeSnapshot,
         policyName: r.policyNameSnapshot,
@@ -6180,6 +6249,7 @@ app.get('/api/management/project-intervention-history', async (req, res) => {
         endFacts: r.endFacts ? (typeof r.endFacts === 'string' ? JSON.parse(r.endFacts) : r.endFacts) : null,
         startReason: r.startReason,
         endReason: r.endReason,
+        startProvenance: r.startProvenance || 'TRANSITION_DETECTED',
         startedByEventType: r.startedByEventType,
         endedByEventType: r.endedByEventType,
         startedByUserId: r.startedByUserId,
@@ -6188,6 +6258,7 @@ app.get('/api/management/project-intervention-history', async (req, res) => {
         endedAt: r.endedAt,
         durationHours,
         durationDays,
+        durationProvenance: r.startProvenance === 'TRANSITION_DETECTED' ? 'EXACT' : 'OBSERVED_PARTIAL',
         isActive: Boolean(r.isActive),
         createdAt: r.createdAt
       };
@@ -6195,6 +6266,13 @@ app.get('/api/management/project-intervention-history', async (req, res) => {
 
     const activeEpisodesCount = episodes.filter((e: any) => e.isActive).length;
     const resolvedEpisodesCount = episodes.filter((e: any) => !e.isActive).length;
+    const episodesWithExactStart = episodes.filter((e: any) => e.startProvenance === 'TRANSITION_DETECTED').length;
+    const episodesWithObservedStart = episodes.filter((e: any) => e.startProvenance !== 'TRANSITION_DETECTED').length;
+    const episodesWithExactDuration = episodes.filter((e: any) => !e.isActive && e.durationProvenance === 'EXACT').length;
+    const episodesWithPartialObservedDuration = episodes.filter((e: any) => !e.isActive && e.durationProvenance === 'OBSERVED_PARTIAL').length;
+
+    const [earliestRow]: any = await pool.query(`SELECT MIN(startedAt) as earliest FROM project_intervention_episodes WHERE tenantId = ?`, [targetTenant]);
+    const historyCoverageStartAt = earliestRow.length > 0 ? earliestRow[0].earliest : null;
 
     res.json({
       tenantId: targetTenant,
@@ -6203,7 +6281,12 @@ app.get('/api/management/project-intervention-history', async (req, res) => {
       summary: {
         totalEpisodes: episodes.length,
         activeEpisodesCount,
-        resolvedEpisodesCount
+        resolvedEpisodesCount,
+        episodesWithExactStart,
+        episodesWithObservedStart,
+        episodesWithExactDuration,
+        episodesWithPartialObservedDuration,
+        historyCoverageStartAt
       },
       episodes
     });

@@ -144,7 +144,7 @@ async function setupDatabase() {
       INDEX idx_pipc_policy (policyId)
     )`,
 
-    // R53 STALLED PROJECT INTERVENTION EPISODES HISTORY
+    // R53 STALLED PROJECT INTERVENTION EPISODES HISTORY (EPISODE LIFECYCLE MODEL)
     `CREATE TABLE IF NOT EXISTS project_intervention_episodes (
       id VARCHAR(50) PRIMARY KEY,
       tenantId VARCHAR(50) NOT NULL,
@@ -159,16 +159,23 @@ async function setupDatabase() {
       endFacts JSON,
       startReason VARCHAR(100) NOT NULL,
       endReason VARCHAR(100),
+      startProvenance VARCHAR(50) NOT NULL DEFAULT 'TRANSITION_DETECTED',
       startedByEventType VARCHAR(100) NOT NULL,
       endedByEventType VARCHAR(100),
       startedByEntityId VARCHAR(50),
       endedByEntityId VARCHAR(50),
       startedByUserId VARCHAR(50),
       endedByUserId VARCHAR(50),
+      picIdSnapshot VARCHAR(50),
+      teamIdSnapshot VARCHAR(50),
       startedAt DATETIME NOT NULL,
       endedAt DATETIME,
+      durationHours DECIMAL(10,2),
+      durationDays DECIMAL(10,2),
       isActive BOOLEAN NOT NULL DEFAULT TRUE,
+      activeKey VARCHAR(160) DEFAULT NULL,
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_pie_active_key (activeKey),
       INDEX idx_pie_tenant_project (tenantId, projectId, startedAt),
       INDEX idx_pie_tenant_policy (tenantId, policyId, startedAt),
       INDEX idx_pie_active (tenantId, projectId, policyId, isActive)
@@ -192,6 +199,41 @@ async function setupDatabase() {
     `);
   } catch (err: any) {
     // Ignore if constraint already exists
+  }
+
+  // Ensure columns on project_intervention_episodes
+  const columnsToAdd = [
+    { name: 'startProvenance', def: 'VARCHAR(50) NOT NULL DEFAULT "TRANSITION_DETECTED"' },
+    { name: 'picIdSnapshot', def: 'VARCHAR(50)' },
+    { name: 'teamIdSnapshot', def: 'VARCHAR(50)' },
+    { name: 'durationHours', def: 'DECIMAL(10,2)' },
+    { name: 'durationDays', def: 'DECIMAL(10,2)' },
+    { name: 'activeKey', def: 'VARCHAR(160) DEFAULT NULL' }
+  ];
+
+  for (const col of columnsToAdd) {
+    try {
+      const [colRows]: any = await pool.query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'project_intervention_episodes' AND COLUMN_NAME = ?`,
+        [col.name]
+      );
+      if (colRows.length === 0) {
+        await pool.query(`ALTER TABLE project_intervention_episodes ADD COLUMN ${col.name} ${col.def}`);
+      }
+    } catch (e: any) {
+      // Ignore
+    }
+  }
+
+  try {
+    const [idxRows]: any = await pool.query(
+      `SELECT CONSTRAINT_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'project_intervention_episodes' AND CONSTRAINT_NAME = 'uq_pie_active_key'`
+    );
+    if (idxRows.length === 0) {
+      await pool.query(`ALTER TABLE project_intervention_episodes ADD UNIQUE KEY uq_pie_active_key (activeKey)`);
+    }
+  } catch (err: any) {
+    // Ignore
   }
 
   console.log('All 42 tables verified/created successfully.');
