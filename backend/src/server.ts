@@ -4831,7 +4831,11 @@ app.post('/api/tenant/project-intervention-policies', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.body.tenantId || 'SYSTEM');
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.body.tenantId || (req.query.tenantId as string));
+  if (!targetTenant || targetTenant === 'SYSTEM') {
+    return res.status(400).json({ error: 'Target tenantId is required for policy creation.', code: 'MISSING_TARGET_TENANT' });
+  }
+
   if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && targetTenant !== actorTenant) {
     return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
   }
@@ -4845,7 +4849,7 @@ app.post('/api/tenant/project-intervention-policies', async (req, res) => {
       return res.status(403).json({ error: 'Forbidden: Insufficient permissions to create intervention policies.' });
     }
 
-    const { code, name, description, severity = 'WARNING', matchMode = 'ALL', conditions = [] } = req.body;
+    const { code, name, description, severity, matchMode, status, conditions = [] } = req.body;
 
     if (!code || typeof code !== 'string' || !code.trim()) {
       return res.status(400).json({ error: 'Policy code is required.', code: 'MISSING_POLICY_CODE' });
@@ -4855,18 +4859,32 @@ app.post('/api/tenant/project-intervention-policies', async (req, res) => {
       return res.status(400).json({ error: 'Policy name is required.', code: 'MISSING_POLICY_NAME' });
     }
 
-    if (!VALID_INTERVENTION_SEVERITIES.includes(severity)) {
-      return res.status(400).json({ error: `Invalid severity. Allowed: ${VALID_INTERVENTION_SEVERITIES.join(', ')}`, code: 'INVALID_SEVERITY' });
+    if (!severity || !VALID_INTERVENTION_SEVERITIES.includes(severity)) {
+      return res.status(400).json({ error: `Explicit severity is required. Allowed: ${VALID_INTERVENTION_SEVERITIES.join(', ')}`, code: 'INVALID_SEVERITY' });
     }
+
+    if (!matchMode || matchMode !== 'ALL') {
+      return res.status(400).json({ error: 'Explicit matchMode is required. Currently supported: ALL', code: 'INVALID_MATCH_MODE' });
+    }
+
+    if (status && !['ACTIVE', 'INACTIVE'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status. Allowed: ACTIVE, INACTIVE', code: 'INVALID_STATUS' });
+    }
+    const policyStatus = status || 'ACTIVE';
 
     if (!Array.isArray(conditions) || conditions.length === 0) {
       return res.status(400).json({ error: 'At least one valid condition is required.', code: 'EMPTY_CONDITIONS' });
     }
 
+    const uniqueConditions = new Set<string>();
     for (const c of conditions) {
       if (!VALID_INTERVENTION_CONDITION_TYPES.includes(c)) {
         return res.status(400).json({ error: `Invalid conditionType "${c}". Allowed: ${VALID_INTERVENTION_CONDITION_TYPES.join(', ')}`, code: 'INVALID_CONDITION_TYPE' });
       }
+      if (uniqueConditions.has(c)) {
+        return res.status(400).json({ error: `Duplicate condition "${c}" is not allowed in a single policy.`, code: 'DUPLICATE_CONDITION' });
+      }
+      uniqueConditions.add(c);
     }
 
     // Check duplicate code in tenant
@@ -4885,8 +4903,8 @@ app.post('/api/tenant/project-intervention-policies', async (req, res) => {
     try {
       await conn.query(`
         INSERT INTO project_intervention_policies (id, tenantId, code, name, description, severity, matchMode, status, createdById)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?)
-      `, [policyId, targetTenant, code.trim(), name.trim(), description || null, severity, matchMode, actorUserId || 'SYSTEM']);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [policyId, targetTenant, code.trim(), name.trim(), description || null, severity, matchMode, policyStatus, actorUserId || 'SYSTEM']);
 
       for (const cond of conditions) {
         const condId = `PIPC-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
@@ -4896,7 +4914,7 @@ app.post('/api/tenant/project-intervention-policies', async (req, res) => {
         `, [condId, policyId, cond]);
       }
 
-      // Record Audit Log
+      // Record Audit Log with complete details
       await conn.query(`
         INSERT INTO audit_logs (id, tenantId, userId, action, module, entity, entityId, description)
         VALUES (?, ?, ?, 'CREATE_INTERVENTION_POLICY', 'PROJECT_GOVERNANCE', 'project_intervention_policies', ?, ?)
@@ -4905,7 +4923,16 @@ app.post('/api/tenant/project-intervention-policies', async (req, res) => {
         targetTenant,
         actorUserId || 'SYSTEM',
         policyId,
-        `Created intervention policy "${name}" (${code}) with conditions: ${conditions.join(', ')}`
+        JSON.stringify({
+          action: 'CREATE_POLICY',
+          policyId,
+          code: code.trim(),
+          name: name.trim(),
+          severity,
+          matchMode,
+          status: policyStatus,
+          conditions
+        })
       ]);
 
       await conn.commit();
@@ -4920,7 +4947,7 @@ app.post('/api/tenant/project-intervention-policies', async (req, res) => {
           description: description || null,
           severity,
           matchMode,
-          status: 'ACTIVE',
+          status: policyStatus,
           createdById: actorUserId || 'SYSTEM',
           conditions
         }
@@ -4949,7 +4976,7 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.body.tenantId || 'SYSTEM');
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.body.tenantId || (req.query.tenantId as string));
   if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && targetTenant !== actorTenant) {
     return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
   }
@@ -4973,24 +5000,40 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
       return res.status(404).json({ error: 'Policy not found or cross-tenant violation.', code: 'POLICY_NOT_FOUND' });
     }
 
-    const { name, description, severity, status, conditions } = req.body;
+    const oldPolicy = existing[0];
+    const [oldConditionsRows]: any = await pool.query(
+      `SELECT conditionType FROM project_intervention_policy_conditions WHERE policyId = ?`,
+      [policyId]
+    );
+    const oldConditions = oldConditionsRows.map((r: any) => r.conditionType);
+
+    const { name, description, severity, matchMode, status, conditions } = req.body;
 
     if (severity && !VALID_INTERVENTION_SEVERITIES.includes(severity)) {
       return res.status(400).json({ error: `Invalid severity. Allowed: ${VALID_INTERVENTION_SEVERITIES.join(', ')}`, code: 'INVALID_SEVERITY' });
+    }
+
+    if (matchMode && matchMode !== 'ALL') {
+      return res.status(400).json({ error: 'Invalid matchMode. Currently supported: ALL', code: 'INVALID_MATCH_MODE' });
     }
 
     if (status && !['ACTIVE', 'INACTIVE'].includes(status)) {
       return res.status(400).json({ error: 'Invalid status. Allowed: ACTIVE, INACTIVE', code: 'INVALID_STATUS' });
     }
 
-    if (conditions) {
+    if (conditions !== undefined) {
       if (!Array.isArray(conditions) || conditions.length === 0) {
         return res.status(400).json({ error: 'At least one condition is required.', code: 'EMPTY_CONDITIONS' });
       }
+      const uniqueConds = new Set<string>();
       for (const c of conditions) {
         if (!VALID_INTERVENTION_CONDITION_TYPES.includes(c)) {
           return res.status(400).json({ error: `Invalid conditionType "${c}".`, code: 'INVALID_CONDITION_TYPE' });
         }
+        if (uniqueConds.has(c)) {
+          return res.status(400).json({ error: `Duplicate condition "${c}" is not allowed.`, code: 'DUPLICATE_CONDITION' });
+        }
+        uniqueConds.add(c);
       }
     }
 
@@ -5003,9 +5046,10 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
         SET name = COALESCE(?, name),
             description = COALESCE(?, description),
             severity = COALESCE(?, severity),
+            matchMode = COALESCE(?, matchMode),
             status = COALESCE(?, status)
         WHERE id = ? AND tenantId = ?
-      `, [name || null, description !== undefined ? description : null, severity || null, status || null, policyId, targetTenant]);
+      `, [name || null, description !== undefined ? description : null, severity || null, matchMode || null, status || null, policyId, targetTenant]);
 
       if (conditions) {
         await conn.query(`DELETE FROM project_intervention_policy_conditions WHERE policyId = ?`, [policyId]);
@@ -5026,7 +5070,26 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
         targetTenant,
         actorUserId || 'SYSTEM',
         policyId,
-        `Updated intervention policy #${policyId} (status=${status || existing[0].status}, severity=${severity || existing[0].severity})`
+        JSON.stringify({
+          action: 'UPDATE_POLICY',
+          policyId,
+          old: {
+            name: oldPolicy.name,
+            description: oldPolicy.description,
+            severity: oldPolicy.severity,
+            matchMode: oldPolicy.matchMode,
+            status: oldPolicy.status,
+            conditions: oldConditions
+          },
+          new: {
+            name: name || oldPolicy.name,
+            description: description !== undefined ? description : oldPolicy.description,
+            severity: severity || oldPolicy.severity,
+            matchMode: matchMode || oldPolicy.matchMode,
+            status: status || oldPolicy.status,
+            conditions: conditions || oldConditions
+          }
+        })
       ]);
 
       await conn.commit();
@@ -5376,14 +5439,14 @@ app.get('/api/management/project-interventions', async (req, res) => {
 
       // Evaluate Policies
       const matchedInterventions: any[] = [];
-      let hasUnknownEvaluation = false;
+      const unknownPolicies: any[] = [];
 
       if (interventionPolicyConfigured) {
         for (const pol of policies) {
           const condList = conditionsByPolicy[pol.id] || [];
           if (condList.length === 0) continue;
 
-          let allMatched = true;
+          let hasNotMatched = false;
           let hasUnknownCondition = false;
           const conditionEvaluations: any[] = [];
 
@@ -5431,24 +5494,33 @@ app.get('/api/management/project-interventions', async (req, res) => {
 
             conditionEvaluations.push({ conditionType: cond, state: condState, reason: condReason });
 
-            if (condState === 'UNKNOWN') {
+            if (condState === 'NOT_MATCHED') {
+              hasNotMatched = true;
+            } else if (condState === 'UNKNOWN') {
               hasUnknownCondition = true;
-              allMatched = false;
-            } else if (condState !== 'MATCHED') {
-              allMatched = false;
             }
           }
 
-          if (hasUnknownCondition) {
-            hasUnknownEvaluation = true;
+          // Strict Three-Valued ALL Logic:
+          // 1. If any condition NOT_MATCHED => Policy NOT_MATCHED
+          // 2. Else if any condition UNKNOWN => Policy UNKNOWN
+          // 3. Else all MATCHED => Policy MATCHED
+          let policyOutcome: 'MATCHED' | 'NOT_MATCHED' | 'UNKNOWN' = 'NOT_MATCHED';
+          if (hasNotMatched) {
+            policyOutcome = 'NOT_MATCHED';
+          } else if (hasUnknownCondition) {
+            policyOutcome = 'UNKNOWN';
+          } else {
+            policyOutcome = 'MATCHED';
           }
 
-          if (allMatched) {
+          if (policyOutcome === 'MATCHED') {
             matchedInterventions.push({
               policyId: pol.id,
               policyCode: pol.code,
               policyName: pol.name,
               severity: pol.severity,
+              matchMode: pol.matchMode,
               matchedConditions: condList,
               conditionEvaluations,
               recommendedActions: getRecommendedActionsForIntervention(condList)
@@ -5457,14 +5529,28 @@ app.get('/api/management/project-interventions', async (req, res) => {
             if (pol.severity === 'CRITICAL') criticalInterventionsCount++;
             else if (pol.severity === 'WARNING') warningInterventionsCount++;
             else infoInterventionsCount++;
+          } else if (policyOutcome === 'UNKNOWN') {
+            unknownPolicies.push({
+              policyId: pol.id,
+              policyCode: pol.code,
+              policyName: pol.name,
+              severity: pol.severity,
+              matchMode: pol.matchMode,
+              conditions: condList,
+              conditionEvaluations
+            });
           }
         }
       }
 
+      // Project-level interventionStatus derivation:
+      // if >=1 policy MATCHED => MATCHED
+      // else if >=1 policy UNKNOWN => UNKNOWN
+      // else => NONE
       const interventionStatus: 'NONE' | 'MATCHED' | 'UNKNOWN' =
         matchedInterventions.length > 0
           ? 'MATCHED'
-          : hasUnknownEvaluation
+          : unknownPolicies.length > 0
           ? 'UNKNOWN'
           : 'NONE';
 
@@ -5487,7 +5573,8 @@ app.get('/api/management/project-interventions', async (req, res) => {
         daysInCurrentStage,
         supportingFacts,
         interventionStatus,
-        interventions: matchedInterventions
+        interventions: matchedInterventions,
+        unknownPolicies
       };
     });
 

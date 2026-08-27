@@ -126,8 +126,8 @@ async function setupDatabase() {
       code VARCHAR(100) NOT NULL,
       name VARCHAR(255) NOT NULL,
       description TEXT,
-      severity VARCHAR(20) NOT NULL DEFAULT 'WARNING',
-      matchMode VARCHAR(20) NOT NULL DEFAULT 'ALL',
+      severity VARCHAR(20) NOT NULL,
+      matchMode VARCHAR(20) NOT NULL,
       status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
       createdById VARCHAR(50) NOT NULL,
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -140,6 +140,7 @@ async function setupDatabase() {
       policyId VARCHAR(50) NOT NULL,
       conditionType VARCHAR(100) NOT NULL,
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_policy_condition (policyId, conditionType),
       INDEX idx_pipc_policy (policyId)
     )`
   ];

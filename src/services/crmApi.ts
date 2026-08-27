@@ -490,8 +490,9 @@ export const crmApi = {
     code: string;
     name: string;
     description?: string;
-    severity?: 'INFO' | 'WARNING' | 'CRITICAL';
-    matchMode?: 'ALL';
+    severity: 'INFO' | 'WARNING' | 'CRITICAL';
+    matchMode: 'ALL';
+    status?: 'ACTIVE' | 'INACTIVE';
     conditions: string[];
   }): Promise<any> => {
     try {
