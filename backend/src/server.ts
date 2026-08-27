@@ -4263,6 +4263,22 @@ app.get('/api/management/control-tower', async (req, res) => {
   const isPlatformUser = (req as any).isPlatformUser;
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
+  // 0. Management Capability Enforcement
+  const hasMgmtPermission = actorPermissions.includes('ALL') ||
+    actorPermissions.includes('MANAGE_TENANT') ||
+    actorPermissions.includes('VIEW_ALL_TASKS') ||
+    actorPermissions.includes('VIEW_TEAM_TASKS') ||
+    actorPermissions.includes('MANAGE_PROJECTS') ||
+    actorPermissions.includes('MANAGE_CUSTOMERS') ||
+    actorRole === 'SUPER_ADMIN' ||
+    actorRole === 'TENANT_ADMIN' ||
+    actorRole === 'SALES_MANAGER' ||
+    actorRole === 'SUPERVISOR';
+
+  if (!hasMgmtPermission) {
+    return res.status(403).json({ error: 'Access denied. Management capability required for Control Tower.' });
+  }
+
   try {
     const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
     const todayStr = req.query.date ? String(req.query.date).trim() : getBusinessDate(new Date())!;
@@ -4280,25 +4296,33 @@ app.get('/api/management/control-tower', async (req, res) => {
     const { where: visitWhere, params: visitParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'v.picId');
     const { where: fuWhere, params: fuParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'f.picId');
 
-    // Optional Rep filter with security verification
-    let repFilterClause = '';
-    const repFilterParams: any[] = [];
     const requestedRepId = req.query.repId ? String(req.query.repId).trim() : null;
-
-    // Optional Team filter with security verification
-    let teamFilterClause = '';
-    const teamFilterParams: any[] = [];
     const requestedTeamId = req.query.teamId ? String(req.query.teamId).trim() : null;
 
-    // 2. Query Authorized Reps List (from users, tenant_users, teams)
+    // Verify teamId access under TEAM scope
+    if (requestedTeamId && effectiveScope === 'TEAM') {
+      const [actorTeamRows]: any = await pool.query(`
+        SELECT tm.teamId FROM team_members tm
+        JOIN tenant_users tu ON tu.id = tm.tenantUserId
+        WHERE tu.userId = ? AND tu.tenantId = ? AND tu.status = 'ACTIVE'
+      `, [actorUserId, targetTenant]);
+      const actorTeamIds = new Set(actorTeamRows.map((t: any) => t.teamId));
+      if (!actorTeamIds.has(requestedTeamId)) {
+        return res.status(403).json({ error: 'Access denied to requested team (BOLA/Scope violation).' });
+      }
+    }
+
+    // 2. Query Authorized Reps List (from users, tenant_users, teams, roles)
     let repListQuery = `
       SELECT 
         u.id as userId, u.name, u.email, u.avatar as avatarUrl, tu.status,
-        tm.teamId, t.name as teamName
+        tm.teamId, t.name as teamName, r.name as roleName
       FROM users u
       JOIN tenant_users tu ON tu.userId = u.id AND tu.tenantId = ?
       LEFT JOIN team_members tm ON tm.tenantUserId = tu.id
       LEFT JOIN teams t ON t.id = tm.teamId
+      LEFT JOIN tenant_user_roles tur ON tur.tenantUserId = tu.id
+      LEFT JOIN roles r ON r.id = tur.roleId
       WHERE 1=1
     `;
     const repListParams: any[] = [targetTenant];
@@ -4316,14 +4340,8 @@ app.get('/api/management/control-tower', async (req, res) => {
     }
 
     if (requestedTeamId) {
-      if (effectiveScope === 'TEAM') {
-        // Supervisor cannot forge a different team
-        repListQuery += ` AND tm.teamId = ?`;
-        repListParams.push(requestedTeamId);
-      } else {
-        repListQuery += ` AND tm.teamId = ?`;
-        repListParams.push(requestedTeamId);
-      }
+      repListQuery += ` AND tm.teamId = ?`;
+      repListParams.push(requestedTeamId);
     }
 
     if (requestedRepId) {
@@ -4335,7 +4353,7 @@ app.get('/api/management/control-tower', async (req, res) => {
     const [authorizedReps]: any = await pool.query(repListQuery, repListParams);
     const authorizedRepIds = new Set(authorizedReps.map((r: any) => r.userId));
 
-    // If a rep was explicitly requested but not in authorized list, deny / return empty
+    // If a rep was explicitly requested but not in authorized list, deny
     if (requestedRepId && !authorizedRepIds.has(requestedRepId)) {
       return res.status(403).json({ error: 'Access denied to requested representative (BOLA/Scope violation).' });
     }
@@ -4349,10 +4367,9 @@ app.get('/api/management/control-tower', async (req, res) => {
       ${projWhere.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
     `, projParams);
 
-    // Filter projects further if rep filter active
     const filteredProjects = requestedRepId ? scopedProjects.filter((p: any) => p.picId === requestedRepId) : scopedProjects;
 
-    // 4. Batch Query 2: Tasks aggregation (grouped by picId and status)
+    // 4. Batch Query 2: Tasks aggregation
     const [scopedTasks]: any = await pool.query(`
       SELECT t.id, t.title, t.customerId, t.relatedProjectId, t.priorityId, t.statusId, t.dueDate, t.completedAt, t.picId
       FROM tasks t
@@ -4360,15 +4377,15 @@ app.get('/api/management/control-tower', async (req, res) => {
     `, taskParams);
     const filteredTasks = requestedRepId ? scopedTasks.filter((t: any) => t.picId === requestedRepId) : scopedTasks;
 
-    // 5. Batch Query 3: Visits aggregation (grouped by picId and status)
+    // 5. Batch Query 3: Visits aggregation
     const [scopedVisits]: any = await pool.query(`
-      SELECT v.id, v.title, v.customerId, v.relatedProjectId, v.statusId, v.visitDate, v.picId
+      SELECT v.id, v.title, v.customerId, v.relatedProjectId, v.statusId, v.visitDate, v.completedAt, v.picId
       FROM visits v
       ${visitWhere.replace(/WHERE tenantId/g, 'WHERE v.tenantId')}
     `, visitParams);
     const filteredVisits = requestedRepId ? scopedVisits.filter((v: any) => v.picId === requestedRepId) : scopedVisits;
 
-    // 6. Batch Query 4: Follow-ups aggregation (grouped by picId and status)
+    // 6. Batch Query 4: Follow-ups aggregation
     const [scopedFollowups]: any = await pool.query(`
       SELECT f.id, f.title, f.customerId, f.relatedProjectId, f.typeId, f.status, f.followUpDate, f.completedAt, f.picId
       FROM follow_ups f
@@ -4495,7 +4512,6 @@ app.get('/api/management/control-tower', async (req, res) => {
     // 10. Assemble Blocked Cadences
     const blockedCadencesList: any[] = [];
     for (const cad of cadencesRows) {
-      // Must be authorized to see this cadence (under rep or org scope)
       if (cad.effectivePicId && !authorizedRepIds.has(cad.effectivePicId) && effectiveScope !== 'ORGANIZATION') {
         continue;
       }
@@ -4515,7 +4531,7 @@ app.get('/api/management/control-tower', async (req, res) => {
       }
     }
 
-    // 11. Assemble Unique Overdue Operational Work
+    // 11. Assemble Unique Overdue Operational Work (1 canonical record = 1 count)
     const overdueWorkList: any[] = [];
     const overdueByRep: Record<string, number> = {};
 
@@ -4565,10 +4581,15 @@ app.get('/api/management/control-tower', async (req, res) => {
       }
     });
 
-    // 12. Calculate Due Today and Completed Today
+    // 12. Calculate Due Today, Completed Today, and Upcoming Work (Next 7 days window matching Agenda)
     let dueTodayCount = 0;
     let completedTodayCount = 0;
     let upcomingWorkCount = 0;
+
+    // Upcoming window: todayStr < date <= todayStr + 7 days
+    const todayDateObj = new Date(todayStr);
+    const windowEndDateObj = new Date(todayDateObj.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const upcomingWindowEnd = getBusinessDate(windowEndDateObj)!;
 
     const todayTasksByRep: Record<string, number> = {};
     const todayVisitsByRep: Record<string, number> = {};
@@ -4580,7 +4601,7 @@ app.get('/api/management/control-tower', async (req, res) => {
       if (d === todayStr && t.statusId !== 'COMPLETED' && t.statusId !== 'CANCELLED') {
         dueTodayCount++;
         if (t.picId) todayTasksByRep[t.picId] = (todayTasksByRep[t.picId] || 0) + 1;
-      } else if (d && d > todayStr && t.statusId !== 'COMPLETED' && t.statusId !== 'CANCELLED') {
+      } else if (d && d > todayStr && d <= upcomingWindowEnd && t.statusId !== 'COMPLETED' && t.statusId !== 'CANCELLED') {
         upcomingWorkCount++;
       }
       if (t.completedAt && getBusinessDate(t.completedAt) === todayStr && t.statusId === 'COMPLETED') {
@@ -4594,7 +4615,7 @@ app.get('/api/management/control-tower', async (req, res) => {
       if (d === todayStr && v.statusId !== 'COMPLETED' && v.statusId !== 'CANCELLED') {
         dueTodayCount++;
         if (v.picId) todayVisitsByRep[v.picId] = (todayVisitsByRep[v.picId] || 0) + 1;
-      } else if (d && d > todayStr && v.statusId !== 'COMPLETED' && v.statusId !== 'CANCELLED') {
+      } else if (d && d > todayStr && d <= upcomingWindowEnd && v.statusId !== 'COMPLETED' && v.statusId !== 'CANCELLED') {
         upcomingWorkCount++;
       }
       if (v.completedAt && getBusinessDate(v.completedAt) === todayStr && v.statusId === 'COMPLETED') {
@@ -4608,7 +4629,7 @@ app.get('/api/management/control-tower', async (req, res) => {
       if (d === todayStr && f.status !== 'COMPLETED' && f.status !== 'CANCELLED') {
         dueTodayCount++;
         if (f.picId) todayFollowupsByRep[f.picId] = (todayFollowupsByRep[f.picId] || 0) + 1;
-      } else if (d && d > todayStr && f.status !== 'COMPLETED' && f.status !== 'CANCELLED') {
+      } else if (d && d > todayStr && d <= upcomingWindowEnd && f.status !== 'COMPLETED' && f.status !== 'CANCELLED') {
         upcomingWorkCount++;
       }
       if (f.completedAt && getBusinessDate(f.completedAt) === todayStr && f.status === 'COMPLETED') {
@@ -4617,7 +4638,7 @@ app.get('/api/management/control-tower', async (req, res) => {
       }
     });
 
-    // 13. Assemble Per-Rep Workload Summaries
+    // 13. Assemble Per-Rep Workload Summaries & Suspended Rep Policy
     const repWorkloads: any[] = [];
     const openProjectsByRep: Record<string, number> = {};
     filteredProjects.forEach((p: any) => {
@@ -4654,7 +4675,32 @@ app.get('/api/management/control-tower', async (req, res) => {
       }
     });
 
+    let operationalSalesRepCount = 0;
+
     for (const rep of authorizedReps) {
+      const openProj = openProjectsByRep[rep.userId] || 0;
+      const openTsk = openTasksByRep[rep.userId] || 0;
+      const ovdAct = overdueByRep[rep.userId] || 0;
+      const todVis = todayVisitsByRep[rep.userId] || 0;
+      const todTsk = todayTasksByRep[rep.userId] || 0;
+      const pndFlw = pendingFollowupsByRep[rep.userId] || 0;
+      const attSig = attentionCountByRep[rep.userId] || 0;
+      const blkCad = blockedCadenceCountByRep[rep.userId] || 0;
+      const cmpTod = completedTodayByRep[rep.userId] || 0;
+
+      const totalUnresolvedWork = openProj + openTsk + ovdAct + todVis + todTsk + pndFlw + attSig + blkCad;
+
+      // Suspended/inactive rep policy: Only include if they own unresolved operational work
+      if (rep.status !== 'ACTIVE' && totalUnresolvedWork === 0) {
+        continue;
+      }
+
+      // Operational sales rep count: active reps excluding pure administrative roles
+      const isSalesRole = !rep.roleName || (!rep.roleName.includes('Admin') && !rep.roleName.includes('Super Admin'));
+      if (rep.status === 'ACTIVE' && isSalesRole) {
+        operationalSalesRepCount++;
+      }
+
       repWorkloads.push({
         userId: rep.userId,
         name: rep.name,
@@ -4663,15 +4709,15 @@ app.get('/api/management/control-tower', async (req, res) => {
         status: rep.status,
         teamId: rep.teamId,
         teamName: rep.teamName || 'General',
-        openProjects: openProjectsByRep[rep.userId] || 0,
-        openTasks: openTasksByRep[rep.userId] || 0,
-        overdueActions: overdueByRep[rep.userId] || 0,
-        todayVisits: todayVisitsByRep[rep.userId] || 0,
-        todayTasks: todayTasksByRep[rep.userId] || 0,
-        pendingFollowups: pendingFollowupsByRep[rep.userId] || 0,
-        attentionSignals: attentionCountByRep[rep.userId] || 0,
-        blockedCadences: blockedCadenceCountByRep[rep.userId] || 0,
-        completedToday: completedTodayByRep[rep.userId] || 0
+        openProjects: openProj,
+        openTasks: openTsk,
+        overdueActions: ovdAct,
+        todayVisits: todVis,
+        todayTasks: todTsk,
+        pendingFollowups: pndFlw,
+        attentionSignals: attSig,
+        blockedCadences: blkCad,
+        completedToday: cmpTod
       });
     }
 
@@ -4682,7 +4728,7 @@ app.get('/api/management/control-tower', async (req, res) => {
       evaluatedAt,
       scope: effectiveScope,
       summary: {
-        activeSalesReps: authorizedReps.filter((r: any) => r.status === 'ACTIVE').length,
+        activeSalesReps: requestedRepId ? (repWorkloads.length > 0 && repWorkloads[0].status === 'ACTIVE' ? 1 : 0) : operationalSalesRepCount,
         openProjects: openProjectsTotal,
         projectsNeedingAttention: projectsNeedingAttentionList.length,
         overdueActions: overdueWorkList.length,
