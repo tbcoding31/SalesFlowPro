@@ -179,6 +179,7 @@ async function setupDatabase() {
       policyId VARCHAR(50) NOT NULL,
       policyRevisionId VARCHAR(50) DEFAULT NULL,
       policyRevisionNumberSnapshot INT DEFAULT NULL,
+      policyRevisionLinkProvenance VARCHAR(50) NOT NULL DEFAULT 'NATIVE_VERSIONED',
       policyCodeSnapshot VARCHAR(100) NOT NULL,
       policyNameSnapshot VARCHAR(255) NOT NULL,
       severitySnapshot VARCHAR(20) NOT NULL,
@@ -245,6 +246,7 @@ async function setupDatabase() {
   const episodeColumnsToAdd = [
     { name: 'policyRevisionId', def: 'VARCHAR(50) DEFAULT NULL' },
     { name: 'policyRevisionNumberSnapshot', def: 'INT DEFAULT NULL' },
+    { name: 'policyRevisionLinkProvenance', def: 'VARCHAR(50) NOT NULL DEFAULT "NATIVE_VERSIONED"' },
     { name: 'startProvenance', def: 'VARCHAR(50) NOT NULL DEFAULT "TRANSITION_DETECTED"' },
     { name: 'picIdSnapshot', def: 'VARCHAR(50)' },
     { name: 'teamIdSnapshot', def: 'VARCHAR(50)' },
@@ -278,7 +280,7 @@ async function setupDatabase() {
     // Ignore
   }
 
-  // R55 IDEMPOTENT MIGRATION FOR EXISTING POLICIES
+  // R55 IDEMPOTENT ATOMIC MIGRATION FOR EXISTING POLICIES
   try {
     const [unmigratedPolicies]: any = await pool.query(`
       SELECT p.* FROM project_intervention_policies p
@@ -286,84 +288,109 @@ async function setupDatabase() {
     `);
 
     for (const pol of unmigratedPolicies) {
-      const [existingRevs]: any = await pool.query(
-        `SELECT id FROM project_intervention_policy_revisions WHERE policyId = ? AND revisionNumber = 1`,
-        [pol.id]
-      );
+      const conn = await pool.getConnection();
+      await conn.beginTransaction();
 
-      let revId: string;
-      if (existingRevs.length > 0) {
-        revId = existingRevs[0].id;
-      } else {
-        revId = `PIPR-MIG-${pol.id}-1`;
-        await pool.query(`
-          INSERT INTO project_intervention_policy_revisions (
-            id, tenantId, policyId, revisionNumber, severity, matchMode, createdById, createdAt, migrationProvenance
-          ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, 'MIGRATED_CURRENT_STATE')
-        `, [
-          revId,
-          pol.tenantId,
-          pol.id,
-          pol.severity,
-          pol.matchMode,
-          pol.createdById || 'SYSTEM',
-          pol.createdAt || new Date()
-        ]);
-
-        // Copy conditions to revision
-        const [oldConds]: any = await pool.query(
-          `SELECT conditionType FROM project_intervention_policy_conditions WHERE policyId = ?`,
+      try {
+        const [existingRevs]: any = await conn.query(
+          `SELECT id FROM project_intervention_policy_revisions WHERE policyId = ? AND revisionNumber = 1 FOR UPDATE`,
           [pol.id]
         );
 
-        for (const c of oldConds) {
-          const rcId = `PIPRC-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-          await pool.query(`
-            INSERT IGNORE INTO project_intervention_policy_revision_conditions (id, revisionId, conditionType)
-            VALUES (?, ?, ?)
-          `, [rcId, revId, c.conditionType]);
+        let revId: string;
+        if (existingRevs.length > 0) {
+          revId = existingRevs[0].id;
+        } else {
+          revId = `PIPR-MIG-${pol.id}-1`;
+          await conn.query(`
+            INSERT INTO project_intervention_policy_revisions (
+              id, tenantId, policyId, revisionNumber, severity, matchMode, createdById, createdAt, migrationProvenance
+            ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, 'MIGRATED_CURRENT_STATE')
+          `, [
+            revId,
+            pol.tenantId,
+            pol.id,
+            pol.severity,
+            pol.matchMode,
+            pol.createdById || 'SYSTEM',
+            pol.createdAt || new Date()
+          ]);
+
+          // Copy conditions to revision
+          const [oldConds]: any = await conn.query(
+            `SELECT conditionType FROM project_intervention_policy_conditions WHERE policyId = ?`,
+            [pol.id]
+          );
+
+          for (const c of oldConds) {
+            const rcId = `PIPRC-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+            await conn.query(`
+              INSERT IGNORE INTO project_intervention_policy_revision_conditions (id, revisionId, conditionType)
+              VALUES (?, ?, ?)
+            `, [rcId, revId, c.conditionType]);
+          }
         }
-      }
 
-      await pool.query(
-        `UPDATE project_intervention_policies SET activeRevisionId = ? WHERE id = ?`,
-        [revId, pol.id]
-      );
-
-      // Backfill exact semantic matches in legacy episodes
-      const [revCondRows]: any = await pool.query(
-        `SELECT conditionType FROM project_intervention_policy_revision_conditions WHERE revisionId = ? ORDER BY conditionType ASC`,
-        [revId]
-      );
-      const revConditionsSorted = revCondRows.map((c: any) => c.conditionType).sort();
-
-      const [legacyEpisodes]: any = await pool.query(
-        `SELECT id, severitySnapshot, matchModeSnapshot, conditionSnapshot FROM project_intervention_episodes WHERE policyId = ? AND policyRevisionId IS NULL`,
-        [pol.id]
-      );
-
-      for (const ep of legacyEpisodes) {
-        let epConds: string[] = [];
-        try {
-          epConds = (typeof ep.conditionSnapshot === 'string' ? JSON.parse(ep.conditionSnapshot) : ep.conditionSnapshot) || [];
-        } catch (e) {
-          epConds = [];
-        }
-        const epCondsSorted = [...epConds].sort();
-
-        const isExactMatch = (
-          ep.severitySnapshot === pol.severity &&
-          ep.matchModeSnapshot === pol.matchMode &&
-          epCondsSorted.length === revConditionsSorted.length &&
-          epCondsSorted.every((val, idx) => val === revConditionsSorted[idx])
+        await conn.query(
+          `UPDATE project_intervention_policies SET activeRevisionId = ? WHERE id = ?`,
+          [revId, pol.id]
         );
 
-        if (isExactMatch) {
-          await pool.query(
-            `UPDATE project_intervention_episodes SET policyRevisionId = ?, policyRevisionNumberSnapshot = 1 WHERE id = ?`,
-            [revId, ep.id]
+        // Backfill exact semantic matches in legacy episodes
+        const [revCondRows]: any = await conn.query(
+          `SELECT conditionType FROM project_intervention_policy_revision_conditions WHERE revisionId = ? ORDER BY conditionType ASC`,
+          [revId]
+        );
+        const revConditionsSorted = revCondRows.map((c: any) => c.conditionType).sort();
+
+        const [legacyEpisodes]: any = await conn.query(
+          `SELECT id, severitySnapshot, matchModeSnapshot, conditionSnapshot FROM project_intervention_episodes WHERE policyId = ? AND (policyRevisionId IS NULL OR policyRevisionLinkProvenance = 'LEGACY_UNVERSIONED')`,
+          [pol.id]
+        );
+
+        for (const ep of legacyEpisodes) {
+          let epConds: string[] = [];
+          try {
+            epConds = (typeof ep.conditionSnapshot === 'string' ? JSON.parse(ep.conditionSnapshot) : ep.conditionSnapshot) || [];
+          } catch (e) {
+            epConds = [];
+          }
+          const epCondsSorted = [...epConds].sort();
+
+          const isExactMatch = (
+            ep.severitySnapshot === pol.severity &&
+            ep.matchModeSnapshot === pol.matchMode &&
+            epCondsSorted.length === revConditionsSorted.length &&
+            epCondsSorted.every((val, idx) => val === revConditionsSorted[idx])
           );
+
+          if (isExactMatch) {
+            await conn.query(
+              `UPDATE project_intervention_episodes 
+               SET policyRevisionId = ?, 
+                   policyRevisionNumberSnapshot = 1,
+                   policyRevisionLinkProvenance = 'MIGRATED_SEMANTIC_MATCH'
+               WHERE id = ?`,
+              [revId, ep.id]
+            );
+          } else {
+            await conn.query(
+              `UPDATE project_intervention_episodes 
+               SET policyRevisionId = NULL, 
+                   policyRevisionNumberSnapshot = NULL,
+                   policyRevisionLinkProvenance = 'LEGACY_UNVERSIONED'
+               WHERE id = ?`,
+              [ep.id]
+            );
+          }
         }
+
+        await conn.commit();
+      } catch (err: any) {
+        await conn.rollback();
+        throw err;
+      } finally {
+        conn.release();
       }
     }
   } catch (migErr: any) {

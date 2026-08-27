@@ -5087,19 +5087,13 @@ app.post('/api/tenant/project-intervention-policies', async (req, res) => {
         ) VALUES (?, ?, ?, 1, ?, ?, ?, 'INITIAL_REVISION')
       `, [revisionId, targetTenant, policyId, severity, matchMode, actorUserId || 'SYSTEM']);
 
-      // Insert Revision Conditions
+      // Insert Revision Conditions (Single Canonical Semantic Authority)
       for (const cond of conditions) {
         const condId = `PIPRC-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
         await conn.query(`
           INSERT INTO project_intervention_policy_revision_conditions (id, revisionId, conditionType)
           VALUES (?, ?, ?)
         `, [condId, revisionId, cond]);
-
-        // Legacy table mirror for referential backward compatibility
-        await conn.query(`
-          INSERT INTO project_intervention_policy_conditions (id, policyId, conditionType)
-          VALUES (?, ?, ?)
-        `, [condId, policyId, cond]);
       }
 
       // Record Audit Log with complete details
@@ -5316,7 +5310,7 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `, [newActiveRevisionId, targetTenant, policyId, newRevisionNumber, newSeverity, newMatchMode, actorUserId || 'SYSTEM', changeReason || null]);
 
-        // Insert new revision conditions
+        // Insert new revision conditions (Single Canonical Semantic Authority)
         for (const cond of finalConditions) {
           const rcId = `PIPRC-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
           await conn.query(`
@@ -5324,19 +5318,9 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
             VALUES (?, ?, ?)
           `, [rcId, newActiveRevisionId, cond]);
         }
-
-        // Mirror legacy conditions
-        await conn.query(`DELETE FROM project_intervention_policy_conditions WHERE policyId = ?`, [policyId]);
-        for (const cond of finalConditions) {
-          const condId = `PIPC-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-          await conn.query(`
-            INSERT INTO project_intervention_policy_conditions (id, policyId, conditionType)
-            VALUES (?, ?, ?)
-          `, [condId, policyId, cond]);
-        }
       }
 
-      // Update Policy Header
+      // Update Policy Header Metadata & Active Revision Pointer
       const finalSeverity = severity || existingPolicy.currentSeverity || existingPolicy.severity;
       const finalMatchMode = matchMode || existingPolicy.currentMatchMode || existingPolicy.matchMode;
 
@@ -6281,7 +6265,29 @@ export async function synchronizeProjectInterventionHistory(
       const activeKey = `${tenantId}:${p.id}:${pol.id}`;
 
       if (policyOutcome === 'MATCHED') {
-        if (!activeEp) {
+        if (activeEp && activeEp.policyRevisionId && pol.activeRevisionId && activeEp.policyRevisionId !== pol.activeRevisionId) {
+          // Revision changed while policy is matched: close old revision episode with POLICY_CHANGED
+          const diffMs = new Date(observedAt).getTime() - new Date(activeEp.startedAt).getTime();
+          const durationHours = Math.max(0, Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100);
+          const durationDays = Math.max(0, Math.round((diffMs / (1000 * 60 * 60 * 24)) * 100) / 100);
+
+          await connectionOrPool.query(`
+            UPDATE project_intervention_episodes
+            SET isActive = FALSE,
+                activeKey = NULL,
+                endedAt = ?,
+                durationHours = ?,
+                durationDays = ?,
+                endReason = 'POLICY_CHANGED',
+                endedByEventType = 'POLICY_CHANGED',
+                endedByUserId = ?
+            WHERE id = ? AND isActive = TRUE
+          `, [observedAt, durationHours, durationDays, actorUserId || null, activeEp.id]);
+
+          activeEpisodeMap[key] = null;
+        }
+
+        if (!activeEpisodeMap[key]) {
           // ENTER boundary
           const epId = `PIE-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
           const startProv = triggerEventType === 'R53_ACTIVATION' ? 'OBSERVED_ON_R53_ACTIVATION' : triggerEventType === 'SYSTEM_RECONCILIATION' ? 'RECONCILIATION_OBSERVED' : 'TRANSITION_DETECTED';
@@ -6289,12 +6295,12 @@ export async function synchronizeProjectInterventionHistory(
           try {
             await connectionOrPool.query(`
               INSERT INTO project_intervention_episodes (
-                id, tenantId, projectId, policyId, policyRevisionId, policyRevisionNumberSnapshot,
+                id, tenantId, projectId, policyId, policyRevisionId, policyRevisionNumberSnapshot, policyRevisionLinkProvenance,
                 policyCodeSnapshot, policyNameSnapshot,
                 severitySnapshot, matchModeSnapshot, conditionSnapshot, startFacts,
                 startReason, startProvenance, startedByEventType, startedByEntityId, startedByUserId,
                 picIdSnapshot, startedAt, isActive, activeKey
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?)
+              ) VALUES (?, ?, ?, ?, ?, ?, 'NATIVE_VERSIONED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?)
             `, [
               epId,
               tenantId,
@@ -6955,27 +6961,45 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
     });
 
     // 8. Revision Recurrence & Coverage Metadata
-    const versionedEpisodes = validRows.filter((r: any) => r.policyRevisionId !== null).length;
-    const legacyUnversionedEpisodes = validRows.filter((r: any) => r.policyRevisionId === null).length;
-    const revisionIdentityCoveragePercent = totalEpisodes > 0 ? Math.round((versionedEpisodes / totalEpisodes) * 1000) / 10 : null;
+    const nativeVersionedEpisodes = validRows.filter((r: any) => r.policyRevisionLinkProvenance === 'NATIVE_VERSIONED' && r.policyRevisionId !== null).length;
+    const migratedSemanticMatchEpisodes = validRows.filter((r: any) => r.policyRevisionLinkProvenance === 'MIGRATED_SEMANTIC_MATCH' && r.policyRevisionId !== null).length;
+    const legacyUnversionedEpisodes = validRows.filter((r: any) => r.policyRevisionLinkProvenance === 'LEGACY_UNVERSIONED' || r.policyRevisionId === null).length;
+    const versionedEpisodes = nativeVersionedEpisodes + migratedSemanticMatchEpisodes;
 
-    // Exact Revision Recurrence Grouping (for versioned episodes only)
-    const projectRevisionMap: Record<string, any[]> = {};
+    const nativeRevisionIdentityCoveragePercent = totalEpisodes > 0 ? Math.round((nativeVersionedEpisodes / totalEpisodes) * 1000) / 10 : null;
+    const semanticRevisionCoveragePercent = totalEpisodes > 0 ? Math.round((versionedEpisodes / totalEpisodes) * 1000) / 10 : null;
+
+    // Exact Revision Recurrence Grouping (NATIVE_VERSIONED only)
+    const projectNativeRevisionMap: Record<string, any[]> = {};
     for (const r of validRows) {
-      if (r.policyRevisionId) {
+      if (r.policyRevisionLinkProvenance === 'NATIVE_VERSIONED' && r.policyRevisionId) {
         const pairKey = `${r.projectId}:${r.policyRevisionId}`;
-        if (!projectRevisionMap[pairKey]) projectRevisionMap[pairKey] = [];
-        projectRevisionMap[pairKey].push(r);
+        if (!projectNativeRevisionMap[pairKey]) projectNativeRevisionMap[pairKey] = [];
+        projectNativeRevisionMap[pairKey].push(r);
       }
     }
 
     let totalRevisionRecurrences = 0;
     const recurringProjectsRevisionSet = new Set<string>();
-    for (const [pairKey, epList] of Object.entries(projectRevisionMap)) {
+    for (const [pairKey, epList] of Object.entries(projectNativeRevisionMap)) {
       const pId = epList[0].projectId;
       const recCount = Math.max(0, epList.length - 1);
       totalRevisionRecurrences += recCount;
       if (recCount > 0) recurringProjectsRevisionSet.add(pId);
+    }
+
+    // Semantic Equivalent Revision Recurrence Grouping (NATIVE + MIGRATED_SEMANTIC_MATCH)
+    const projectSemanticRevisionMap: Record<string, any[]> = {};
+    for (const r of validRows) {
+      if (r.policyRevisionId) {
+        const pairKey = `${r.projectId}:${r.policyRevisionId}`;
+        if (!projectSemanticRevisionMap[pairKey]) projectSemanticRevisionMap[pairKey] = [];
+        projectSemanticRevisionMap[pairKey].push(r);
+      }
+    }
+    let totalSemanticEquivalentRecurrences = 0;
+    for (const [pairKey, epList] of Object.entries(projectSemanticRevisionMap)) {
+      totalSemanticEquivalentRecurrences += Math.max(0, epList.length - 1);
     }
 
     // 9. Coverage & Denominators
@@ -7006,8 +7030,10 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
         recurringProjectCount: recurringProjectsSet.size,
         totalRecurrences,
         policiesWithEpisodes: uniquePolicyIds.size,
-        versionedEpisodes,
+        nativeVersionedEpisodes,
+        migratedSemanticMatchEpisodes,
         legacyUnversionedEpisodes,
+        versionedEpisodes,
         unattributedPicEpisodes
       },
       resolutionDuration: {
@@ -7027,6 +7053,7 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
         recurringProjectCount: recurringProjectsSet.size,
         totalRevisionRecurrences,
         recurringProjectsRevisionCount: recurringProjectsRevisionSet.size,
+        totalSemanticEquivalentRecurrences,
         repeatIntervalsSample: repeatIntervals.length,
         averageRepeatIntervalHours,
         medianRepeatIntervalHours,
@@ -7047,9 +7074,12 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
         observedPartialBusinessResolvedEpisodes,
         exactClosedDurationCoveragePercent,
         exactBusinessResolutionCoveragePercent,
-        versionedEpisodes,
+        nativeVersionedEpisodes,
+        migratedSemanticMatchEpisodes,
         legacyUnversionedEpisodes,
-        revisionIdentityCoveragePercent
+        versionedEpisodes,
+        nativeRevisionIdentityCoveragePercent,
+        semanticRevisionCoveragePercent
       },
       policyBreakdown,
       projectBreakdown: Object.values(projectBreakdownMap),
