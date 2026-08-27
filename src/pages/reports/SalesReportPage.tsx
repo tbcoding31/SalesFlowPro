@@ -1053,6 +1053,44 @@ export const SalesReportPage: React.FC = () => {
               </table>
             </div>
           </div>
+
+          {/* Data Quality & Provenance Coverage Disclosure */}
+          <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200">
+            <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+              Historical Dataset Integrity & Provenance Coverage
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-3 text-xs text-slate-600">
+              <div>
+                <span className="font-semibold text-slate-700">Closed Episodes Coverage: </span>
+                <span>
+                  {analyticsData?.coverage.exactClosedDurationCoveragePercent !== null && analyticsData?.coverage.exactClosedDurationCoveragePercent !== undefined
+                    ? `${analyticsData.coverage.exactClosedDurationCoveragePercent}% exact`
+                    : 'N/A'}
+                </span>
+                <div className="text-[11px] text-slate-400 mt-0.5">
+                  {analyticsData?.coverage.exactClosedEpisodes ?? 0} exact / {analyticsData?.coverage.observedPartialClosedEpisodes ?? 0} observed partial
+                </div>
+              </div>
+              <div>
+                <span className="font-semibold text-slate-700">Business Resolution Coverage: </span>
+                <span>
+                  {analyticsData?.coverage.exactBusinessResolutionCoveragePercent !== null && analyticsData?.coverage.exactBusinessResolutionCoveragePercent !== undefined
+                    ? `${analyticsData.coverage.exactBusinessResolutionCoveragePercent}% exact`
+                    : 'N/A'}
+                </span>
+                <div className="text-[11px] text-slate-400 mt-0.5">
+                  {analyticsData?.coverage.exactBusinessResolvedEpisodes ?? 0} exact / {analyticsData?.coverage.observedPartialBusinessResolvedEpisodes ?? 0} observed partial
+                </div>
+              </div>
+              <div>
+                <span className="font-semibold text-slate-700">History Coverage Basis: </span>
+                <span>{analyticsData?.periodFilterBasis || 'STARTED_AT'}</span>
+                <div className="text-[11px] text-slate-400 mt-0.5">
+                  Storage precision: 0.01h (decimal hours)
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

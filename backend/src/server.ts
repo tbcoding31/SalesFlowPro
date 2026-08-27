@@ -4255,15 +4255,16 @@ app.get('/api/sales-targets/coverage', async (req, res) => {
 // R51 PIPELINE VELOCITY BASELINE & STAGE DURATION INTELLIGENCE
 // ==========================================
 
-export function calculatePercentile(sortedValues: number[], percentile: number): number {
+export function calculatePercentile(sortedValues: number[], percentile: number, preserveDecimals = false): number {
   if (sortedValues.length === 0) return 0;
-  if (sortedValues.length === 1) return sortedValues[0];
+  if (sortedValues.length === 1) return preserveDecimals ? Math.round(sortedValues[0] * 100) / 100 : Math.round(sortedValues[0]);
   const index = (percentile / 100) * (sortedValues.length - 1);
   const lower = Math.floor(index);
   const upper = Math.ceil(index);
   const weight = index - lower;
-  if (lower === upper) return sortedValues[lower];
-  return Math.round(sortedValues[lower] * (1 - weight) + sortedValues[upper] * weight);
+  if (lower === upper) return preserveDecimals ? Math.round(sortedValues[lower] * 100) / 100 : sortedValues[lower];
+  const interpolated = sortedValues[lower] * (1 - weight) + sortedValues[upper] * weight;
+  return preserveDecimals ? Math.round(interpolated * 100) / 100 : Math.round(interpolated);
 }
 
 app.get('/api/reports/pipeline-velocity', async (req, res) => {
@@ -6409,17 +6410,35 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
 
     const [rows]: any = await pool.query(sql, params);
 
-    // 1. Core Counts
-    const totalEpisodes = rows.length;
-    const activeEpisodes = rows.filter((r: any) => r.isActive).length;
-    const closedEpisodes = rows.filter((r: any) => !r.isActive).length;
-    const businessResolvedEpisodes = rows.filter((r: any) => !r.isActive && r.endReason === 'BUSINESS_STATE_CHANGED').length;
-    const exactResolvedEpisodes = rows.filter((r: any) => !r.isActive && r.startProvenance === 'TRANSITION_DETECTED').length;
-    const exactBusinessResolvedEpisodes = rows.filter((r: any) => !r.isActive && r.startProvenance === 'TRANSITION_DETECTED' && r.endReason === 'BUSINESS_STATE_CHANGED').length;
-    const observedPartialResolvedEpisodes = rows.filter((r: any) => !r.isActive && r.startProvenance !== 'TRANSITION_DETECTED').length;
+    // 1. Core Episode Datasets & Counts
+    // Filter out rows where duration is negative or impossible
+    const validRows = rows.filter((r: any) => {
+      if (r.durationHours !== null && Number(r.durationHours) < 0) return false;
+      return true;
+    });
 
-    // 2. Exact Resolution Duration Metrics (Strictly exact business-state resolved episodes)
-    const exactDurations = rows
+    const invalidNegativeDurationCount = rows.filter((r: any) => r.durationHours !== null && Number(r.durationHours) < 0).length;
+    const missingDurationCount = rows.filter((r: any) => !r.isActive && r.durationHours === null).length;
+
+    const totalEpisodes = validRows.length;
+    const activeEpisodes = validRows.filter((r: any) => r.isActive).length;
+    const closedEpisodes = validRows.filter((r: any) => !r.isActive).length;
+    
+    // Business Resolved: Closed strictly by BUSINESS_STATE_CHANGED
+    const businessResolvedEpisodes = validRows.filter((r: any) => !r.isActive && r.endReason === 'BUSINESS_STATE_CHANGED').length;
+    
+    // Exact Closed: Closed with exact detected start provenance
+    const exactClosedEpisodes = validRows.filter((r: any) => !r.isActive && r.startProvenance === 'TRANSITION_DETECTED').length;
+    
+    // Exact Business Resolved: Closed by BUSINESS_STATE_CHANGED with exact detected start provenance and valid duration
+    const exactBusinessResolvedEpisodes = validRows.filter((r: any) => !r.isActive && r.startProvenance === 'TRANSITION_DETECTED' && r.endReason === 'BUSINESS_STATE_CHANGED' && r.durationHours !== null).length;
+    
+    // Observed / Partial
+    const observedPartialClosedEpisodes = validRows.filter((r: any) => !r.isActive && r.startProvenance !== 'TRANSITION_DETECTED').length;
+    const observedPartialBusinessResolvedEpisodes = validRows.filter((r: any) => !r.isActive && r.startProvenance !== 'TRANSITION_DETECTED' && r.endReason === 'BUSINESS_STATE_CHANGED').length;
+
+    // 2. Primary Resolution Duration Distribution (Strictly exact business-state resolved episodes)
+    const exactDurations = validRows
       .filter((r: any) => !r.isActive && r.startProvenance === 'TRANSITION_DETECTED' && r.endReason === 'BUSINESS_STATE_CHANGED' && r.durationHours !== null)
       .map((r: any) => Number(r.durationHours))
       .sort((a: number, b: number) => a - b);
@@ -6436,15 +6455,15 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
     if (sampleSize > 0) {
       const sum = exactDurations.reduce((acc: number, val: number) => acc + val, 0);
       averageResolutionHours = Math.round((sum / sampleSize) * 100) / 100;
-      medianResolutionHours = calculatePercentile(exactDurations, 50);
-      p25ResolutionHours = calculatePercentile(exactDurations, 25);
-      p75ResolutionHours = calculatePercentile(exactDurations, 75);
-      p90ResolutionHours = calculatePercentile(exactDurations, 90);
-      minResolutionHours = exactDurations[0];
-      maxResolutionHours = exactDurations[exactDurations.length - 1];
+      medianResolutionHours = calculatePercentile(exactDurations, 50, true);
+      p25ResolutionHours = calculatePercentile(exactDurations, 25, true);
+      p75ResolutionHours = calculatePercentile(exactDurations, 75, true);
+      p90ResolutionHours = calculatePercentile(exactDurations, 90, true);
+      minResolutionHours = Math.round(exactDurations[0] * 100) / 100;
+      maxResolutionHours = Math.round(exactDurations[exactDurations.length - 1] * 100) / 100;
     }
 
-    // 3. End Reason Breakdown
+    // 3. End Reason Breakdown (Reconciled with closedEpisodes)
     const endReasonBreakdown: Record<string, number> = {
       BUSINESS_STATE_CHANGED: 0,
       POLICY_DEACTIVATED: 0,
@@ -6452,26 +6471,32 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
       EVALUATION_BECAME_UNKNOWN: 0,
       PROJECT_BECAME_TERMINAL: 0
     };
-    for (const r of rows) {
-      if (r.endReason) {
-        endReasonBreakdown[r.endReason] = (endReasonBreakdown[r.endReason] || 0) + 1;
+    let unknownEndReasonCount = 0;
+
+    for (const r of validRows) {
+      if (!r.isActive && r.endReason) {
+        if (endReasonBreakdown[r.endReason] !== undefined) {
+          endReasonBreakdown[r.endReason]++;
+        } else {
+          unknownEndReasonCount++;
+        }
       }
     }
 
     // 4. Severity Breakdown
     const severityBreakdown: Record<string, number> = { INFO: 0, WARNING: 0, CRITICAL: 0 };
-    for (const r of rows) {
+    for (const r of validRows) {
       if (r.severitySnapshot) {
         severityBreakdown[r.severitySnapshot] = (severityBreakdown[r.severitySnapshot] || 0) + 1;
       }
     }
 
-    // 5. Recurrence & Project-Policy Grouping
+    // 5. Recurrence & Project-Policy Lineage Grouping
     const projectPolicyMap: Record<string, any[]> = {};
     const uniqueProjectIds = new Set<string>();
     const uniquePolicyIds = new Set<string>();
 
-    for (const r of rows) {
+    for (const r of validRows) {
       uniqueProjectIds.add(r.projectId);
       uniquePolicyIds.add(r.policyId);
       const pairKey = `${r.projectId}:${r.policyId}`;
@@ -6483,6 +6508,7 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
     const recurringProjectsSet = new Set<string>();
     const projectBreakdownMap: Record<string, any> = {};
     const repeatIntervals: number[] = [];
+    let overlapAnomalyCount = 0;
 
     for (const [pairKey, epList] of Object.entries(projectPolicyMap)) {
       const pId = epList[0].projectId;
@@ -6494,14 +6520,16 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
         recurringProjectsSet.add(pId);
       }
 
-      // Calculate repeat intervals between consecutive episodes
+      // Calculate repeat intervals between consecutive exact episodes
       for (let i = 1; i < epList.length; i++) {
         const prev = epList[i - 1];
         const curr = epList[i];
-        if (prev.endedAt && curr.startedAt && prev.startProvenance === 'TRANSITION_DETECTED' && curr.startProvenance === 'TRANSITION_DETECTED') {
+        if (prev.endedAt && curr.startedAt) {
           const prevEnd = new Date(prev.endedAt).getTime();
           const currStart = new Date(curr.startedAt).getTime();
-          if (currStart >= prevEnd) {
+          if (currStart < prevEnd) {
+            overlapAnomalyCount++;
+          } else if (prev.startProvenance === 'TRANSITION_DETECTED' && curr.startProvenance === 'TRANSITION_DETECTED') {
             const intHours = Math.round(((currStart - prevEnd) / (1000 * 60 * 60)) * 100) / 100;
             repeatIntervals.push(intHours);
           }
@@ -6541,11 +6569,11 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
 
     const sSortedIntervals = [...repeatIntervals].sort((a, b) => a - b);
     const averageRepeatIntervalHours = repeatIntervals.length > 0 ? Math.round((repeatIntervals.reduce((a, b) => a + b, 0) / repeatIntervals.length) * 100) / 100 : null;
-    const medianRepeatIntervalHours = repeatIntervals.length > 0 ? calculatePercentile(sSortedIntervals, 50) : null;
+    const medianRepeatIntervalHours = repeatIntervals.length > 0 ? calculatePercentile(sSortedIntervals, 50, true) : null;
 
-    // 6. Policy Breakdown
+    // 6. Policy Lineage Breakdown
     const policyMap: Record<string, any> = {};
-    for (const r of rows) {
+    for (const r of validRows) {
       if (!policyMap[r.policyId]) {
         policyMap[r.policyId] = {
           policyId: r.policyId,
@@ -6577,8 +6605,8 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
         if (r.startProvenance === 'TRANSITION_DETECTED' && r.endReason === 'BUSINESS_STATE_CHANGED' && r.durationHours !== null) {
           pol.exactDurations.push(Number(r.durationHours));
         }
-        if (r.endReason) {
-          pol.endReasons[r.endReason] = (pol.endReasons[r.endReason] || 0) + 1;
+        if (r.endReason && pol.endReasons[r.endReason] !== undefined) {
+          pol.endReasons[r.endReason]++;
         }
       }
       pol.uniqueProjects.add(r.projectId);
@@ -6593,7 +6621,7 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
 
     const policyBreakdown = Object.values(policyMap).map((pol: any) => {
       const sorted = [...pol.exactDurations].sort((a: number, b: number) => a - b);
-      const medianHours = sorted.length > 0 ? calculatePercentile(sorted, 50) : null;
+      const medianHours = sorted.length > 0 ? calculatePercentile(sorted, 50, true) : null;
       const averageHours = sorted.length > 0 ? Math.round((sorted.reduce((a: number, b: number) => a + b, 0) / sorted.length) * 100) / 100 : null;
 
       return {
@@ -6616,7 +6644,12 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
 
     // 7. Rep Historical Attribution Breakdown
     const repMap: Record<string, any> = {};
-    for (const r of rows) {
+    let unattributedPicEpisodes = 0;
+
+    for (const r of validRows) {
+      if (!r.picIdSnapshot) {
+        unattributedPicEpisodes++;
+      }
       const repKey = r.picIdSnapshot || 'UNASSIGNED';
       if (!repMap[repKey]) {
         repMap[repKey] = {
@@ -6643,7 +6676,7 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
 
     const repBreakdown = Object.values(repMap).map((rep: any) => {
       const sorted = [...rep.exactDurations].sort((a: number, b: number) => a - b);
-      const medianHours = sorted.length > 0 ? calculatePercentile(sorted, 50) : null;
+      const medianHours = sorted.length > 0 ? calculatePercentile(sorted, 50, true) : null;
       return {
         picId: rep.picId,
         picName: rep.picName,
@@ -6656,30 +6689,39 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
       };
     });
 
-    // 8. Coverage Metadata
+    // 8. Coverage & Denominators
     const [earliestRow]: any = await pool.query(`SELECT MIN(startedAt) as earliest FROM project_intervention_episodes WHERE tenantId = ?`, [targetTenant]);
     const historyCoverageStartAt = earliestRow.length > 0 ? earliestRow[0].earliest : null;
-    const exactDurationCoveragePercent = closedEpisodes > 0 ? Math.round((exactResolvedEpisodes / closedEpisodes) * 1000) / 10 : null;
+
+    // exactClosedDurationCoveragePercent = exactClosedEpisodes / closedEpisodes * 100
+    const exactClosedDurationCoveragePercent = closedEpisodes > 0 ? Math.round((exactClosedEpisodes / closedEpisodes) * 1000) / 10 : null;
+
+    // exactBusinessResolutionCoveragePercent = exactBusinessResolvedEpisodes / businessResolvedEpisodes * 100
+    const exactBusinessResolutionCoveragePercent = businessResolvedEpisodes > 0 ? Math.round((exactBusinessResolvedEpisodes / businessResolvedEpisodes) * 1000) / 10 : null;
 
     res.json({
       tenantId: targetTenant,
       evaluatedAt: new Date().toISOString(),
       scope: effectiveScope,
+      periodFilterBasis: 'STARTED_AT',
       summary: {
         totalEpisodes,
         activeEpisodes,
         closedEpisodes,
         businessResolvedEpisodes,
-        exactResolvedEpisodes,
+        exactClosedEpisodes,
         exactBusinessResolvedEpisodes,
-        observedPartialResolvedEpisodes,
+        observedPartialClosedEpisodes,
+        observedPartialBusinessResolvedEpisodes,
         uniqueProjectsWithEpisodes: uniqueProjectIds.size,
         recurringProjectCount: recurringProjectsSet.size,
         totalRecurrences,
-        policiesWithEpisodes: uniquePolicyIds.size
+        policiesWithEpisodes: uniquePolicyIds.size,
+        unattributedPicEpisodes
       },
       resolutionDuration: {
         metric: 'EXACT_BUSINESS_STATE_CHANGED_HOURS',
+        storagePrecisionHours: 0.01,
         sampleSize,
         averageResolutionHours,
         medianResolutionHours,
@@ -6694,15 +6736,24 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
         recurringProjectCount: recurringProjectsSet.size,
         repeatIntervalsSample: repeatIntervals.length,
         averageRepeatIntervalHours,
-        medianRepeatIntervalHours
+        medianRepeatIntervalHours,
+        overlapAnomalyCount
+      },
+      dataQuality: {
+        invalidNegativeDurationCount,
+        missingDurationCount,
+        unknownEndReasonCount
       },
       endReasonBreakdown,
       severityBreakdown,
       coverage: {
         historyCoverageStartAt,
-        exactResolvedEpisodes,
-        observedPartialResolvedEpisodes,
-        exactDurationCoveragePercent
+        exactClosedEpisodes,
+        observedPartialClosedEpisodes,
+        exactBusinessResolvedEpisodes,
+        observedPartialBusinessResolvedEpisodes,
+        exactClosedDurationCoveragePercent,
+        exactBusinessResolutionCoveragePercent
       },
       policyBreakdown,
       projectBreakdown: Object.values(projectBreakdownMap),

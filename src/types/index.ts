@@ -1031,21 +1031,25 @@ export interface InterventionAnalyticsResponse {
   tenantId: string;
   evaluatedAt: string;
   scope: string;
+  periodFilterBasis: 'STARTED_AT';
   summary: {
     totalEpisodes: number;
     activeEpisodes: number;
     closedEpisodes: number;
     businessResolvedEpisodes: number;
-    exactResolvedEpisodes: number;
+    exactClosedEpisodes: number;
     exactBusinessResolvedEpisodes: number;
-    observedPartialResolvedEpisodes: number;
+    observedPartialClosedEpisodes: number;
+    observedPartialBusinessResolvedEpisodes: number;
     uniqueProjectsWithEpisodes: number;
     recurringProjectCount: number;
     totalRecurrences: number;
     policiesWithEpisodes: number;
+    unattributedPicEpisodes?: number;
   };
   resolutionDuration: {
     metric: string;
+    storagePrecisionHours?: number;
     sampleSize: number;
     averageResolutionHours: number | null;
     medianResolutionHours: number | null;
@@ -1061,14 +1065,23 @@ export interface InterventionAnalyticsResponse {
     repeatIntervalsSample: number;
     averageRepeatIntervalHours: number | null;
     medianRepeatIntervalHours: number | null;
+    overlapAnomalyCount?: number;
+  };
+  dataQuality?: {
+    invalidNegativeDurationCount: number;
+    missingDurationCount: number;
+    unknownEndReasonCount: number;
   };
   endReasonBreakdown: Record<string, number>;
   severityBreakdown: Record<string, number>;
   coverage: {
     historyCoverageStartAt: string | null;
-    exactResolvedEpisodes: number;
-    observedPartialResolvedEpisodes: number;
-    exactDurationCoveragePercent: number | null;
+    exactClosedEpisodes: number;
+    observedPartialClosedEpisodes: number;
+    exactBusinessResolvedEpisodes: number;
+    observedPartialBusinessResolvedEpisodes: number;
+    exactClosedDurationCoveragePercent: number | null;
+    exactBusinessResolutionCoveragePercent: number | null;
   };
   policyBreakdown: PolicyAnalyticsItem[];
   projectBreakdown: ProjectRecurrenceAnalyticsItem[];
