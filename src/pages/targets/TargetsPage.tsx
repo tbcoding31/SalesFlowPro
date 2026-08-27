@@ -234,7 +234,9 @@ export const TargetsPage: React.FC = () => {
                   : 'Unavailable'}
               </div>
               <div className="text-[11px] text-slate-600 font-medium mt-1">
-                {period?.isForecastAvailable ? `${coverage?.qualifyingForecastProjectsInPeriod || 0} open qualifying deals` : 'Historical period completed'}
+                {period?.isForecastAvailable
+                  ? `${targetType === 'WON_PROJECT_VALUE' ? (coverage?.projectsEligibleForWeightedValue || 0) : (coverage?.projectsEligibleForWeightedCount || 0)} qualifying open deals`
+                  : 'Historical period completed'}
               </div>
             </div>
             <div className="mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500 font-medium">

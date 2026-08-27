@@ -387,15 +387,16 @@ export interface SalesTargetAttainmentResponse {
     wonProjectsMissingTeamAttribution: number;
     missingAttributionCount: number;
     eligibleOpenProjectsInPeriod?: number;
-    qualifyingForecastProjectsInPeriod?: number;
+    projectsExpectedInsidePeriod?: number;
+    projectsExpectedOutsidePeriod?: number;
+    projectsEligibleForWeightedValue?: number;
+    projectsEligibleForWeightedCount?: number;
     projectsWithValue?: number;
     projectsMissingValue?: number;
     projectsWithProbability?: number;
     projectsMissingProbability?: number;
     projectsWithExpectedCloseDate?: number;
     projectsMissingExpectedCloseDate?: number;
-    projectsExpectedInsidePeriod?: number;
-    projectsExpectedOutsidePeriod?: number;
   };
 }
 

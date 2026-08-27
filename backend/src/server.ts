@@ -3548,7 +3548,7 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
         AND DATE(p.expectedCloseDate) >= ? AND DATE(p.expectedCloseDate) <= ?
     `, [targetTenant, periodStart, periodEnd]);
 
-    // Track forecast data quality coverage
+    // Track forecast data quality coverage across all open projects in tenant
     const [allOpenInTenant]: any = await pool.query(`
       SELECT id, value, probability, expectedCloseDate, stageId, picId
       FROM projects
@@ -3558,8 +3558,8 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
     const isHistoricalPeriod = periodEnd < todayStr;
     const isForecastAvailable = !isHistoricalPeriod;
 
-    // Filter valid qualifying open forecast candidates
-    const validOpenForecastProjects = isForecastAvailable ? openProjects.filter((p: any) => p.value !== null && p.probability !== null) : [];
+    // Filter open projects inside period
+    const openProjectsInsidePeriod = isForecastAvailable ? openProjects : [];
 
     // Map open forecast per representative (by current PIC tenantUserId)
     const userAttainmentList = reps.map((rep: any) => {
@@ -3580,20 +3580,39 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
         remainingValue = Math.max(0, targetVal - actualMetric);
       }
 
-      // Forecast metrics (current open pipeline owned by rep)
-      const repOpenProjects = validOpenForecastProjects.filter((p: any) => p.picTenantUserId === rep.tenantUserId);
-      const rawPipelineValue = repOpenProjects.reduce((sum: number, p: any) => sum + Number(p.value), 0);
-      const weightedPipelineValue = repOpenProjects.reduce((sum: number, p: any) => sum + (Number(p.value) * Number(p.probability) / 100), 0);
-      const rawPipelineCount = repOpenProjects.length;
-      const weightedPipelineCount = repOpenProjects.reduce((sum: number, p: any) => sum + (Number(p.probability) / 100), 0);
-
-      const forecastMetric = isCountTarget ? weightedPipelineCount : weightedPipelineValue;
+      // Forecast metrics (current open pipeline owned by rep inside period)
+      let rawPipelineValue: number | null = null;
+      let weightedPipelineValue: number | null = null;
+      let rawPipelineCount: number | null = null;
+      let weightedPipelineCount: number | null = null;
       let projectedCoveragePercent: number | null = null;
       let projectedGap: number | null = null;
 
-      if (targetVal !== null && targetVal > 0 && isForecastAvailable) {
-        projectedCoveragePercent = parseFloat((((actualMetric + forecastMetric) / targetVal) * 100).toFixed(1));
-        projectedGap = Math.max(0, targetVal - actualMetric - forecastMetric);
+      if (isForecastAvailable) {
+        const repOpenProjects = openProjectsInsidePeriod.filter((p: any) => p.picTenantUserId === rep.tenantUserId);
+
+        // RAW Value: includes all open projects with known value (does NOT require probability)
+        const projectsWithKnownVal = repOpenProjects.filter((p: any) => p.value !== null);
+        rawPipelineValue = projectsWithKnownVal.reduce((sum: number, p: any) => sum + Number(p.value), 0);
+
+        // WEIGHTED Value: requires both value and probability
+        const projectsWithValAndProb = repOpenProjects.filter((p: any) => p.value !== null && p.probability !== null);
+        weightedPipelineValue = projectsWithValAndProb.reduce((sum: number, p: any) => sum + (Number(p.value) * Number(p.probability) / 100), 0);
+
+        // RAW Count: all open projects expected inside period (does NOT require value or probability)
+        rawPipelineCount = repOpenProjects.length;
+
+        // WEIGHTED Count: requires probability (does NOT require value)
+        const projectsWithProb = repOpenProjects.filter((p: any) => p.probability !== null);
+        const wCount = projectsWithProb.reduce((sum: number, p: any) => sum + (Number(p.probability) / 100), 0);
+        weightedPipelineCount = parseFloat(wCount.toFixed(2));
+
+        const forecastMetric = isCountTarget ? wCount : weightedPipelineValue;
+
+        if (targetVal !== null && targetVal > 0) {
+          projectedCoveragePercent = parseFloat((((actualMetric + forecastMetric) / targetVal) * 100).toFixed(1));
+          projectedGap = Math.max(0, targetVal - actualMetric - forecastMetric);
+        }
       }
 
       return {
@@ -3611,12 +3630,12 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
         attainmentPercent,
         remainingValue,
         hasTargetAssigned: Boolean(userTarget),
-        // R49 Forecast additions
+        // R49/R49R Forecast metrics
         isForecastAvailable,
         rawPipelineValue,
         weightedPipelineValue,
         rawPipelineCount,
-        weightedPipelineCount: parseFloat(weightedPipelineCount.toFixed(2)),
+        weightedPipelineCount,
         projectedCoveragePercent,
         projectedGap: projectedGap !== null ? parseFloat(projectedGap.toFixed(2)) : null
       };
@@ -3643,19 +3662,34 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
       }
 
       // Team Forecast metrics (current open projects owned by members of team)
-      const teamOpenProjects = validOpenForecastProjects.filter((p: any) => p.picTeamId === tm.id);
-      const rawPipelineValue = teamOpenProjects.reduce((sum: number, p: any) => sum + Number(p.value), 0);
-      const weightedPipelineValue = teamOpenProjects.reduce((sum: number, p: any) => sum + (Number(p.value) * Number(p.probability) / 100), 0);
-      const rawPipelineCount = teamOpenProjects.length;
-      const weightedPipelineCount = teamOpenProjects.reduce((sum: number, p: any) => sum + (Number(p.probability) / 100), 0);
-
-      const forecastMetric = isCountTarget ? weightedPipelineCount : weightedPipelineValue;
+      let rawPipelineValue: number | null = null;
+      let weightedPipelineValue: number | null = null;
+      let rawPipelineCount: number | null = null;
+      let weightedPipelineCount: number | null = null;
       let projectedCoveragePercent: number | null = null;
       let projectedGap: number | null = null;
 
-      if (targetVal !== null && targetVal > 0 && isForecastAvailable) {
-        projectedCoveragePercent = parseFloat((((actualMetric + forecastMetric) / targetVal) * 100).toFixed(1));
-        projectedGap = Math.max(0, targetVal - actualMetric - forecastMetric);
+      if (isForecastAvailable) {
+        const teamOpenProjects = openProjectsInsidePeriod.filter((p: any) => p.picTeamId === tm.id);
+
+        const projectsWithKnownVal = teamOpenProjects.filter((p: any) => p.value !== null);
+        rawPipelineValue = projectsWithKnownVal.reduce((sum: number, p: any) => sum + Number(p.value), 0);
+
+        const projectsWithValAndProb = teamOpenProjects.filter((p: any) => p.value !== null && p.probability !== null);
+        weightedPipelineValue = projectsWithValAndProb.reduce((sum: number, p: any) => sum + (Number(p.value) * Number(p.probability) / 100), 0);
+
+        rawPipelineCount = teamOpenProjects.length;
+
+        const projectsWithProb = teamOpenProjects.filter((p: any) => p.probability !== null);
+        const wCount = projectsWithProb.reduce((sum: number, p: any) => sum + (Number(p.probability) / 100), 0);
+        weightedPipelineCount = parseFloat(wCount.toFixed(2));
+
+        const forecastMetric = isCountTarget ? wCount : weightedPipelineValue;
+
+        if (targetVal !== null && targetVal > 0) {
+          projectedCoveragePercent = parseFloat((((actualMetric + forecastMetric) / targetVal) * 100).toFixed(1));
+          projectedGap = Math.max(0, targetVal - actualMetric - forecastMetric);
+        }
       }
 
       return {
@@ -3669,12 +3703,12 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
         attainmentPercent,
         remainingValue,
         hasTargetAssigned: Boolean(teamTarget),
-        // R49 Forecast additions
+        // R49/R49R Forecast metrics
         isForecastAvailable,
         rawPipelineValue,
         weightedPipelineValue,
         rawPipelineCount,
-        weightedPipelineCount: parseFloat(weightedPipelineCount.toFixed(2)),
+        weightedPipelineCount,
         projectedCoveragePercent,
         projectedGap: projectedGap !== null ? parseFloat(projectedGap.toFixed(2)) : null
       };
@@ -3685,21 +3719,40 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
     const orgActualMetric = requestedTargetType === 'WON_PROJECT_COUNT' ? totalWonProjectsInPeriod : totalWonValueInPeriod;
     const orgAttainmentPercent = totalAssignedTargetValue > 0 ? parseFloat(((orgActualMetric / totalAssignedTargetValue) * 100).toFixed(1)) : null;
 
-    const orgRawPipelineValue = validOpenForecastProjects.reduce((sum: number, p: any) => sum + Number(p.value), 0);
-    const orgWeightedPipelineValue = validOpenForecastProjects.reduce((sum: number, p: any) => sum + (Number(p.value) * Number(p.probability) / 100), 0);
-    const orgRawPipelineCount = validOpenForecastProjects.length;
-    const orgWeightedPipelineCount = validOpenForecastProjects.reduce((sum: number, p: any) => sum + (Number(p.probability) / 100), 0);
+    let orgRawPipelineValue: number | null = null;
+    let orgWeightedPipelineValue: number | null = null;
+    let orgRawPipelineCount: number | null = null;
+    let orgWeightedPipelineCount: number | null = null;
+    let orgRemainingTarget: number | null = null;
+    let orgProjectedCoveragePercent: number | null = null;
+    let orgProjectedGap: number | null = null;
 
-    const orgForecastMetric = requestedTargetType === 'WON_PROJECT_COUNT' ? orgWeightedPipelineCount : orgWeightedPipelineValue;
-    const orgRemainingTarget = Math.max(0, totalAssignedTargetValue - orgActualMetric);
-    const orgProjectedCoveragePercent = totalAssignedTargetValue > 0 && isForecastAvailable
-      ? parseFloat((((orgActualMetric + orgForecastMetric) / totalAssignedTargetValue) * 100).toFixed(1))
-      : null;
-    const orgProjectedGap = totalAssignedTargetValue > 0 && isForecastAvailable
-      ? Math.max(0, totalAssignedTargetValue - orgActualMetric - orgForecastMetric)
-      : null;
+    if (isForecastAvailable) {
+      const allKnownValProjects = openProjectsInsidePeriod.filter((p: any) => p.value !== null);
+      orgRawPipelineValue = allKnownValProjects.reduce((sum: number, p: any) => sum + Number(p.value), 0);
 
-    // Data Quality & Coverage Breakdown
+      const allValProbProjects = openProjectsInsidePeriod.filter((p: any) => p.value !== null && p.probability !== null);
+      orgWeightedPipelineValue = allValProbProjects.reduce((sum: number, p: any) => sum + (Number(p.value) * Number(p.probability) / 100), 0);
+
+      orgRawPipelineCount = openProjectsInsidePeriod.length;
+
+      const allProbProjects = openProjectsInsidePeriod.filter((p: any) => p.probability !== null);
+      const orgWCount = allProbProjects.reduce((sum: number, p: any) => sum + (Number(p.probability) / 100), 0);
+      orgWeightedPipelineCount = parseFloat(orgWCount.toFixed(2));
+
+      const orgForecastMetric = requestedTargetType === 'WON_PROJECT_COUNT' ? orgWCount : orgWeightedPipelineValue;
+      orgRemainingTarget = Math.max(0, totalAssignedTargetValue - orgActualMetric);
+      orgProjectedCoveragePercent = totalAssignedTargetValue > 0
+        ? parseFloat((((orgActualMetric + orgForecastMetric) / totalAssignedTargetValue) * 100).toFixed(1))
+        : null;
+      orgProjectedGap = totalAssignedTargetValue > 0
+        ? Math.max(0, totalAssignedTargetValue - orgActualMetric - orgForecastMetric)
+        : null;
+    } else {
+      orgRemainingTarget = Math.max(0, totalAssignedTargetValue - orgActualMetric);
+    }
+
+    // Data Quality & Metric-Specific Coverage Breakdown
     const projectsWithValue = allOpenInTenant.filter((p: any) => p.value !== null).length;
     const projectsMissingValue = allOpenInTenant.filter((p: any) => p.value === null).length;
     const projectsWithProbability = allOpenInTenant.filter((p: any) => p.probability !== null).length;
@@ -3719,6 +3772,9 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
       return dStr < periodStart || dStr > periodEnd;
     }).length;
 
+    const projectsEligibleForWeightedValue = openProjectsInsidePeriod.filter((p: any) => p.value !== null && p.probability !== null).length;
+    const projectsEligibleForWeightedCount = openProjectsInsidePeriod.filter((p: any) => p.probability !== null).length;
+
     res.json({
       businessDate: todayStr,
       evaluatedAt,
@@ -3737,12 +3793,12 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
         totalActualValue: totalWonValueInPeriod,
         totalActualCount: totalWonProjectsInPeriod,
         overallAttainmentPercent: orgAttainmentPercent,
-        // R49 Gap & Forecast summary
+        // R49/R49R Gap & Forecast summary (null when unavailable)
         remainingTarget: orgRemainingTarget,
         rawPipelineValue: orgRawPipelineValue,
         weightedPipelineValue: orgWeightedPipelineValue,
         rawPipelineCount: orgRawPipelineCount,
-        weightedPipelineCount: parseFloat(orgWeightedPipelineCount.toFixed(2)),
+        weightedPipelineCount: orgWeightedPipelineCount,
         projectedCoveragePercent: orgProjectedCoveragePercent,
         projectedGap: orgProjectedGap !== null ? parseFloat(orgProjectedGap.toFixed(2)) : null
       },
@@ -3755,17 +3811,18 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
         wonProjectsWithTeamAttribution: uniqueWonProjects.filter((p: any) => Boolean(p.creditedTeamId)).length,
         wonProjectsMissingTeamAttribution: uniqueWonProjects.filter((p: any) => !p.creditedTeamId).length,
         missingAttributionCount: uniqueWonProjects.filter((p: any) => !p.creditedTenantUserId).length,
-        // R49 Forecast coverage breakdown
+        // R49/R49R Metric-Specific Forecast coverage breakdown
         eligibleOpenProjectsInPeriod: openProjects.length,
-        qualifyingForecastProjectsInPeriod: validOpenForecastProjects.length,
+        projectsExpectedInsidePeriod,
+        projectsExpectedOutsidePeriod,
+        projectsEligibleForWeightedValue,
+        projectsEligibleForWeightedCount,
         projectsWithValue,
         projectsMissingValue,
         projectsWithProbability,
         projectsMissingProbability,
         projectsWithExpectedCloseDate,
-        projectsMissingExpectedCloseDate,
-        projectsExpectedInsidePeriod,
-        projectsExpectedOutsidePeriod
+        projectsMissingExpectedCloseDate
       }
     });
   } catch (err: any) {
