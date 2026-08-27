@@ -3497,15 +3497,14 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
     `, [targetTenant, requestedTargetType, periodStart, periodEnd]);
 
     // 3. Batch Fetch Projects won in the target period (based on terminal stage history)
+    // 3. Batch Fetch Projects won in the target period (based on terminal stage history)
     const [wonHistories]: any = await pool.query(`
       SELECT 
         psh.id as historyId, psh.projectId, psh.toStageId, psh.changedAt,
-        p.value, p.picId, p.customerId, p.stageId as currentStageId,
-        tu.id as picTenantUserId, tm.teamId as picTeamId
+        psh.creditedTenantUserId, psh.creditedTeamId,
+        p.value, p.stageId as currentStageId
       FROM project_stage_histories psh
       JOIN projects p ON p.id = psh.projectId
-      LEFT JOIN tenant_users tu ON tu.userId = p.picId AND tu.tenantId = p.tenantId
-      LEFT JOIN team_members tm ON tm.tenantUserId = tu.id
       WHERE p.tenantId = ?
         AND psh.toStageId = 'WON'
         AND DATE(psh.changedAt) >= ? AND DATE(psh.changedAt) <= ?
@@ -3514,30 +3513,31 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
 
     // Aggregate Attainment strictly per Project (deduplicating reopened re-wins to latest effective outcome)
     // A project contributes if its current stage is still 'WON'
-    const validWonProjectsMap: Record<string, { value: number; picUserId: string; picTenantUserId: string; teamId: string }> = {};
-    let totalWonProjectsInPeriod = 0;
-    let totalWonValueInPeriod = 0;
+    const validWonProjectsMap: Record<string, {
+      value: number;
+      creditedTenantUserId: string | null;
+      creditedTeamId: string | null;
+    }> = {};
 
     for (const row of wonHistories) {
-      // Reopened check: if currently not WON, excluded from active attainment
+      // Reopened / Terminal Outcome check: if currently not WON, excluded from active attainment
       if (row.currentStageId === 'WON') {
         validWonProjectsMap[row.projectId] = {
           value: Number(row.value) || 0,
-          picUserId: row.picId,
-          picTenantUserId: row.picTenantUserId,
-          teamId: row.picTeamId
+          creditedTenantUserId: row.creditedTenantUserId || null,
+          creditedTeamId: row.creditedTeamId || null
         };
       }
     }
 
     const uniqueWonProjects = Object.values(validWonProjectsMap);
-    totalWonProjectsInPeriod = uniqueWonProjects.length;
-    totalWonValueInPeriod = uniqueWonProjects.reduce((sum, p) => sum + p.value, 0);
+    const totalWonProjectsInPeriod = uniqueWonProjects.length;
+    const totalWonValueInPeriod = uniqueWonProjects.reduce((sum, p) => sum + p.value, 0);
 
-    // 4. Map Attainment per Representative
+    // 4. Map Attainment per Representative (strictly by immutable creditedTenantUserId)
     const userAttainmentList = reps.map((rep: any) => {
       const userTarget = targets.find((t: any) => t.targetScope === 'USER' && t.tenantUserId === rep.tenantUserId);
-      const repWonProjects = uniqueWonProjects.filter(p => p.picUserId === rep.userId);
+      const repWonProjects = uniqueWonProjects.filter(p => p.creditedTenantUserId === rep.tenantUserId);
 
       const actualValue = repWonProjects.reduce((sum, p) => sum + p.value, 0);
       const actualCount = repWonProjects.length;
@@ -3571,11 +3571,11 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
       };
     });
 
-    // 5. Map Attainment per Team
+    // 5. Map Attainment per Team (strictly by immutable creditedTeamId)
     const [allTeams]: any = await pool.query(`SELECT id, name FROM teams WHERE tenantId = ?`, [targetTenant]);
     const teamAttainmentList = allTeams.filter((tm: any) => effectiveScope === 'ORGANIZATION' || repTeamIds.includes(tm.id)).map((tm: any) => {
       const teamTarget = targets.find((t: any) => t.targetScope === 'TEAM' && t.teamId === tm.id);
-      const teamWonProjects = uniqueWonProjects.filter(p => p.teamId === tm.id);
+      const teamWonProjects = uniqueWonProjects.filter(p => p.creditedTeamId === tm.id);
 
       const actualValue = teamWonProjects.reduce((sum, p) => sum + p.value, 0);
       const actualCount = teamWonProjects.length;
@@ -3632,9 +3632,11 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
       teamAttainment: teamAttainmentList,
       coverage: {
         wonProjectsInPeriod: totalWonProjectsInPeriod,
-        wonProjectsWithUserAttribution: uniqueWonProjects.filter((p: any) => Boolean(p.picUserId)).length,
-        wonProjectsWithTeamAttribution: uniqueWonProjects.filter((p: any) => Boolean(p.teamId)).length,
-        missingAttributionCount: uniqueWonProjects.filter((p: any) => !p.picUserId).length
+        wonProjectsWithUserAttribution: uniqueWonProjects.filter((p: any) => Boolean(p.creditedTenantUserId)).length,
+        wonProjectsMissingUserAttribution: uniqueWonProjects.filter((p: any) => !p.creditedTenantUserId).length,
+        wonProjectsWithTeamAttribution: uniqueWonProjects.filter((p: any) => Boolean(p.creditedTeamId)).length,
+        wonProjectsMissingTeamAttribution: uniqueWonProjects.filter((p: any) => !p.creditedTeamId).length,
+        missingAttributionCount: uniqueWonProjects.filter((p: any) => !p.creditedTenantUserId).length
       }
     });
   } catch (err: any) {
@@ -3891,12 +3893,32 @@ app.patch('/api/projects/:id/stage', async (req, res) => {
       [toStageId, targetProbability, projectId]
     );
 
-    // 6. Record Project Stage History (Append-only immutable record)
+    // 6. Resolve and Persist Authoritative Credit Attribution on WON:
+    // Resolve PIC tenant user and team membership snapshot at transition time
+    let creditedTenantUserId: string | null = null;
+    let creditedTeamId: string | null = null;
+
+    if (toStageId === 'WON' && project.picId) {
+      const [picTuRows]: any = await connection.query(`
+        SELECT tu.id as tenantUserId, tm.teamId
+        FROM tenant_users tu
+        LEFT JOIN team_members tm ON tm.tenantUserId = tu.id
+        WHERE tu.userId = ? AND tu.tenantId = ?
+        LIMIT 1
+      `, [project.picId, projectTenant]);
+
+      if (picTuRows.length > 0) {
+        creditedTenantUserId = picTuRows[0].tenantUserId || null;
+        creditedTeamId = picTuRows[0].teamId || null;
+      }
+    }
+
+    // Record Project Stage History (Append-only immutable record with attribution snapshot)
     const effectiveNotes = reopenReason || lossReason || notes || reason || (isReopen ? `Reopened project from ${fromStageId} to ${toStageId}` : `Stage changed from ${fromStageId} to ${toStageId}`);
     const historyId = `PSH-${Date.now()}-${Math.random().toString(36).slice(-4)}`;
     await connection.query(
-      'INSERT INTO project_stage_histories (id, projectId, fromStageId, toStageId, changedById, notes) VALUES (?, ?, ?, ?, ?, ?)',
-      [historyId, projectId, fromStageId, toStageId, actorUserId, effectiveNotes]
+      'INSERT INTO project_stage_histories (id, projectId, fromStageId, toStageId, changedById, notes, creditedTenantUserId, creditedTeamId) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [historyId, projectId, fromStageId, toStageId, actorUserId, effectiveNotes, creditedTenantUserId, creditedTeamId]
     );
 
     // 7. Customer Activation Rule on WON:

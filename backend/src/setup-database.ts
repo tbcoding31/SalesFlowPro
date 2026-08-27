@@ -71,7 +71,19 @@ async function setupDatabase() {
 
     // PROJECTS (Formerly Opportunities)
     `CREATE TABLE IF NOT EXISTS projects (id VARCHAR(50) PRIMARY KEY, tenantId VARCHAR(50), customerId VARCHAR(50), title VARCHAR(255), value DECIMAL(15,2), probability INT, expectedCloseDate DATE, stageId VARCHAR(50), source VARCHAR(100), description TEXT, picId VARCHAR(50), createdAt DATETIME DEFAULT CURRENT_TIMESTAMP)`,
-    `CREATE TABLE IF NOT EXISTS project_stage_histories (id VARCHAR(50) PRIMARY KEY, projectId VARCHAR(50), fromStageId VARCHAR(50), toStageId VARCHAR(50), changedById VARCHAR(50), changedAt DATETIME DEFAULT CURRENT_TIMESTAMP, notes TEXT)`,
+    `CREATE TABLE IF NOT EXISTS project_stage_histories (
+      id VARCHAR(50) PRIMARY KEY,
+      projectId VARCHAR(50) NOT NULL,
+      fromStageId VARCHAR(50),
+      toStageId VARCHAR(50) NOT NULL,
+      changedById VARCHAR(50) NOT NULL,
+      changedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+      notes TEXT,
+      creditedTenantUserId VARCHAR(50),
+      creditedTeamId VARCHAR(50),
+      INDEX idx_psh_project (projectId, changedAt),
+      INDEX idx_psh_attribution (toStageId, changedAt, creditedTenantUserId, creditedTeamId)
+    )`,
 
     // TASKS & VISITS
     `CREATE TABLE IF NOT EXISTS tasks (id VARCHAR(50) PRIMARY KEY, tenantId VARCHAR(50), title VARCHAR(255), description TEXT, customerId VARCHAR(50), relatedProjectId VARCHAR(50), relatedVisitId VARCHAR(50), priorityId VARCHAR(50), statusId VARCHAR(50), taskType VARCHAR(50), dueDate DATE, picId VARCHAR(50), createdAt DATETIME DEFAULT CURRENT_TIMESTAMP, completedAt DATETIME)`,

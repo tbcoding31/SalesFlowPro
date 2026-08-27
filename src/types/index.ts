@@ -359,7 +359,9 @@ export interface SalesTargetAttainmentResponse {
   coverage: {
     wonProjectsInPeriod: number;
     wonProjectsWithUserAttribution: number;
+    wonProjectsMissingUserAttribution: number;
     wonProjectsWithTeamAttribution: number;
+    wonProjectsMissingTeamAttribution: number;
     missingAttributionCount: number;
   };
 }
