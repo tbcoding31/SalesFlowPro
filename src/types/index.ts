@@ -1027,6 +1027,22 @@ export interface RepAnalyticsItem {
   medianBusinessResolutionHours: number | null;
 }
 
+export interface PolicyRevision {
+  id: string;
+  tenantId: string;
+  policyId: string;
+  revisionNumber: number;
+  severity: string;
+  matchMode: string;
+  createdById: string;
+  createdByName?: string;
+  createdAt: string;
+  changeReason?: string | null;
+  migrationProvenance?: string | null;
+  isCurrentActive: boolean;
+  conditions: string[];
+}
+
 export interface InterventionAnalyticsResponse {
   tenantId: string;
   evaluatedAt: string;
@@ -1045,6 +1061,8 @@ export interface InterventionAnalyticsResponse {
     recurringProjectCount: number;
     totalRecurrences: number;
     policiesWithEpisodes: number;
+    versionedEpisodes?: number;
+    legacyUnversionedEpisodes?: number;
     unattributedPicEpisodes?: number;
   };
   resolutionDuration: {
@@ -1062,6 +1080,8 @@ export interface InterventionAnalyticsResponse {
   recurrence: {
     totalRecurrences: number;
     recurringProjectCount: number;
+    totalRevisionRecurrences?: number;
+    recurringProjectsRevisionCount?: number;
     repeatIntervalsSample: number;
     averageRepeatIntervalHours: number | null;
     medianRepeatIntervalHours: number | null;
@@ -1082,6 +1102,9 @@ export interface InterventionAnalyticsResponse {
     observedPartialBusinessResolvedEpisodes: number;
     exactClosedDurationCoveragePercent: number | null;
     exactBusinessResolutionCoveragePercent: number | null;
+    versionedEpisodes?: number;
+    legacyUnversionedEpisodes?: number;
+    revisionIdentityCoveragePercent?: number | null;
   };
   policyBreakdown: PolicyAnalyticsItem[];
   projectBreakdown: ProjectRecurrenceAnalyticsItem[];

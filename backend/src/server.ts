@@ -4780,7 +4780,7 @@ export const VALID_INTERVENTION_CONDITION_TYPES = [
   'OVERDUE_ACTION',
   'EXPECTED_CLOSE_OVERDUE',
   'INVALID_PIC',
-  'BLOCKED_CADENCE',
+'BLOCKED_CADENCE',
   'ABOVE_HISTORICAL_MEDIAN',
   'ABOVE_HISTORICAL_P75'
 ] as const;
@@ -4798,7 +4798,11 @@ app.get('/api/tenant/project-intervention-policies', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string);
+  if (!targetTenant || targetTenant === 'SYSTEM') {
+    return res.status(400).json({ error: 'Target tenantId is required.', code: 'MISSING_TARGET_TENANT' });
+  }
+
   if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && targetTenant !== actorTenant) {
     return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
   }
@@ -4807,32 +4811,48 @@ app.get('/api/tenant/project-intervention-policies', async (req, res) => {
     const hasViewPerm = actorRole === 'SUPER_ADMIN' ||
       actorPermissions.includes('ALL') ||
       actorPermissions.includes('MANAGE_TENANT') ||
-      actorPermissions.includes('VIEW_REPORTS') ||
-      actorPermissions.includes('MANAGE_USERS');
+      actorPermissions.includes('VIEW_REPORTS');
 
     if (!hasViewPerm) {
       return res.status(403).json({ error: 'Forbidden: Insufficient permissions to view intervention policies.' });
     }
 
-    const [policies]: any = await pool.query(
-      `SELECT * FROM project_intervention_policies WHERE tenantId = ? ORDER BY createdAt DESC`,
-      [targetTenant]
-    );
+    // Join with active revision for authoritative semantic fields
+    const [policies]: any = await pool.query(`
+      SELECT 
+        p.id,
+        p.tenantId,
+        p.code,
+        p.name,
+        p.description,
+        p.status,
+        p.activeRevisionId,
+        p.createdById,
+        p.createdAt,
+        p.updatedAt,
+        r.revisionNumber,
+        r.severity,
+        r.matchMode
+      FROM project_intervention_policies p
+      LEFT JOIN project_intervention_policy_revisions r ON r.id = p.activeRevisionId
+      WHERE p.tenantId = ?
+      ORDER BY p.createdAt ASC
+    `, [targetTenant]);
 
-    const policyIds = policies.map((p: any) => p.id);
+    const activeRevIds = policies.map((p: any) => p.activeRevisionId).filter(Boolean);
     let conditions: any[] = [];
-    if (policyIds.length > 0) {
+    if (activeRevIds.length > 0) {
       const [cRows]: any = await pool.query(
-        `SELECT * FROM project_intervention_policy_conditions WHERE policyId IN (?)`,
-        [policyIds]
+        `SELECT revisionId, conditionType FROM project_intervention_policy_revision_conditions WHERE revisionId IN (?)`,
+        [activeRevIds]
       );
       conditions = cRows;
     }
 
-    const conditionsByPolicy: Record<string, string[]> = {};
+    const conditionsByRev: Record<string, string[]> = {};
     for (const c of conditions) {
-      if (!conditionsByPolicy[c.policyId]) conditionsByPolicy[c.policyId] = [];
-      conditionsByPolicy[c.policyId].push(c.conditionType);
+      if (!conditionsByRev[c.revisionId]) conditionsByRev[c.revisionId] = [];
+      conditionsByRev[c.revisionId].push(c.conditionType);
     }
 
     const result = policies.map((p: any) => ({
@@ -4844,10 +4864,12 @@ app.get('/api/tenant/project-intervention-policies', async (req, res) => {
       severity: p.severity,
       matchMode: p.matchMode,
       status: p.status,
+      activeRevisionId: p.activeRevisionId,
+      revisionNumber: p.revisionNumber || 1,
       createdById: p.createdById,
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,
-      conditions: conditionsByPolicy[p.id] || []
+      conditions: p.activeRevisionId ? (conditionsByRev[p.activeRevisionId] || []) : []
     }));
 
     res.json({
@@ -4856,6 +4878,106 @@ app.get('/api/tenant/project-intervention-policies', async (req, res) => {
     });
   } catch (err: any) {
     console.error('Error in GET /api/tenant/project-intervention-policies:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
+// GET /api/tenant/project-intervention-policies/:id/revisions
+app.get('/api/tenant/project-intervention-policies/:id/revisions', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const policyId = req.params.id;
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string);
+
+  try {
+    const hasViewPerm = actorRole === 'SUPER_ADMIN' ||
+      actorPermissions.includes('ALL') ||
+      actorPermissions.includes('MANAGE_TENANT') ||
+      actorPermissions.includes('VIEW_REPORTS');
+
+    if (!hasViewPerm) {
+      return res.status(403).json({ error: 'Forbidden: Insufficient permissions to view policy revisions.' });
+    }
+
+    // Verify policy exists and belongs to tenant
+    const [policyRows]: any = await pool.query(
+      `SELECT * FROM project_intervention_policies WHERE id = ?`,
+      [policyId]
+    );
+    if (policyRows.length === 0) {
+      return res.status(404).json({ error: `Policy "${policyId}" not found.`, code: 'POLICY_NOT_FOUND' });
+    }
+
+    const policy = policyRows[0];
+    if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && policy.tenantId !== actorTenant) {
+      return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
+    }
+
+    const [revisions]: any = await pool.query(`
+      SELECT 
+        r.id,
+        r.tenantId,
+        r.policyId,
+        r.revisionNumber,
+        r.severity,
+        r.matchMode,
+        r.createdById,
+        r.createdAt,
+        r.changeReason,
+        r.migrationProvenance,
+        u.name as createdByName
+      FROM project_intervention_policy_revisions r
+      LEFT JOIN users u ON u.id = r.createdById
+      WHERE r.policyId = ?
+      ORDER BY r.revisionNumber DESC
+    `, [policyId]);
+
+    const revIds = revisions.map((r: any) => r.id);
+    let conditions: any[] = [];
+    if (revIds.length > 0) {
+      const [cRows]: any = await pool.query(
+        `SELECT revisionId, conditionType FROM project_intervention_policy_revision_conditions WHERE revisionId IN (?)`,
+        [revIds]
+      );
+      conditions = cRows;
+    }
+
+    const conditionsByRev: Record<string, string[]> = {};
+    for (const c of conditions) {
+      if (!conditionsByRev[c.revisionId]) conditionsByRev[c.revisionId] = [];
+      conditionsByRev[c.revisionId].push(c.conditionType);
+    }
+
+    const result = revisions.map((r: any) => ({
+      id: r.id,
+      tenantId: r.tenantId,
+      policyId: r.policyId,
+      revisionNumber: r.revisionNumber,
+      severity: r.severity,
+      matchMode: r.matchMode,
+      createdById: r.createdById,
+      createdByName: r.createdByName || 'System',
+      createdAt: r.createdAt,
+      changeReason: r.changeReason,
+      migrationProvenance: r.migrationProvenance,
+      isCurrentActive: r.id === policy.activeRevisionId,
+      conditions: conditionsByRev[r.id] || []
+    }));
+
+    res.json({
+      policyId,
+      activeRevisionId: policy.activeRevisionId,
+      revisions: result
+    });
+  } catch (err: any) {
+    console.error('Error in GET /api/tenant/project-intervention-policies/:id/revisions:', err);
     res.status(500).json({ error: 'Internal Server Error', message: err.message });
   }
 });
@@ -4947,17 +5069,33 @@ app.post('/api/tenant/project-intervention-policies', async (req, res) => {
     }
 
     const policyId = `PIP-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+    const revisionId = `PIPR-${Date.now()}-${Math.random().toString(36).substr(2, 6)}-1`;
     const conn = await pool.getConnection();
     await conn.beginTransaction();
 
     try {
+      // Insert policy header with activeRevisionId
       await conn.query(`
-        INSERT INTO project_intervention_policies (id, tenantId, code, name, description, severity, matchMode, status, createdById)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [policyId, targetTenant, code.trim(), name.trim(), description || null, severity, matchMode, policyStatus, actorUserId || 'SYSTEM']);
+        INSERT INTO project_intervention_policies (id, tenantId, code, name, description, severity, matchMode, status, activeRevisionId, createdById)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [policyId, targetTenant, code.trim(), name.trim(), description || null, severity, matchMode, policyStatus, revisionId, actorUserId || 'SYSTEM']);
 
+      // Insert Revision 1
+      await conn.query(`
+        INSERT INTO project_intervention_policy_revisions (
+          id, tenantId, policyId, revisionNumber, severity, matchMode, createdById, changeReason
+        ) VALUES (?, ?, ?, 1, ?, ?, ?, 'INITIAL_REVISION')
+      `, [revisionId, targetTenant, policyId, severity, matchMode, actorUserId || 'SYSTEM']);
+
+      // Insert Revision Conditions
       for (const cond of conditions) {
-        const condId = `PIPC-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+        const condId = `PIPRC-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+        await conn.query(`
+          INSERT INTO project_intervention_policy_revision_conditions (id, revisionId, conditionType)
+          VALUES (?, ?, ?)
+        `, [condId, revisionId, cond]);
+
+        // Legacy table mirror for referential backward compatibility
         await conn.query(`
           INSERT INTO project_intervention_policy_conditions (id, policyId, conditionType)
           VALUES (?, ?, ?)
@@ -4976,31 +5114,40 @@ app.post('/api/tenant/project-intervention-policies', async (req, res) => {
         JSON.stringify({
           action: 'CREATE_POLICY',
           policyId,
+          revisionId,
+          revisionNumber: 1,
           code: code.trim(),
           name: name.trim(),
           severity,
           matchMode,
-          status: policyStatus,
           conditions
         })
       ]);
 
       await conn.commit();
 
-      res.json({
-        success: true,
-        policy: {
-          id: policyId,
+      // Trigger full tenant synchronization if created as ACTIVE
+      if (policyStatus === 'ACTIVE') {
+        synchronizeProjectInterventionHistory(pool, {
           tenantId: targetTenant,
-          code: code.trim(),
-          name: name.trim(),
-          description: description || null,
-          severity,
-          matchMode,
-          status: policyStatus,
-          createdById: actorUserId || 'SYSTEM',
-          conditions
-        }
+          triggerEventType: 'POLICY_CREATED',
+          triggerEntityId: policyId,
+          actorUserId: actorUserId || null
+        }).catch(syncErr => console.error('[R53] Sync intervention history error on policy creation:', syncErr.message));
+      }
+
+      res.status(201).json({
+        id: policyId,
+        tenantId: targetTenant,
+        code: code.trim(),
+        name: name.trim(),
+        description: description || null,
+        severity,
+        matchMode,
+        status: policyStatus,
+        activeRevisionId: revisionId,
+        revisionNumber: 1,
+        conditions
       });
     } catch (e: any) {
       await conn.rollback();
@@ -5026,10 +5173,7 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.body.tenantId || (req.query.tenantId as string));
-  if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && targetTenant !== actorTenant) {
-    return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
-  }
+  const policyId = req.params.id;
 
   try {
     const hasManagePerm = actorRole === 'SUPER_ADMIN' ||
@@ -5037,83 +5181,153 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
       actorPermissions.includes('MANAGE_TENANT');
 
     if (!hasManagePerm) {
-      return res.status(403).json({ error: 'Forbidden: Insufficient permissions to update intervention policies.' });
-    }
-
-    const policyId = req.params.id;
-
-    // Disallow mutating tenantId
-    if (req.body.tenantId && req.body.tenantId !== targetTenant && actorTenant && actorTenant !== 'SYSTEM') {
-      return res.status(400).json({ error: 'Policy tenantId is immutable and cannot be changed.', code: 'IMMUTABLE_TENANT_ID' });
-    }
-
-    const { name, description, severity, matchMode, status, conditions } = req.body;
-
-    if (severity && !VALID_INTERVENTION_SEVERITIES.includes(severity)) {
-      return res.status(400).json({ error: `Invalid severity. Allowed: ${VALID_INTERVENTION_SEVERITIES.join(', ')}`, code: 'INVALID_SEVERITY' });
-    }
-
-    if (matchMode && matchMode !== 'ALL') {
-      return res.status(400).json({ error: 'Invalid matchMode. Currently supported: ALL', code: 'INVALID_MATCH_MODE' });
-    }
-
-    if (status && !['ACTIVE', 'INACTIVE'].includes(status)) {
-      return res.status(400).json({ error: 'Invalid status. Allowed: ACTIVE, INACTIVE', code: 'INVALID_STATUS' });
-    }
-
-    let validatedConditions: string[] | null = null;
-    if (conditions !== undefined) {
-      if (!Array.isArray(conditions) || conditions.length === 0) {
-        return res.status(400).json({ error: 'At least one condition is required.', code: 'EMPTY_CONDITIONS' });
-      }
-      const uniqueConds = new Set<string>();
-      for (const c of conditions) {
-        if (!VALID_INTERVENTION_CONDITION_TYPES.includes(c)) {
-          return res.status(400).json({ error: `Invalid conditionType "${c}". Allowed: ${VALID_INTERVENTION_CONDITION_TYPES.join(', ')}`, code: 'INVALID_CONDITION_TYPE' });
-        }
-        if (uniqueConds.has(c)) {
-          return res.status(400).json({ error: `Duplicate condition "${c}" is not allowed.`, code: 'DUPLICATE_CONDITION' });
-        }
-        uniqueConds.add(c);
-      }
-      validatedConditions = Array.from(uniqueConds);
+      return res.status(403).json({ error: 'Forbidden: Insufficient permissions to mutate intervention policies.' });
     }
 
     const conn = await pool.getConnection();
     await conn.beginTransaction();
 
     try {
-      // Row lock policy for update
-      const [existing]: any = await conn.query(
-        `SELECT * FROM project_intervention_policies WHERE id = ? AND tenantId = ? FOR UPDATE`,
-        [policyId, targetTenant]
-      );
-
-      if (existing.length === 0) {
-        await conn.rollback();
-        return res.status(404).json({ error: 'Policy not found or cross-tenant violation.', code: 'POLICY_NOT_FOUND' });
-      }
-
-      const oldPolicy = existing[0];
-      const [oldConditionsRows]: any = await conn.query(
-        `SELECT conditionType FROM project_intervention_policy_conditions WHERE policyId = ?`,
+      // 1. Fetch policy FOR UPDATE to guarantee atomic revision numbering
+      const [existingRows]: any = await conn.query(
+        `SELECT p.*, r.revisionNumber as currentRevisionNumber, r.severity as currentSeverity, r.matchMode as currentMatchMode
+         FROM project_intervention_policies p
+         LEFT JOIN project_intervention_policy_revisions r ON r.id = p.activeRevisionId
+         WHERE p.id = ? FOR UPDATE`,
         [policyId]
       );
-      const oldConditions = oldConditionsRows.map((r: any) => r.conditionType);
 
-      await conn.query(`
-        UPDATE project_intervention_policies
-        SET name = COALESCE(?, name),
-            description = COALESCE(?, description),
-            severity = COALESCE(?, severity),
-            matchMode = COALESCE(?, matchMode),
-            status = COALESCE(?, status)
-        WHERE id = ? AND tenantId = ?
-      `, [name || null, description !== undefined ? description : null, severity || null, matchMode || null, status || null, policyId, targetTenant]);
+      if (existingRows.length === 0) {
+        await conn.rollback();
+        conn.release();
+        return res.status(404).json({ error: `Intervention policy "${policyId}" not found.`, code: 'POLICY_NOT_FOUND' });
+      }
 
-      if (validatedConditions) {
+      const existingPolicy = existingRows[0];
+      const targetTenant = existingPolicy.tenantId;
+
+      if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && targetTenant !== actorTenant) {
+        await conn.rollback();
+        conn.release();
+        return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
+      }
+
+      const { name, description, severity, matchMode, status, conditions, changeReason } = req.body;
+
+      // Policy code is immutable
+      if (req.body.code && req.body.code !== existingPolicy.code) {
+        await conn.rollback();
+        conn.release();
+        return res.status(400).json({ error: 'Policy code is immutable and cannot be changed.', code: 'IMMUTABLE_POLICY_CODE' });
+      }
+
+      // Tenant is immutable
+      if (req.body.tenantId && req.body.tenantId !== existingPolicy.tenantId) {
+        await conn.rollback();
+        conn.release();
+        return res.status(400).json({ error: 'Policy tenant is immutable.', code: 'IMMUTABLE_POLICY_TENANT' });
+      }
+
+      if (severity && !VALID_INTERVENTION_SEVERITIES.includes(severity)) {
+        await conn.rollback();
+        conn.release();
+        return res.status(400).json({ error: `Invalid severity. Allowed: ${VALID_INTERVENTION_SEVERITIES.join(', ')}`, code: 'INVALID_SEVERITY' });
+      }
+
+      if (matchMode && matchMode !== 'ALL') {
+        await conn.rollback();
+        conn.release();
+        return res.status(400).json({ error: 'Invalid matchMode. Currently supported: ALL', code: 'INVALID_MATCH_MODE' });
+      }
+
+      if (status && !['ACTIVE', 'INACTIVE'].includes(status)) {
+        await conn.rollback();
+        conn.release();
+        return res.status(400).json({ error: 'Invalid status. Allowed: ACTIVE, INACTIVE', code: 'INVALID_STATUS' });
+      }
+
+      // Fetch current revision conditions
+      let oldConditions: string[] = [];
+      if (existingPolicy.activeRevisionId) {
+        const [oldCRows]: any = await conn.query(
+          `SELECT conditionType FROM project_intervention_policy_revision_conditions WHERE revisionId = ? ORDER BY conditionType ASC`,
+          [existingPolicy.activeRevisionId]
+        );
+        oldConditions = oldCRows.map((c: any) => c.conditionType);
+      }
+
+      let validatedConditions: string[] | null = null;
+      if (conditions !== undefined) {
+        if (!Array.isArray(conditions) || conditions.length === 0) {
+          await conn.rollback();
+          conn.release();
+          return res.status(400).json({ error: 'At least one valid condition is required.', code: 'EMPTY_CONDITIONS' });
+        }
+
+        const unique = new Set<string>();
+        for (const c of conditions) {
+          if (!VALID_INTERVENTION_CONDITION_TYPES.includes(c)) {
+            await conn.rollback();
+            conn.release();
+            return res.status(400).json({ error: `Invalid conditionType "${c}". Allowed: ${VALID_INTERVENTION_CONDITION_TYPES.join(', ')}`, code: 'INVALID_CONDITION_TYPE' });
+          }
+          if (unique.has(c)) {
+            await conn.rollback();
+            conn.release();
+            return res.status(400).json({ error: `Duplicate condition "${c}" is not allowed.`, code: 'DUPLICATE_CONDITION' });
+          }
+          unique.add(c);
+        }
+        validatedConditions = conditions;
+      }
+
+      // Check if semantic fields changed
+      const oldSortedConditions = [...oldConditions].sort();
+      const newSortedConditions = validatedConditions ? [...validatedConditions].sort() : oldSortedConditions;
+      const conditionsChanged = validatedConditions !== null && (
+        oldSortedConditions.length !== newSortedConditions.length ||
+        oldSortedConditions.some((val, idx) => val !== newSortedConditions[idx])
+      );
+
+      const severityChanged = Boolean(severity && severity !== existingPolicy.currentSeverity);
+      const matchModeChanged = Boolean(matchMode && matchMode !== existingPolicy.currentMatchMode);
+      const isSemanticChange = Boolean(conditionsChanged || severityChanged || matchModeChanged);
+
+      let newActiveRevisionId = existingPolicy.activeRevisionId;
+      let newRevisionNumber = existingPolicy.currentRevisionNumber || 1;
+
+      if (isSemanticChange) {
+        // Allocate monotonic next revision number using MAX + 1 on locked policy rows
+        const [maxRevRows]: any = await conn.query(
+          `SELECT MAX(revisionNumber) as maxRev FROM project_intervention_policy_revisions WHERE policyId = ?`,
+          [policyId]
+        );
+        newRevisionNumber = (maxRevRows[0]?.maxRev || 0) + 1;
+        newActiveRevisionId = `PIPR-${Date.now()}-${Math.random().toString(36).substr(2, 6)}-${newRevisionNumber}`;
+
+        const newSeverity = severity || existingPolicy.currentSeverity || existingPolicy.severity;
+        const newMatchMode = matchMode || existingPolicy.currentMatchMode || existingPolicy.matchMode;
+        const finalConditions = validatedConditions || oldConditions;
+
+        // Insert new revision
+        await conn.query(`
+          INSERT INTO project_intervention_policy_revisions (
+            id, tenantId, policyId, revisionNumber, severity, matchMode, createdById, changeReason
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `, [newActiveRevisionId, targetTenant, policyId, newRevisionNumber, newSeverity, newMatchMode, actorUserId || 'SYSTEM', changeReason || null]);
+
+        // Insert new revision conditions
+        for (const cond of finalConditions) {
+          const rcId = `PIPRC-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+          await conn.query(`
+            INSERT INTO project_intervention_policy_revision_conditions (id, revisionId, conditionType)
+            VALUES (?, ?, ?)
+          `, [rcId, newActiveRevisionId, cond]);
+        }
+
+        // Mirror legacy conditions
         await conn.query(`DELETE FROM project_intervention_policy_conditions WHERE policyId = ?`, [policyId]);
-        for (const cond of validatedConditions) {
+        for (const cond of finalConditions) {
           const condId = `PIPC-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
           await conn.query(`
             INSERT INTO project_intervention_policy_conditions (id, policyId, conditionType)
@@ -5122,6 +5336,31 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
         }
       }
 
+      // Update Policy Header
+      const finalSeverity = severity || existingPolicy.currentSeverity || existingPolicy.severity;
+      const finalMatchMode = matchMode || existingPolicy.currentMatchMode || existingPolicy.matchMode;
+
+      await conn.query(`
+        UPDATE project_intervention_policies
+        SET name = COALESCE(?, name),
+            description = COALESCE(?, description),
+            severity = ?,
+            matchMode = ?,
+            status = COALESCE(?, status),
+            activeRevisionId = ?,
+            updatedAt = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `, [
+        name ? name.trim() : null,
+        description !== undefined ? description : null,
+        finalSeverity,
+        finalMatchMode,
+        status || null,
+        newActiveRevisionId,
+        policyId
+      ]);
+
+      // Record Audit Log
       await conn.query(`
         INSERT INTO audit_logs (id, tenantId, userId, action, module, entity, entityId, description)
         VALUES (?, ?, ?, 'UPDATE_INTERVENTION_POLICY', 'PROJECT_GOVERNANCE', 'project_intervention_policies', ?, ?)
@@ -5133,22 +5372,15 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
         JSON.stringify({
           action: 'UPDATE_POLICY',
           policyId,
-          old: {
-            name: oldPolicy.name,
-            description: oldPolicy.description,
-            severity: oldPolicy.severity,
-            matchMode: oldPolicy.matchMode,
-            status: oldPolicy.status,
-            conditions: oldConditions
-          },
-          new: {
-            name: name || oldPolicy.name,
-            description: description !== undefined ? description : oldPolicy.description,
-            severity: severity || oldPolicy.severity,
-            matchMode: matchMode || oldPolicy.matchMode,
-            status: status || oldPolicy.status,
-            conditions: validatedConditions || oldConditions
-          }
+          oldRevisionId: existingPolicy.activeRevisionId,
+          newRevisionId: newActiveRevisionId,
+          oldRevisionNumber: existingPolicy.currentRevisionNumber,
+          newRevisionNumber,
+          isSemanticChange,
+          severity: finalSeverity,
+          matchMode: finalMatchMode,
+          status: status || existingPolicy.status,
+          conditions: validatedConditions || oldConditions
         })
       ]);
 
@@ -5176,8 +5408,8 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
             WHERE id = ?
           `, [nowIso, durationHours, durationDays, actorUserId || null, pie.id]);
         }
-      } else if (validatedConditions || severity) {
-        // If conditions or severity changed, close existing episodes with POLICY_CHANGED and re-evaluate
+      } else if (isSemanticChange) {
+        // If semantic revision changed, close existing episodes with POLICY_CHANGED and re-evaluate
         const nowIso = new Date().toISOString().slice(0, 19).replace('T', ' ');
         const [activePies]: any = await conn.query(
           `SELECT id, startedAt FROM project_intervention_episodes WHERE policyId = ? AND tenantId = ? AND isActive = TRUE`,
@@ -5214,7 +5446,13 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
         }).catch(syncErr => console.error('[R53] Sync intervention history error on policy PUT:', syncErr.message));
       }
 
-      res.json({ success: true, policyId });
+      res.json({
+        success: true,
+        policyId,
+        activeRevisionId: newActiveRevisionId,
+        revisionNumber: newRevisionNumber,
+        isSemanticChange
+      });
     } catch (e: any) {
       await conn.rollback();
       throw e;
@@ -5280,29 +5518,41 @@ app.get('/api/management/project-interventions', async (req, res) => {
       }
     }
 
-    // 1. Fetch Active Intervention Policies for Target Tenant
+    // 1. Fetch Active Intervention Policies with Active Revisions for Target Tenant
     const [policies]: any = await pool.query(`
-      SELECT p.* FROM project_intervention_policies p
+      SELECT 
+        p.id,
+        p.tenantId,
+        p.code,
+        p.name,
+        p.description,
+        p.status,
+        p.activeRevisionId,
+        r.revisionNumber,
+        r.severity,
+        r.matchMode
+      FROM project_intervention_policies p
+      JOIN project_intervention_policy_revisions r ON r.id = p.activeRevisionId
       WHERE p.tenantId = ? AND p.status = 'ACTIVE'
       ORDER BY p.createdAt ASC
     `, [targetTenant]);
 
     const interventionPolicyConfigured = policies.length > 0;
-    const policyIds = policies.map((p: any) => p.id);
+    const activeRevIds = policies.map((p: any) => p.activeRevisionId).filter(Boolean);
 
     let conditions: any[] = [];
-    if (policyIds.length > 0) {
+    if (activeRevIds.length > 0) {
       const [cRows]: any = await pool.query(
-        `SELECT * FROM project_intervention_policy_conditions WHERE policyId IN (?)`,
-        [policyIds]
+        `SELECT revisionId, conditionType FROM project_intervention_policy_revision_conditions WHERE revisionId IN (?)`,
+        [activeRevIds]
       );
       conditions = cRows;
     }
 
     const conditionsByPolicy: Record<string, string[]> = {};
-    for (const c of conditions) {
-      if (!conditionsByPolicy[c.policyId]) conditionsByPolicy[c.policyId] = [];
-      conditionsByPolicy[c.policyId].push(c.conditionType);
+    for (const p of policies) {
+      const revConds = conditions.filter((c: any) => c.revisionId === p.activeRevisionId).map((c: any) => c.conditionType);
+      conditionsByPolicy[p.id] = revConds;
     }
 
     // 2. Fetch Velocity Comparison Policy (R51/R51R2)
@@ -5762,26 +6012,38 @@ export async function synchronizeProjectInterventionHistory(
 ) {
   const { tenantId, projectId, triggerEventType, triggerEntityId, actorUserId, observedAt = new Date().toISOString().slice(0, 19).replace('T', ' ') } = params;
 
-  // 1. Fetch Active Policies for Tenant
-  const [policies]: any = await connectionOrPool.query(
-    `SELECT * FROM project_intervention_policies WHERE tenantId = ? AND status = 'ACTIVE'`,
-    [tenantId]
-  );
+  // 1. Fetch Active Policies and Active Revisions for Tenant
+  const [policies]: any = await connectionOrPool.query(`
+    SELECT 
+      p.id,
+      p.tenantId,
+      p.code,
+      p.name,
+      p.description,
+      p.status,
+      p.activeRevisionId,
+      r.revisionNumber,
+      r.severity,
+      r.matchMode
+    FROM project_intervention_policies p
+    JOIN project_intervention_policy_revisions r ON r.id = p.activeRevisionId
+    WHERE p.tenantId = ? AND p.status = 'ACTIVE'
+  `, [tenantId]);
   if (policies.length === 0 && !projectId) return;
 
-  const policyIds = policies.map((p: any) => p.id);
+  const activeRevIds = policies.map((p: any) => p.activeRevisionId).filter(Boolean);
   let conditions: any[] = [];
-  if (policyIds.length > 0) {
+  if (activeRevIds.length > 0) {
     const [cRows]: any = await connectionOrPool.query(
-      `SELECT * FROM project_intervention_policy_conditions WHERE policyId IN (?)`,
-      [policyIds]
+      `SELECT revisionId, conditionType FROM project_intervention_policy_revision_conditions WHERE revisionId IN (?)`,
+      [activeRevIds]
     );
     conditions = cRows;
   }
   const conditionsByPolicy: Record<string, string[]> = {};
-  for (const c of conditions) {
-    if (!conditionsByPolicy[c.policyId]) conditionsByPolicy[c.policyId] = [];
-    conditionsByPolicy[c.policyId].push(c.conditionType);
+  for (const p of policies) {
+    const revConds = conditions.filter((c: any) => c.revisionId === p.activeRevisionId).map((c: any) => c.conditionType);
+    conditionsByPolicy[p.id] = revConds;
   }
 
   // 2. Fetch Projects to Evaluate
@@ -6027,16 +6289,19 @@ export async function synchronizeProjectInterventionHistory(
           try {
             await connectionOrPool.query(`
               INSERT INTO project_intervention_episodes (
-                id, tenantId, projectId, policyId, policyCodeSnapshot, policyNameSnapshot,
+                id, tenantId, projectId, policyId, policyRevisionId, policyRevisionNumberSnapshot,
+                policyCodeSnapshot, policyNameSnapshot,
                 severitySnapshot, matchModeSnapshot, conditionSnapshot, startFacts,
                 startReason, startProvenance, startedByEventType, startedByEntityId, startedByUserId,
                 picIdSnapshot, startedAt, isActive, activeKey
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?)
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?)
             `, [
               epId,
               tenantId,
               p.id,
               pol.id,
+              pol.activeRevisionId || null,
+              pol.revisionNumber || null,
               pol.code,
               pol.name,
               pol.severity,
@@ -6689,7 +6954,31 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
       };
     });
 
-    // 8. Coverage & Denominators
+    // 8. Revision Recurrence & Coverage Metadata
+    const versionedEpisodes = validRows.filter((r: any) => r.policyRevisionId !== null).length;
+    const legacyUnversionedEpisodes = validRows.filter((r: any) => r.policyRevisionId === null).length;
+    const revisionIdentityCoveragePercent = totalEpisodes > 0 ? Math.round((versionedEpisodes / totalEpisodes) * 1000) / 10 : null;
+
+    // Exact Revision Recurrence Grouping (for versioned episodes only)
+    const projectRevisionMap: Record<string, any[]> = {};
+    for (const r of validRows) {
+      if (r.policyRevisionId) {
+        const pairKey = `${r.projectId}:${r.policyRevisionId}`;
+        if (!projectRevisionMap[pairKey]) projectRevisionMap[pairKey] = [];
+        projectRevisionMap[pairKey].push(r);
+      }
+    }
+
+    let totalRevisionRecurrences = 0;
+    const recurringProjectsRevisionSet = new Set<string>();
+    for (const [pairKey, epList] of Object.entries(projectRevisionMap)) {
+      const pId = epList[0].projectId;
+      const recCount = Math.max(0, epList.length - 1);
+      totalRevisionRecurrences += recCount;
+      if (recCount > 0) recurringProjectsRevisionSet.add(pId);
+    }
+
+    // 9. Coverage & Denominators
     const [earliestRow]: any = await pool.query(`SELECT MIN(startedAt) as earliest FROM project_intervention_episodes WHERE tenantId = ?`, [targetTenant]);
     const historyCoverageStartAt = earliestRow.length > 0 ? earliestRow[0].earliest : null;
 
@@ -6717,6 +7006,8 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
         recurringProjectCount: recurringProjectsSet.size,
         totalRecurrences,
         policiesWithEpisodes: uniquePolicyIds.size,
+        versionedEpisodes,
+        legacyUnversionedEpisodes,
         unattributedPicEpisodes
       },
       resolutionDuration: {
@@ -6734,6 +7025,8 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
       recurrence: {
         totalRecurrences,
         recurringProjectCount: recurringProjectsSet.size,
+        totalRevisionRecurrences,
+        recurringProjectsRevisionCount: recurringProjectsRevisionSet.size,
         repeatIntervalsSample: repeatIntervals.length,
         averageRepeatIntervalHours,
         medianRepeatIntervalHours,
@@ -6753,7 +7046,10 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
         exactBusinessResolvedEpisodes,
         observedPartialBusinessResolvedEpisodes,
         exactClosedDurationCoveragePercent,
-        exactBusinessResolutionCoveragePercent
+        exactBusinessResolutionCoveragePercent,
+        versionedEpisodes,
+        legacyUnversionedEpisodes,
+        revisionIdentityCoveragePercent
       },
       policyBreakdown,
       projectBreakdown: Object.values(projectBreakdownMap),

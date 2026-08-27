@@ -584,6 +584,21 @@ export const crmApi = {
       console.error('[crmApi.fetchInterventionAnalytics error]', err);
       return null;
     }
+  },
+
+  fetchPolicyRevisions: async (policyId: string, tenantId?: string): Promise<any> => {
+    try {
+      const params = new URLSearchParams();
+      if (tenantId && tenantId !== 'ALL') params.set('tenantId', tenantId);
+
+      const url = `${API_BASE}/tenant/project-intervention-policies/${policyId}/revisions${params.toString() ? '?' + params.toString() : ''}`;
+      const res = await fetch(url, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch policy revisions`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchPolicyRevisions error]', err);
+      return null;
+    }
   }
 };
 

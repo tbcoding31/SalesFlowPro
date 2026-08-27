@@ -119,7 +119,7 @@ async function setupDatabase() {
     `CREATE TABLE IF NOT EXISTS notification_preferences (id VARCHAR(50) PRIMARY KEY, userId VARCHAR(50), type VARCHAR(50), emailEnabled BOOLEAN, pushEnabled BOOLEAN, inAppEnabled BOOLEAN)`,
     `CREATE TABLE IF NOT EXISTS audit_logs (id VARCHAR(50) PRIMARY KEY, tenantId VARCHAR(50), userId VARCHAR(50), action VARCHAR(50), module VARCHAR(100), entity VARCHAR(100), entityId VARCHAR(50), description TEXT, ipAddress VARCHAR(100), timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)`,
 
-    // R52 STALLED PROJECT INTERVENTION POLICIES
+    // R52 STALLED PROJECT INTERVENTION POLICIES (LINEAGE HEADER)
     `CREATE TABLE IF NOT EXISTS project_intervention_policies (
       id VARCHAR(50) PRIMARY KEY,
       tenantId VARCHAR(50) NOT NULL,
@@ -129,11 +129,13 @@ async function setupDatabase() {
       severity VARCHAR(20) NOT NULL,
       matchMode VARCHAR(20) NOT NULL,
       status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+      activeRevisionId VARCHAR(50) DEFAULT NULL,
       createdById VARCHAR(50) NOT NULL,
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
       updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       UNIQUE KEY uq_tenant_policy_code (tenantId, code),
-      INDEX idx_pip_tenant_status (tenantId, status)
+      INDEX idx_pip_tenant_status (tenantId, status),
+      INDEX idx_pip_active_rev (activeRevisionId)
     )`,
     `CREATE TABLE IF NOT EXISTS project_intervention_policy_conditions (
       id VARCHAR(50) PRIMARY KEY,
@@ -144,12 +146,39 @@ async function setupDatabase() {
       INDEX idx_pipc_policy (policyId)
     )`,
 
+    // R55 IMMUTABLE POLICY REVISIONS & CONDITIONS
+    `CREATE TABLE IF NOT EXISTS project_intervention_policy_revisions (
+      id VARCHAR(50) PRIMARY KEY,
+      tenantId VARCHAR(50) NOT NULL,
+      policyId VARCHAR(50) NOT NULL,
+      revisionNumber INT NOT NULL,
+      severity VARCHAR(20) NOT NULL,
+      matchMode VARCHAR(20) NOT NULL,
+      createdById VARCHAR(50) NOT NULL,
+      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+      changeReason TEXT DEFAULT NULL,
+      migrationProvenance VARCHAR(50) DEFAULT NULL,
+      UNIQUE KEY uq_pipr_policy_rev (policyId, revisionNumber),
+      INDEX idx_pipr_tenant_policy (tenantId, policyId),
+      INDEX idx_pipr_created (createdAt)
+    )`,
+    `CREATE TABLE IF NOT EXISTS project_intervention_policy_revision_conditions (
+      id VARCHAR(50) PRIMARY KEY,
+      revisionId VARCHAR(50) NOT NULL,
+      conditionType VARCHAR(100) NOT NULL,
+      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_piprc_rev_cond (revisionId, conditionType),
+      INDEX idx_piprc_rev (revisionId)
+    )`,
+
     // R53 STALLED PROJECT INTERVENTION EPISODES HISTORY (EPISODE LIFECYCLE MODEL)
     `CREATE TABLE IF NOT EXISTS project_intervention_episodes (
       id VARCHAR(50) PRIMARY KEY,
       tenantId VARCHAR(50) NOT NULL,
       projectId VARCHAR(50) NOT NULL,
       policyId VARCHAR(50) NOT NULL,
+      policyRevisionId VARCHAR(50) DEFAULT NULL,
+      policyRevisionNumberSnapshot INT DEFAULT NULL,
       policyCodeSnapshot VARCHAR(100) NOT NULL,
       policyNameSnapshot VARCHAR(255) NOT NULL,
       severitySnapshot VARCHAR(20) NOT NULL,
@@ -178,7 +207,8 @@ async function setupDatabase() {
       UNIQUE KEY uq_pie_active_key (activeKey),
       INDEX idx_pie_tenant_project (tenantId, projectId, startedAt),
       INDEX idx_pie_tenant_policy (tenantId, policyId, startedAt),
-      INDEX idx_pie_active (tenantId, projectId, policyId, isActive)
+      INDEX idx_pie_active (tenantId, projectId, policyId, isActive),
+      INDEX idx_pie_revision (policyRevisionId)
     )`
   ];
 
@@ -191,6 +221,16 @@ async function setupDatabase() {
     }
   }
 
+  // Ensure activeRevisionId column on project_intervention_policies
+  try {
+    const [pCols]: any = await pool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'project_intervention_policies' AND COLUMN_NAME = 'activeRevisionId'`
+    );
+    if (pCols.length === 0) {
+      await pool.query(`ALTER TABLE project_intervention_policies ADD COLUMN activeRevisionId VARCHAR(50) DEFAULT NULL`);
+    }
+  } catch (e: any) {}
+
   // Ensure UNIQUE constraint on project_intervention_policy_conditions
   try {
     await pool.query(`
@@ -202,7 +242,9 @@ async function setupDatabase() {
   }
 
   // Ensure columns on project_intervention_episodes
-  const columnsToAdd = [
+  const episodeColumnsToAdd = [
+    { name: 'policyRevisionId', def: 'VARCHAR(50) DEFAULT NULL' },
+    { name: 'policyRevisionNumberSnapshot', def: 'INT DEFAULT NULL' },
     { name: 'startProvenance', def: 'VARCHAR(50) NOT NULL DEFAULT "TRANSITION_DETECTED"' },
     { name: 'picIdSnapshot', def: 'VARCHAR(50)' },
     { name: 'teamIdSnapshot', def: 'VARCHAR(50)' },
@@ -211,7 +253,7 @@ async function setupDatabase() {
     { name: 'activeKey', def: 'VARCHAR(160) DEFAULT NULL' }
   ];
 
-  for (const col of columnsToAdd) {
+  for (const col of episodeColumnsToAdd) {
     try {
       const [colRows]: any = await pool.query(
         `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'project_intervention_episodes' AND COLUMN_NAME = ?`,
@@ -236,7 +278,99 @@ async function setupDatabase() {
     // Ignore
   }
 
-  console.log('All 42 tables verified/created successfully.');
+  // R55 IDEMPOTENT MIGRATION FOR EXISTING POLICIES
+  try {
+    const [unmigratedPolicies]: any = await pool.query(`
+      SELECT p.* FROM project_intervention_policies p
+      WHERE p.activeRevisionId IS NULL
+    `);
+
+    for (const pol of unmigratedPolicies) {
+      const [existingRevs]: any = await pool.query(
+        `SELECT id FROM project_intervention_policy_revisions WHERE policyId = ? AND revisionNumber = 1`,
+        [pol.id]
+      );
+
+      let revId: string;
+      if (existingRevs.length > 0) {
+        revId = existingRevs[0].id;
+      } else {
+        revId = `PIPR-MIG-${pol.id}-1`;
+        await pool.query(`
+          INSERT INTO project_intervention_policy_revisions (
+            id, tenantId, policyId, revisionNumber, severity, matchMode, createdById, createdAt, migrationProvenance
+          ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, 'MIGRATED_CURRENT_STATE')
+        `, [
+          revId,
+          pol.tenantId,
+          pol.id,
+          pol.severity,
+          pol.matchMode,
+          pol.createdById || 'SYSTEM',
+          pol.createdAt || new Date()
+        ]);
+
+        // Copy conditions to revision
+        const [oldConds]: any = await pool.query(
+          `SELECT conditionType FROM project_intervention_policy_conditions WHERE policyId = ?`,
+          [pol.id]
+        );
+
+        for (const c of oldConds) {
+          const rcId = `PIPRC-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+          await pool.query(`
+            INSERT IGNORE INTO project_intervention_policy_revision_conditions (id, revisionId, conditionType)
+            VALUES (?, ?, ?)
+          `, [rcId, revId, c.conditionType]);
+        }
+      }
+
+      await pool.query(
+        `UPDATE project_intervention_policies SET activeRevisionId = ? WHERE id = ?`,
+        [revId, pol.id]
+      );
+
+      // Backfill exact semantic matches in legacy episodes
+      const [revCondRows]: any = await pool.query(
+        `SELECT conditionType FROM project_intervention_policy_revision_conditions WHERE revisionId = ? ORDER BY conditionType ASC`,
+        [revId]
+      );
+      const revConditionsSorted = revCondRows.map((c: any) => c.conditionType).sort();
+
+      const [legacyEpisodes]: any = await pool.query(
+        `SELECT id, severitySnapshot, matchModeSnapshot, conditionSnapshot FROM project_intervention_episodes WHERE policyId = ? AND policyRevisionId IS NULL`,
+        [pol.id]
+      );
+
+      for (const ep of legacyEpisodes) {
+        let epConds: string[] = [];
+        try {
+          epConds = (typeof ep.conditionSnapshot === 'string' ? JSON.parse(ep.conditionSnapshot) : ep.conditionSnapshot) || [];
+        } catch (e) {
+          epConds = [];
+        }
+        const epCondsSorted = [...epConds].sort();
+
+        const isExactMatch = (
+          ep.severitySnapshot === pol.severity &&
+          ep.matchModeSnapshot === pol.matchMode &&
+          epCondsSorted.length === revConditionsSorted.length &&
+          epCondsSorted.every((val, idx) => val === revConditionsSorted[idx])
+        );
+
+        if (isExactMatch) {
+          await pool.query(
+            `UPDATE project_intervention_episodes SET policyRevisionId = ?, policyRevisionNumberSnapshot = 1 WHERE id = ?`,
+            [revId, ep.id]
+          );
+        }
+      }
+    }
+  } catch (migErr: any) {
+    console.error('[R55 Migration Error]', migErr);
+  }
+
+  console.log('All 44 tables verified/created successfully.');
   await pool.end();
 }
 

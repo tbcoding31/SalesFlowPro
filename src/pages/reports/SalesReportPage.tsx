@@ -1059,7 +1059,7 @@ export const SalesReportPage: React.FC = () => {
             <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
               Historical Dataset Integrity & Provenance Coverage
             </h4>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-3 text-xs text-slate-600">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mt-3 text-xs text-slate-600">
               <div>
                 <span className="font-semibold text-slate-700">Closed Episodes Coverage: </span>
                 <span>
@@ -1083,10 +1083,21 @@ export const SalesReportPage: React.FC = () => {
                 </div>
               </div>
               <div>
+                <span className="font-semibold text-slate-700">Revision Identity Coverage: </span>
+                <span>
+                  {analyticsData?.coverage.revisionIdentityCoveragePercent !== null && analyticsData?.coverage.revisionIdentityCoveragePercent !== undefined
+                    ? `${analyticsData.coverage.revisionIdentityCoveragePercent}% versioned`
+                    : 'N/A'}
+                </span>
+                <div className="text-[11px] text-slate-400 mt-0.5">
+                  {analyticsData?.coverage.versionedEpisodes ?? 0} versioned / {analyticsData?.coverage.legacyUnversionedEpisodes ?? 0} legacy unversioned
+                </div>
+              </div>
+              <div>
                 <span className="font-semibold text-slate-700">History Coverage Basis: </span>
                 <span>{analyticsData?.periodFilterBasis || 'STARTED_AT'}</span>
                 <div className="text-[11px] text-slate-400 mt-0.5">
-                  Storage precision: 0.01h (decimal hours)
+                  Lineage Recurrences: {analyticsData?.recurrence.totalRecurrences ?? 0} (Exact Revision: {analyticsData?.recurrence.totalRevisionRecurrences ?? 0})
                 </div>
               </div>
             </div>
