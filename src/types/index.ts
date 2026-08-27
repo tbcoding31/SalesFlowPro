@@ -484,6 +484,62 @@ export interface TargetActivityCoverageResponse {
   projects: ProjectActivityCoverage[];
 }
 
+export interface StageDurationBaseline {
+  stageId: string;
+  sampleSize: number;
+  isBaselineAvailable: boolean;
+  averageDays: number | null;
+  medianDays: number | null;
+  p25Days: number | null;
+  p75Days: number | null;
+  p90Days: number | null;
+}
+
+export interface CurrentProjectVelocity {
+  projectId: string;
+  projectTitle: string;
+  customerId: string;
+  customerName: string;
+  picId: string;
+  picName: string;
+  picTeamName: string;
+  stageId: string;
+  value: number | null;
+  probability: number | null;
+  expectedCloseDate: string | null;
+  stageEnteredAt: string | null;
+  daysInCurrentStage: number;
+  baselineMedianDays: number | null;
+  baselineP75Days: number | null;
+  isBaselineAvailable: boolean;
+  relativePosition: 'BELOW_MEDIAN' | 'AROUND_MEDIAN' | 'ABOVE_MEDIAN' | 'ABOVE_P75' | 'INSUFFICIENT_DATA';
+  hasNextAction: boolean;
+  nextAction: {
+    id: string;
+    type: 'TASK' | 'VISIT' | 'FOLLOW_UP';
+    title: string;
+    date: string | null;
+  } | null;
+}
+
+export interface PipelineVelocityResponse {
+  businessDate: string;
+  evaluatedAt: string;
+  scope: string;
+  baselineScope: string;
+  minSampleSize: number;
+  baselines: StageDurationBaseline[];
+  currentProjects: CurrentProjectVelocity[];
+  coverage: {
+    totalOpenProjectsInScope: number;
+    projectsWithHistoryCount: number;
+    projectsMissingHistoryCount: number;
+    totalStageIntervalsEvaluated: number;
+    validStageIntervals: number;
+    invalidIntervalsExcluded: number;
+  };
+}
+
 export interface MasterDataItem {
   id: string;
   tenantId?: string; // empty if global

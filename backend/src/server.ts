@@ -4219,6 +4219,353 @@ app.get('/api/sales-targets/coverage', async (req, res) => {
   }
 });
 
+// ==========================================
+// R51 PIPELINE VELOCITY BASELINE & STAGE DURATION INTELLIGENCE
+// ==========================================
+
+export function calculatePercentile(sortedValues: number[], percentile: number): number {
+  if (sortedValues.length === 0) return 0;
+  if (sortedValues.length === 1) return sortedValues[0];
+  const index = (percentile / 100) * (sortedValues.length - 1);
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  const weight = index - lower;
+  if (lower === upper) return sortedValues[lower];
+  return Math.round(sortedValues[lower] * (1 - weight) + sortedValues[upper] * weight);
+}
+
+app.get('/api/reports/pipeline-velocity', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && targetTenant !== actorTenant) {
+    return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
+  }
+
+  const todayStr = getBusinessDate(new Date()) || new Date().toISOString().slice(0, 10);
+  const evaluatedAt = new Date().toISOString();
+
+  try {
+    const hasReportPerm = actorRole === 'SUPER_ADMIN' ||
+      actorPermissions.includes('ALL') ||
+      actorPermissions.includes('MANAGE_TENANT') ||
+      actorPermissions.includes('VIEW_REPORTS') ||
+      actorPermissions.includes('MANAGE_USERS');
+
+    if (!hasReportPerm) {
+      return res.status(403).json({ error: 'Forbidden: Insufficient permissions to view pipeline velocity reports.' });
+    }
+
+    let effectiveScope: 'OWN' | 'TEAM' | 'ORGANIZATION' = actorDataScope;
+    if (actorRole === 'SUPER_ADMIN' || actorPermissions.includes('ALL') || actorPermissions.includes('MANAGE_TENANT')) {
+      effectiveScope = 'ORGANIZATION';
+    }
+
+    // BOLA checks for requested filters
+    const requestedTeamId = req.query.teamId ? String(req.query.teamId).trim() : null;
+    const requestedRepId = req.query.repId ? String(req.query.repId).trim() : null;
+
+    if (requestedTeamId && effectiveScope === 'TEAM') {
+      const [actorTeamRows]: any = await pool.query(`
+        SELECT tm.teamId FROM team_members tm
+        JOIN tenant_users tu ON tu.id = tm.tenantUserId
+        WHERE tu.userId = ? AND tu.tenantId = ? AND tu.status = 'ACTIVE'
+      `, [actorUserId, targetTenant]);
+      const actorTeamIds = new Set(actorTeamRows.map((t: any) => t.teamId));
+      if (!actorTeamIds.has(requestedTeamId)) {
+        return res.status(403).json({ error: 'Access denied to requested team (BOLA/Scope violation).' });
+      }
+    }
+
+    // 1. Fetch all historical stage transitions in tenant (for Authoritative Baseline calculation)
+    const [allHistories]: any = await pool.query(`
+      SELECT 
+        psh.id, psh.projectId, psh.fromStageId, psh.toStageId, psh.changedAt,
+        p.createdAt as projectCreatedAt
+      FROM project_stage_histories psh
+      JOIN projects p ON p.id = psh.projectId
+      WHERE p.tenantId = ?
+      ORDER BY psh.projectId ASC, psh.changedAt ASC, psh.id ASC
+    `, [targetTenant]);
+
+    // Group histories by projectId
+    const historiesByProject: Record<string, any[]> = {};
+    for (const h of allHistories) {
+      if (!historiesByProject[h.projectId]) historiesByProject[h.projectId] = [];
+      historiesByProject[h.projectId].push(h);
+    }
+
+    const canonicalOpenStages = ['LEAD', 'QUALIFICATION', 'PROPOSAL', 'NEGOTIATION'];
+    const stageDurations: Record<string, number[]> = {
+      LEAD: [],
+      QUALIFICATION: [],
+      PROPOSAL: [],
+      NEGOTIATION: []
+    };
+
+    let totalStageIntervals = 0;
+    let validStageIntervals = 0;
+    let invalidIntervalsExcluded = 0;
+
+    for (const [projId, pHistList] of Object.entries(historiesByProject)) {
+      for (let i = 0; i < pHistList.length; i++) {
+        totalStageIntervals++;
+        const curr = pHistList[i];
+        const prevTime = i === 0
+          ? (curr.projectCreatedAt ? new Date(curr.projectCreatedAt).getTime() : new Date(curr.changedAt).getTime())
+          : new Date(pHistList[i - 1].changedAt).getTime();
+        const currTime = new Date(curr.changedAt).getTime();
+
+        // Validate chronological sanity, distinct stages, and non-negative interval
+        if (currTime < prevTime || !curr.fromStageId || !curr.toStageId || curr.fromStageId === curr.toStageId) {
+          invalidIntervalsExcluded++;
+          continue;
+        }
+
+        const durationDays = Math.max(0, Math.round((currTime - prevTime) / (1000 * 60 * 60 * 24)));
+        const fromSt = curr.fromStageId;
+
+        if (canonicalOpenStages.includes(fromSt)) {
+          stageDurations[fromSt].push(durationDays);
+          validStageIntervals++;
+        }
+      }
+    }
+
+    // Minimum sample size threshold for authoritative baseline (e.g., minimum 3 completed intervals)
+    const MIN_SAMPLE_SIZE = 3;
+
+    // Compute Baselines per Stage
+    const baselineMap: Record<string, any> = {};
+    const baselines = canonicalOpenStages.map((st) => {
+      const arr = stageDurations[st] || [];
+      const sSorted = [...arr].sort((a, b) => a - b);
+      const sampleSize = arr.length;
+      const isBaselineAvailable = sampleSize >= MIN_SAMPLE_SIZE;
+
+      const avgDays = sampleSize > 0 ? Math.round(arr.reduce((a, b) => a + b, 0) / sampleSize) : null;
+      const medianDays = sampleSize > 0 ? calculatePercentile(sSorted, 50) : null;
+      const p25Days = sampleSize > 0 ? calculatePercentile(sSorted, 25) : null;
+      const p75Days = sampleSize > 0 ? calculatePercentile(sSorted, 75) : null;
+      const p90Days = sampleSize > 0 ? calculatePercentile(sSorted, 90) : null;
+
+      const baseObj = {
+        stageId: st,
+        sampleSize,
+        isBaselineAvailable,
+        averageDays: avgDays,
+        medianDays,
+        p25Days,
+        p75Days,
+        p90Days
+      };
+      baselineMap[st] = baseObj;
+      return baseObj;
+    });
+
+    // 2. Fetch Scoped Current Open Projects
+    let repTeamIds: string[] = [];
+    if (effectiveScope === 'TEAM') {
+      const [userTeamRows]: any = await pool.query(`
+        SELECT tm.teamId FROM team_members tm
+        JOIN tenant_users tu ON tu.id = tm.tenantUserId
+        WHERE tu.userId = ? AND tu.tenantId = ?
+      `, [actorUserId, targetTenant]);
+      repTeamIds = userTeamRows.map((r: any) => r.teamId);
+    }
+
+    let openProjSql = `
+      SELECT 
+        p.id, p.title, p.customerId, p.picId, p.stageId, p.value, p.probability, p.expectedCloseDate, p.createdAt,
+        c.name as customerName,
+        u.name as picName, u.email as picEmail,
+        tu.id as picTenantUserId, tm.teamId as picTeamId, t.name as picTeamName
+      FROM projects p
+      LEFT JOIN customers c ON c.id = p.customerId
+      LEFT JOIN users u ON u.id = p.picId
+      LEFT JOIN tenant_users tu ON tu.userId = p.picId AND tu.tenantId = p.tenantId
+      LEFT JOIN team_members tm ON tm.tenantUserId = tu.id
+      LEFT JOIN teams t ON t.id = tm.teamId
+      WHERE p.tenantId = ? AND p.stageId NOT IN ('WON', 'LOST')
+    `;
+    const openProjParams: any[] = [targetTenant];
+
+    if (effectiveScope === 'OWN') {
+      openProjSql += ` AND p.picId = ?`;
+      openProjParams.push(actorUserId);
+    } else if (effectiveScope === 'TEAM') {
+      if (repTeamIds.length > 0) {
+        openProjSql += ` AND tm.teamId IN (?)`;
+        openProjParams.push(repTeamIds);
+      } else {
+        openProjSql += ` AND p.picId = ?`;
+        openProjParams.push(actorUserId);
+      }
+    }
+
+    if (requestedRepId) {
+      if (effectiveScope === 'OWN' && requestedRepId !== actorUserId) {
+        return res.status(403).json({ error: 'Access denied to requested representative (BOLA/Scope violation).' });
+      }
+      openProjSql += ` AND p.picId = ?`;
+      openProjParams.push(requestedRepId);
+    }
+
+    if (requestedTeamId) {
+      openProjSql += ` AND tm.teamId = ?`;
+      openProjParams.push(requestedTeamId);
+    }
+
+    openProjSql += ` ORDER BY p.id DESC`;
+    const [scopedOpenProjects]: any = await pool.query(openProjSql, openProjParams);
+
+    // 3. Batch Fetch Actions (Next Action resolution for scoped current projects)
+    const scopedProjectIds = scopedOpenProjects.map((p: any) => p.id);
+    let openTasks: any[] = [];
+    let openVisits: any[] = [];
+    let openFollowups: any[] = [];
+
+    if (scopedProjectIds.length > 0) {
+      const [tRows]: any = await pool.query(
+        `SELECT id, relatedProjectId, dueDate, title, statusId FROM tasks WHERE relatedProjectId IN (?) AND statusId NOT IN ('COMPLETED', 'CANCELLED')`,
+        [scopedProjectIds]
+      );
+      openTasks = tRows;
+
+      const [vRows]: any = await pool.query(
+        `SELECT id, relatedProjectId, visitDate, title, purposeId, statusId FROM visits WHERE relatedProjectId IN (?) AND statusId NOT IN ('COMPLETED', 'CANCELLED')`,
+        [scopedProjectIds]
+      );
+      openVisits = vRows;
+
+      const [fRows]: any = await pool.query(
+        `SELECT id, relatedProjectId, followUpDate, notes, status FROM follow_ups WHERE relatedProjectId IN (?) AND status NOT IN ('COMPLETED', 'CANCELLED')`,
+        [scopedProjectIds]
+      );
+      openFollowups = fRows;
+    }
+
+    // 4. Map Current Project Velocity & Relative Position
+    const todayDate = new Date(`${todayStr}T00:00:00+07:00`);
+    let projectsWithHistoryCount = 0;
+    let projectsMissingHistoryCount = 0;
+
+    const currentProjectVelocityList = scopedOpenProjects.map((p: any) => {
+      const pHistList = historiesByProject[p.id] || [];
+
+      // Determine latest transition into current stage
+      let stageEnteredAt: string | null = null;
+      if (pHistList.length > 0) {
+        projectsWithHistoryCount++;
+        // Find latest history entry transitioning into current stage
+        const matchingEntries = pHistList.filter((h: any) => h.toStageId === p.stageId);
+        if (matchingEntries.length > 0) {
+          stageEnteredAt = matchingEntries[matchingEntries.length - 1].changedAt;
+        } else {
+          // If project was created directly in this stage without transitions
+          stageEnteredAt = pHistList[0].changedAt || p.createdAt;
+        }
+      } else {
+        projectsMissingHistoryCount++;
+        stageEnteredAt = p.createdAt;
+      }
+
+      let daysInCurrentStage = 0;
+      if (stageEnteredAt) {
+        const enteredDate = new Date(stageEnteredAt);
+        const todayD = new Date(todayStr);
+        daysInCurrentStage = Math.max(0, Math.round((todayD.getTime() - enteredDate.getTime()) / (1000 * 60 * 60 * 24)));
+      }
+
+      // Benchmark Comparison
+      const base = baselineMap[p.stageId];
+      let relativePosition: 'BELOW_MEDIAN' | 'AROUND_MEDIAN' | 'ABOVE_MEDIAN' | 'ABOVE_P75' | 'INSUFFICIENT_DATA' = 'INSUFFICIENT_DATA';
+
+      if (base && base.isBaselineAvailable && base.medianDays !== null && base.p75Days !== null) {
+        if (daysInCurrentStage > base.p75Days) {
+          relativePosition = 'ABOVE_P75';
+        } else if (daysInCurrentStage > base.medianDays) {
+          relativePosition = 'ABOVE_MEDIAN';
+        } else if (daysInCurrentStage === base.medianDays) {
+          relativePosition = 'AROUND_MEDIAN';
+        } else {
+          relativePosition = 'BELOW_MEDIAN';
+        }
+      }
+
+      // Next Action summary
+      const pTasks = openTasks.filter(t => t.relatedProjectId === p.id);
+      const pVisits = openVisits.filter(v => v.relatedProjectId === p.id);
+      const pFollowups = openFollowups.filter(f => f.relatedProjectId === p.id);
+      const totalOpenActions = pTasks.length + pVisits.length + pFollowups.length;
+      const hasNextAction = totalOpenActions > 0;
+
+      let nextActionSummary: any = null;
+      if (hasNextAction) {
+        const actionCandidates: any[] = [
+          ...pTasks.map(t => ({ id: t.id, type: 'TASK', title: t.title, date: getBusinessDate(t.dueDate) })),
+          ...pVisits.map(v => ({ id: v.id, type: 'VISIT', title: v.title || 'Field Visit', date: getBusinessDate(v.visitDate) })),
+          ...pFollowups.map(f => ({ id: f.id, type: 'FOLLOW_UP', title: f.notes || 'Follow-up Call', date: getBusinessDate(f.followUpDate) }))
+        ].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+        nextActionSummary = actionCandidates[0] || null;
+      }
+
+      return {
+        projectId: p.id,
+        projectTitle: p.title,
+        customerId: p.customerId,
+        customerName: p.customerName || 'Unknown Customer',
+        picId: p.picId,
+        picName: p.picName || 'Unassigned',
+        picTeamName: p.picTeamName || 'General',
+        stageId: p.stageId,
+        value: p.value !== null ? Number(p.value) : null,
+        probability: p.probability !== null ? Number(p.probability) : null,
+        expectedCloseDate: p.expectedCloseDate,
+        stageEnteredAt,
+        daysInCurrentStage,
+        baselineMedianDays: base ? base.medianDays : null,
+        baselineP75Days: base ? base.p75Days : null,
+        isBaselineAvailable: base ? base.isBaselineAvailable : false,
+        relativePosition,
+        hasNextAction,
+        nextAction: nextActionSummary
+      };
+    });
+
+    res.json({
+      businessDate: todayStr,
+      evaluatedAt,
+      scope: effectiveScope,
+      baselineScope: 'ORGANIZATION',
+      minSampleSize: MIN_SAMPLE_SIZE,
+      baselines,
+      currentProjects: currentProjectVelocityList,
+      coverage: {
+        totalOpenProjectsInScope: scopedOpenProjects.length,
+        projectsWithHistoryCount,
+        projectsMissingHistoryCount,
+        totalStageIntervalsEvaluated: totalStageIntervals,
+        validStageIntervals,
+        invalidIntervalsExcluded
+      }
+    });
+
+  } catch (err: any) {
+    console.error('Error in /api/reports/pipeline-velocity:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
 export interface StageTransitionValidationResult {
   allowed: boolean;
   code?: string;

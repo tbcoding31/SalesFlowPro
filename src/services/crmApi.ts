@@ -415,6 +415,23 @@ export const crmApi = {
       console.error('[crmApi.fetchPipelineAnalytics error]', err);
       return null;
     }
+  },
+
+  fetchPipelineVelocity: async (filters?: { teamId?: string; repId?: string; tenantId?: string }): Promise<any> => {
+    try {
+      const params = new URLSearchParams();
+      if (filters?.teamId) params.set('teamId', filters.teamId);
+      if (filters?.repId) params.set('repId', filters.repId);
+      if (filters?.tenantId && filters.tenantId !== 'ALL') params.set('tenantId', filters.tenantId);
+
+      const url = `${API_BASE}/reports/pipeline-velocity${params.toString() ? '?' + params.toString() : ''}`;
+      const res = await fetch(url, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch pipeline velocity`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchPipelineVelocity error]', err);
+      return null;
+    }
   }
 };
 

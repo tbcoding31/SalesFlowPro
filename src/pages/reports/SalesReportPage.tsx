@@ -4,11 +4,13 @@ import {
 } from 'recharts';
 import { useAuth } from '../../context/AuthContext';
 import { crmApi } from '../../services/crmApi';
-import { PipelineAnalyticsResponse } from '../../types';
+import { PipelineAnalyticsResponse, PipelineVelocityResponse } from '../../types';
 
 export const SalesReportPage: React.FC = () => {
   const { currentTenant } = useAuth();
+  const [activeTab, setActiveTab] = useState<'ANALYTICS' | 'VELOCITY'>('ANALYTICS');
   const [data, setData] = useState<PipelineAnalyticsResponse | null>(null);
+  const [velocityData, setVelocityData] = useState<PipelineVelocityResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -20,14 +22,26 @@ export const SalesReportPage: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await crmApi.fetchPipelineAnalytics({
-        teamId: selectedTeamId || undefined,
-        repId: selectedRepId || undefined
-      });
-      if (res && res.summary) {
-        setData(res);
+      if (activeTab === 'ANALYTICS') {
+        const res = await crmApi.fetchPipelineAnalytics({
+          teamId: selectedTeamId || undefined,
+          repId: selectedRepId || undefined
+        });
+        if (res && res.summary) {
+          setData(res);
+        } else {
+          setError('Failed to load authoritative pipeline analytics.');
+        }
       } else {
-        setError('Failed to load authoritative pipeline analytics.');
+        const vRes = await crmApi.fetchPipelineVelocity({
+          teamId: selectedTeamId || undefined,
+          repId: selectedRepId || undefined
+        });
+        if (vRes && vRes.baselines) {
+          setVelocityData(vRes);
+        } else {
+          setError('Failed to load authoritative pipeline velocity & stage duration intelligence.');
+        }
       }
     } catch (err: any) {
       setError(err.message || 'Error connecting to database');
@@ -38,7 +52,7 @@ export const SalesReportPage: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, [currentTenant?.id, selectedTeamId, selectedRepId]);
+  }, [currentTenant?.id, selectedTeamId, selectedRepId, activeTab]);
 
   const formatCurrency = (val: number) => {
     return new Intl.NumberFormat('id-ID', {
@@ -78,14 +92,14 @@ export const SalesReportPage: React.FC = () => {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-extrabold text-slate-900 font-['Hanken_Grotesk'] tracking-tight">
-              Pipeline Analytics & Sales Cycle Intelligence
+              Pipeline Analytics & Sales Velocity Intelligence
             </h1>
             <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-              {data?.scope || 'ORGANIZATION'} SCOPE
+              {(activeTab === 'ANALYTICS' ? data?.scope : velocityData?.scope) || 'ORGANIZATION'} SCOPE
             </span>
           </div>
           <p className="text-xs font-medium text-slate-500 mt-1">
-            Deterministic, database-authoritative project velocity, stage distribution, and closed-cycle durations.
+            Deterministic, database-authoritative stage duration baselines, project velocity, and sales cycle metrics.
           </p>
         </div>
         
@@ -100,9 +114,35 @@ export const SalesReportPage: React.FC = () => {
         </div>
       </div>
 
+      {/* Tab Navigation */}
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+        <button
+          onClick={() => setActiveTab('ANALYTICS')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+            activeTab === 'ANALYTICS'
+              ? 'bg-indigo-600 text-white shadow-sm'
+              : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+          }`}
+        >
+          <span className="material-symbols-outlined text-[16px]">analytics</span>
+          Pipeline Analytics & Sales Cycle
+        </button>
+        <button
+          onClick={() => setActiveTab('VELOCITY')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+            activeTab === 'VELOCITY'
+              ? 'bg-indigo-600 text-white shadow-sm'
+              : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+          }`}
+        >
+          <span className="material-symbols-outlined text-[16px]">speed</span>
+          Stage Velocity & Duration Baselines
+        </button>
+      </div>
+
       {isLoading ? (
         <div className="bg-white p-16 rounded-2xl border border-slate-200 text-center text-xs text-slate-500 font-medium">
-          Loading pipeline analytics and cycle intelligence from database...
+          Loading authoritative data from database...
         </div>
       ) : error ? (
         <div className="bg-white p-12 rounded-2xl border border-rose-200 text-center text-xs text-rose-600">
@@ -111,7 +151,7 @@ export const SalesReportPage: React.FC = () => {
             <button onClick={loadData} className="px-3 py-1.5 bg-rose-50 text-rose-700 rounded-lg font-bold">Retry</button>
           </div>
         </div>
-      ) : (
+      ) : activeTab === 'ANALYTICS' ? (
         <>
           {/* Top KPI Cards Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -132,19 +172,19 @@ export const SalesReportPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Won Value */}
+            {/* Total Won Value */}
             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Won Project Value</span>
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Total Won Revenue</span>
               <div className="mt-2">
                 <div className="text-xl font-extrabold text-emerald-600 font-['Hanken_Grotesk'] truncate">
                   {formatCurrency(summary.wonValue)}
                 </div>
-                <div className="text-[11px] text-emerald-700 font-bold mt-1">
-                  {summary.wonProjects} projects won
+                <div className="text-[11px] text-slate-500 font-medium mt-1">
+                  {summary.wonProjects} Won deals
                 </div>
               </div>
               <div className="mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500 font-medium">
-                Lost value: {formatCurrency(summary.lostValue)} ({summary.lostProjects} lost)
+                Lost value: {formatCurrency(summary.lostValue)} ({summary.lostProjects} Lost)
               </div>
             </div>
 
@@ -345,7 +385,7 @@ export const SalesReportPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Operational Projects Table */}
+          {/* Project Portfolio Table */}
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
             <div className="p-4 border-b border-slate-200 font-extrabold text-xs text-slate-900 flex justify-between items-center">
               <span>Scoped Project Portfolio ({recentProjects.length})</span>
@@ -394,8 +434,130 @@ export const SalesReportPage: React.FC = () => {
               </table>
             </div>
           </div>
-
         </>
+      ) : (
+        /* R51 Pipeline Velocity & Stage Duration Intelligence Tab */
+        <div className="space-y-6">
+          {/* Stage Duration Baselines Table */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-slate-200 font-extrabold text-xs text-slate-900 flex justify-between items-center">
+              <span>Historical Stage Duration Baselines ({velocityData?.baselineScope || 'ORGANIZATION'})</span>
+              <span className="text-[11px] font-normal text-slate-500">
+                Min. Sample Size: {velocityData?.minSampleSize ?? 3} completed intervals
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left whitespace-nowrap text-xs">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase text-[11px]">
+                    <th className="px-4 py-3">Stage</th>
+                    <th className="px-4 py-3 text-center">Sample Size</th>
+                    <th className="px-4 py-3 text-center">Median (Days)</th>
+                    <th className="px-4 py-3 text-center">Average (Days)</th>
+                    <th className="px-4 py-3 text-center">P25 (Days)</th>
+                    <th className="px-4 py-3 text-center">P75 (Days)</th>
+                    <th className="px-4 py-3 text-center">P90 (Days)</th>
+                    <th className="px-4 py-3 text-center">Baseline Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {velocityData?.baselines.map((b) => (
+                    <tr key={b.stageId} className="hover:bg-slate-50">
+                      <td className="px-4 py-3 font-bold text-slate-900">{b.stageId}</td>
+                      <td className="px-4 py-3 text-center font-bold text-slate-700">{b.sampleSize}</td>
+                      <td className="px-4 py-3 text-center font-black text-indigo-600">{b.medianDays !== null ? `${b.medianDays}d` : '-'}</td>
+                      <td className="px-4 py-3 text-center text-slate-600">{b.averageDays !== null ? `${b.averageDays}d` : '-'}</td>
+                      <td className="px-4 py-3 text-center text-slate-500">{b.p25Days !== null ? `${b.p25Days}d` : '-'}</td>
+                      <td className="px-4 py-3 text-center text-slate-500">{b.p75Days !== null ? `${b.p75Days}d` : '-'}</td>
+                      <td className="px-4 py-3 text-center text-slate-500">{b.p90Days !== null ? `${b.p90Days}d` : '-'}</td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          b.isBaselineAvailable
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : 'bg-amber-100 text-amber-700'
+                        }`}>
+                          {b.isBaselineAvailable ? 'Available' : 'Insufficient Sample'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Current Projects Stage Duration & Relative Position Table */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-slate-200 font-extrabold text-xs text-slate-900 flex justify-between items-center">
+              <span>Current Open Projects Stage Velocity ({velocityData?.currentProjects.length ?? 0})</span>
+              <span className="text-[11px] font-normal text-slate-500">
+                Neutral duration comparison vs historical baseline
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left whitespace-nowrap text-xs">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase text-[11px]">
+                    <th className="px-4 py-3">Project Title</th>
+                    <th className="px-4 py-3">Customer</th>
+                    <th className="px-4 py-3">PIC</th>
+                    <th className="px-4 py-3">Stage</th>
+                    <th className="px-4 py-3 text-center">Days in Stage</th>
+                    <th className="px-4 py-3 text-center">Stage Median</th>
+                    <th className="px-4 py-3 text-center">Stage P75</th>
+                    <th className="px-4 py-3 text-center">Relative Position</th>
+                    <th className="px-4 py-3">Next Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {velocityData?.currentProjects.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="py-8 text-center text-slate-400">
+                        No open projects match current data scope.
+                      </td>
+                    </tr>
+                  ) : (
+                    velocityData?.currentProjects.map((p) => (
+                      <tr key={p.projectId} className="hover:bg-slate-50">
+                        <td className="px-4 py-3 font-bold text-slate-900">{p.projectTitle}</td>
+                        <td className="px-4 py-3 text-slate-600">{p.customerName}</td>
+                        <td className="px-4 py-3 text-slate-700">{p.picName}</td>
+                        <td className="px-4 py-3">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700">
+                            {p.stageId}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-center font-extrabold text-slate-900">{p.daysInCurrentStage}d</td>
+                        <td className="px-4 py-3 text-center text-slate-600">{p.baselineMedianDays !== null ? `${p.baselineMedianDays}d` : '-'}</td>
+                        <td className="px-4 py-3 text-center text-slate-500">{p.baselineP75Days !== null ? `${p.baselineP75Days}d` : '-'}</td>
+                        <td className="px-4 py-3 text-center">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            p.relativePosition === 'BELOW_MEDIAN' ? 'bg-emerald-100 text-emerald-700' :
+                            p.relativePosition === 'AROUND_MEDIAN' ? 'bg-blue-100 text-blue-700' :
+                            p.relativePosition === 'ABOVE_MEDIAN' ? 'bg-amber-100 text-amber-700' :
+                            p.relativePosition === 'ABOVE_P75' ? 'bg-rose-100 text-rose-700' :
+                            'bg-slate-100 text-slate-600'
+                          }`}>
+                            {p.relativePosition.replace(/_/g, ' ')}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          {p.nextAction ? (
+                            <span className="text-[11px] text-slate-700 font-medium truncate max-w-[200px] inline-block">
+                              [{p.nextAction.type}] {p.nextAction.title} ({p.nextAction.date || 'No Date'})
+                            </span>
+                          ) : (
+                            <span className="text-[11px] font-bold text-amber-600">Missing Next Action</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
