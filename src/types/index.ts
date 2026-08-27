@@ -577,7 +577,6 @@ export interface PipelineAnalyticsSummary {
   lostProjects: number;
   lostValue: number;
   winRate: number;
-  conversionRate: number;
   averageSalesCycleDays: number;
   medianSalesCycleDays: number;
   averageOpenProjectAgeDays: number;
@@ -587,10 +586,15 @@ export interface PipelineAnalyticsCoverage {
   totalProjects: number;
   openProjects: number;
   closedProjects: number;
-  projectsWithStageHistory: number;
-  projectsWithExpectedCloseDate: number;
   projectsWithProbability: number;
+  projectsMissingProbability: number;
+  pipelineValueMissingProbability: number;
+  projectsWithExpectedCloseDate: number;
+  projectsWithStageHistory: number;
+  terminalProjectsMissingTerminalHistory: number;
+  reopenedProjects: number;
   projectsExcludedFromCycleMetrics: number;
+  invalidTransitionsExcluded: number;
 }
 
 export interface PipelineAnalyticsResponse {

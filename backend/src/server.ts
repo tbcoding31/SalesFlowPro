@@ -2532,25 +2532,20 @@ app.get('/api/reports/sales', async (req, res) => {
 
 // GET /api/reports/pipeline: Comprehensive Project Pipeline Analytics & Sales Cycle Intelligence
 app.get('/api/reports/pipeline', async (req, res) => {
-  const actorRole = (req as any).userRole;
   const actorTenant = (req as any).userTenantId;
   const actorUserId = (req as any).userId;
   const actorDataScope = (req as any).userDataScope || 'OWN';
   const actorPermissions = (req as any).userPermissions || [];
+  const actorRole = (req as any).userRole;
   const isPlatformUser = (req as any).isPlatformUser;
 
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
-  // Capability check: VIEW_REPORTS or management
+  // 1. Strict Capability Check: Requires VIEW_REPORTS (or platform super admin)
   const canViewReports = actorPermissions.includes('ALL') ||
     actorPermissions.includes('MANAGE_TENANT') ||
     actorPermissions.includes('VIEW_REPORTS') ||
-    actorPermissions.includes('VIEW_ALL_TASKS') ||
-    actorPermissions.includes('VIEW_TEAM_TASKS') ||
-    actorRole === 'SUPER_ADMIN' ||
-    actorRole === 'TENANT_ADMIN' ||
-    actorRole === 'SALES_MANAGER' ||
-    actorRole === 'SUPERVISOR';
+    actorRole === 'SUPER_ADMIN';
 
   if (!canViewReports) {
     return res.status(403).json({ error: 'Access denied. VIEW_REPORTS permission required.' });
@@ -2568,6 +2563,8 @@ app.get('/api/reports/pipeline', async (req, res) => {
 
     const requestedRepId = req.query.repId ? String(req.query.repId).trim() : null;
     const requestedTeamId = req.query.teamId ? String(req.query.teamId).trim() : null;
+    const fromDate = req.query.fromDate ? String(req.query.fromDate).trim() : null;
+    const toDate = req.query.toDate ? String(req.query.toDate).trim() : null;
 
     // Verify teamId access under TEAM scope
     if (requestedTeamId && effectiveScope === 'TEAM') {
@@ -2582,7 +2579,7 @@ app.get('/api/reports/pipeline', async (req, res) => {
       }
     }
 
-    // 1. Resolve authorized reps in scope
+    // 2. Resolve authorized reps in scope
     let repListQuery = `
       SELECT 
         u.id as userId, u.name, u.email, tu.status,
@@ -2627,7 +2624,7 @@ app.get('/api/reports/pipeline', async (req, res) => {
       return res.status(403).json({ error: 'Access denied to requested representative (BOLA/Scope violation).' });
     }
 
-    // 2. Fetch scoped projects
+    // 3. Fetch scoped projects
     const { where: projWhere, params: projParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'p.picId');
     let baseProjSql = `
       SELECT 
@@ -2649,7 +2646,7 @@ app.get('/api/reports/pipeline', async (req, res) => {
 
     const [scopedProjects]: any = await pool.query(baseProjSql, finalProjParams);
 
-    // 3. Batch fetch stage histories
+    // 4. Batch fetch stage histories
     const projectIds = scopedProjects.map((p: any) => p.id);
     let stageHistories: any[] = [];
     if (projectIds.length > 0) {
@@ -2668,7 +2665,7 @@ app.get('/api/reports/pipeline', async (req, res) => {
       historiesByProject[sh.projectId].push(sh);
     });
 
-    // 4. Compute Metrics
+    // 5. Compute Metrics without Fabricated Defaults
     const canonicalStages = [
       { key: 'LEAD', label: 'Lead' },
       { key: 'QUALIFICATION', label: 'Qualification' },
@@ -2681,6 +2678,10 @@ app.get('/api/reports/pipeline', async (req, res) => {
     let openProjectsCount = 0;
     let pipelineValueSum = 0;
     let weightedPipelineValueSum = 0;
+    let projectsWithProbabilityCount = 0;
+    let projectsMissingProbabilityCount = 0;
+    let pipelineValueMissingProbabilitySum = 0;
+
     let wonProjectsCount = 0;
     let wonValueSum = 0;
     let lostProjectsCount = 0;
@@ -2725,23 +2726,32 @@ app.get('/api/reports/pipeline', async (req, res) => {
     const monthBucketsMap: Record<string, { projectCount: number; pipelineValue: number; weightedValue: number }> = {};
 
     let projectsWithExpectedCloseDateCount = 0;
-    let projectsWithProbabilityCount = 0;
     let projectsWithStageHistoryCount = 0;
+    let terminalProjectsMissingTerminalHistoryCount = 0;
+    let reopenedProjectsCount = 0;
+    let invalidTransitionsCount = 0;
 
     for (const proj of scopedProjects) {
       const val = Number(proj.value) || 0;
-      let prob = proj.probability !== null && proj.probability !== undefined ? Number(proj.probability) : (proj.stageId === 'WON' ? 100 : proj.stageId === 'LOST' ? 0 : 50);
-      if (prob < 0) prob = 0;
-      if (prob > 100) prob = 100;
-
-      const weightedVal = (val * prob) / 100;
+      const hasExplicitProb = proj.probability !== null && proj.probability !== undefined && !isNaN(Number(proj.probability));
       const stage = proj.stageId || 'LEAD';
       const isOpen = stage !== 'WON' && stage !== 'LOST';
       const isWon = stage === 'WON';
       const isLost = stage === 'LOST';
 
+      let prob: number | null = null;
+      if (hasExplicitProb) {
+        prob = Math.max(0, Math.min(100, Number(proj.probability)));
+        projectsWithProbabilityCount++;
+      } else {
+        projectsMissingProbabilityCount++;
+        if (isOpen) pipelineValueMissingProbabilitySum += val;
+      }
+
+      // Truthful Weighted Pipeline: ONLY computed if probability is known
+      const weightedVal = prob !== null ? (val * prob) / 100 : 0;
+
       if (proj.expectedCloseDate) projectsWithExpectedCloseDateCount++;
-      if (proj.probability !== null && proj.probability !== undefined) projectsWithProbabilityCount++;
 
       if (stageSummaryMap[stage]) {
         stageSummaryMap[stage].count++;
@@ -2804,14 +2814,27 @@ app.get('/api/reports/pipeline', async (req, res) => {
         lostValueSum += val;
       }
 
+      // Stage History & Closed Sales Cycle derivations
       const pHistories = historiesByProject[proj.id] || [];
       if (pHistories.length > 0) {
         projectsWithStageHistoryCount++;
 
+        // Detect reopened projects (transitions from terminal WON/LOST to open stage)
+        const isReopened = pHistories.some((h: any) => (h.fromStageId === 'WON' || h.fromStageId === 'LOST') && (h.toStageId !== 'WON' && h.toStageId !== 'LOST'));
+        if (isReopened) reopenedProjectsCount++;
+
+        // Stage velocity intervals (chronological transitions)
         for (let i = 0; i < pHistories.length; i++) {
           const curr = pHistories[i];
           const prevTime = i === 0 ? (proj.createdAt ? new Date(proj.createdAt).getTime() : new Date(curr.changedAt).getTime()) : new Date(pHistories[i - 1].changedAt).getTime();
           const currTime = new Date(curr.changedAt).getTime();
+
+          // Exclude invalid/duplicate transitions (negative duration or null stage)
+          if (currTime < prevTime || !curr.fromStageId || !curr.toStageId || curr.fromStageId === curr.toStageId) {
+            invalidTransitionsCount++;
+            continue;
+          }
+
           const durationDays = Math.max(0, Math.round((currTime - prevTime) / (1000 * 60 * 60 * 24)));
           const fromSt = curr.fromStageId;
           if (fromSt && stageDurations[fromSt]) {
@@ -2819,25 +2842,26 @@ app.get('/api/reports/pipeline', async (req, res) => {
           }
         }
 
-        if (isWon || isLost) {
-          const terminalHistory = pHistories.filter((h: any) => h.toStageId === 'WON' || h.toStageId === 'LOST').pop();
+        // Terminal Closed Sales Cycle derivation
+        if ((isWon || isLost) && !isReopened) {
+          const terminalHistory = pHistories.filter((h: any) => h.toStageId === stage).pop();
           if (terminalHistory) {
             const startTime = proj.createdAt ? new Date(proj.createdAt).getTime() : new Date(pHistories[0].changedAt).getTime();
             const endTime = new Date(terminalHistory.changedAt).getTime();
             const cycleDays = Math.max(0, Math.round((endTime - startTime) / (1000 * 60 * 60 * 24)));
             closedCycleDurations.push(cycleDays);
+          } else {
+            terminalProjectsMissingTerminalHistoryCount++;
           }
         }
-      } else if ((isWon || isLost) && proj.createdAt) {
-        const cycleDays = Math.max(0, Math.round((new Date().getTime() - new Date(proj.createdAt).getTime()) / (1000 * 60 * 60 * 24)));
-        closedCycleDurations.push(cycleDays);
+      } else if (isWon || isLost) {
+        terminalProjectsMissingTerminalHistoryCount++;
       }
     }
 
     const closedProjectsCount = wonProjectsCount + lostProjectsCount;
     const winRate = closedProjectsCount > 0 ? parseFloat(((wonProjectsCount / closedProjectsCount) * 100).toFixed(1)) : 0;
     const totalProjectsCount = scopedProjects.length;
-    const conversionRate = totalProjectsCount > 0 ? parseFloat(((wonProjectsCount / totalProjectsCount) * 100).toFixed(1)) : 0;
 
     const sortedCycles = [...closedCycleDurations].sort((a, b) => a - b);
     const avgCycle = closedCycleDurations.length > 0 ? Math.round(closedCycleDurations.reduce((a, b) => a + b, 0) / closedCycleDurations.length) : 0;
@@ -2906,7 +2930,6 @@ app.get('/api/reports/pipeline', async (req, res) => {
         lostProjects: lostProjectsCount,
         lostValue: lostValueSum,
         winRate,
-        conversionRate,
         averageSalesCycleDays: avgCycle,
         medianSalesCycleDays: medianCycle,
         averageOpenProjectAgeDays: avgOpenAge
@@ -2923,10 +2946,15 @@ app.get('/api/reports/pipeline', async (req, res) => {
         totalProjects: totalProjectsCount,
         openProjects: openProjectsCount,
         closedProjects: closedProjectsCount,
-        projectsWithStageHistory: projectsWithStageHistoryCount,
-        projectsWithExpectedCloseDate: projectsWithExpectedCloseDateCount,
         projectsWithProbability: projectsWithProbabilityCount,
-        projectsExcludedFromCycleMetrics: closedProjectsCount - closedCycleDurations.length
+        projectsMissingProbability: projectsMissingProbabilityCount,
+        pipelineValueMissingProbability: pipelineValueMissingProbabilitySum,
+        projectsWithExpectedCloseDate: projectsWithExpectedCloseDateCount,
+        projectsWithStageHistory: projectsWithStageHistoryCount,
+        terminalProjectsMissingTerminalHistory: terminalProjectsMissingTerminalHistoryCount,
+        reopenedProjects: reopenedProjectsCount,
+        projectsExcludedFromCycleMetrics: closedProjectsCount - closedCycleDurations.length,
+        invalidTransitionsExcluded: invalidTransitionsCount
       },
       recentProjects: scopedProjects.slice(0, 50)
     });

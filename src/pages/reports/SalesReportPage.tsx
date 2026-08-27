@@ -128,19 +128,19 @@ export const SalesReportPage: React.FC = () => {
                 </div>
               </div>
               <div className="mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500 font-medium">
-                {summary.openProjects} commercially active projects
+                {summary.openProjects} open projects ({coverage.projectsWithProbability} with probability)
               </div>
             </div>
 
-            {/* Won Revenue */}
+            {/* Won Value */}
             <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
-              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Realized Won Revenue</span>
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Won Project Value</span>
               <div className="mt-2">
                 <div className="text-xl font-extrabold text-emerald-600 font-['Hanken_Grotesk'] truncate">
                   {formatCurrency(summary.wonValue)}
                 </div>
                 <div className="text-[11px] text-emerald-700 font-bold mt-1">
-                  {summary.wonProjects} deals closed won
+                  {summary.wonProjects} projects won
                 </div>
               </div>
               <div className="mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500 font-medium">
@@ -156,11 +156,11 @@ export const SalesReportPage: React.FC = () => {
                   {summary.winRate}%
                 </div>
                 <div className="text-[11px] text-slate-500 font-medium mt-1">
-                  WON / (WON + LOST) closed deals
+                  WON / (WON + LOST) closed projects
                 </div>
               </div>
               <div className="mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500 font-medium">
-                Overall conversion: {summary.conversionRate}%
+                Closed projects total: {coverage.closedProjects}
               </div>
             </div>
 
