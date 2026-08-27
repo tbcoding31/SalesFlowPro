@@ -555,6 +555,35 @@ export const crmApi = {
       console.error('[crmApi.fetchProjectInterventionHistory error]', err);
       return null;
     }
+  },
+
+  fetchInterventionAnalytics: async (filters?: {
+    projectId?: string;
+    policyId?: string;
+    repId?: string;
+    teamId?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    status?: 'ACTIVE' | 'RESOLVED' | 'ALL';
+  }): Promise<any> => {
+    try {
+      const params = new URLSearchParams();
+      if (filters?.projectId) params.set('projectId', filters.projectId);
+      if (filters?.policyId) params.set('policyId', filters.policyId);
+      if (filters?.repId) params.set('repId', filters.repId);
+      if (filters?.teamId) params.set('teamId', filters.teamId);
+      if (filters?.dateFrom) params.set('dateFrom', filters.dateFrom);
+      if (filters?.dateTo) params.set('dateTo', filters.dateTo);
+      if (filters?.status && filters.status !== 'ALL') params.set('status', filters.status);
+
+      const url = `${API_BASE}/reports/intervention-analytics${params.toString() ? '?' + params.toString() : ''}`;
+      const res = await fetch(url, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch intervention analytics`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchInterventionAnalytics error]', err);
+      return null;
+    }
   }
 };
 

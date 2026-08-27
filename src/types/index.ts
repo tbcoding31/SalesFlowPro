@@ -969,6 +969,108 @@ export interface ProjectInterventionHistoryResponse {
     totalEpisodes: number;
     activeEpisodesCount: number;
     resolvedEpisodesCount: number;
+    episodesWithExactStart?: number;
+    episodesWithObservedStart?: number;
+    episodesWithExactDuration?: number;
+    episodesWithPartialObservedDuration?: number;
+    historyCoverageStartAt?: string | null;
   };
   episodes: ProjectInterventionEpisode[];
+}
+
+export interface PolicyAnalyticsItem {
+  policyId: string;
+  policyCode: string;
+  policyName: string;
+  severity: string;
+  totalEpisodes: number;
+  activeEpisodes: number;
+  resolvedEpisodes: number;
+  businessResolvedEpisodes: number;
+  uniqueProjectsCount: number;
+  recurringProjectsCount: number;
+  exactSampleSize: number;
+  medianBusinessResolutionHours: number | null;
+  averageBusinessResolutionHours: number | null;
+  endReasons: Record<string, number>;
+}
+
+export interface ProjectRecurrenceAnalyticsItem {
+  projectId: string;
+  projectTitle: string;
+  customerName: string;
+  currentPicId?: string;
+  picName: string;
+  totalEpisodes: number;
+  activeEpisodes: number;
+  resolvedEpisodes: number;
+  recurrenceCount: number;
+  policies: {
+    policyId: string;
+    policyCode: string;
+    policyName: string;
+    severity: string;
+    episodeCount: number;
+    recurrenceCount: number;
+    hasActive: boolean;
+  }[];
+}
+
+export interface RepAnalyticsItem {
+  picId: string | null;
+  picName: string;
+  totalEpisodes: number;
+  activeEpisodes: number;
+  resolvedEpisodes: number;
+  businessResolvedEpisodes: number;
+  exactSampleSize: number;
+  medianBusinessResolutionHours: number | null;
+}
+
+export interface InterventionAnalyticsResponse {
+  tenantId: string;
+  evaluatedAt: string;
+  scope: string;
+  summary: {
+    totalEpisodes: number;
+    activeEpisodes: number;
+    closedEpisodes: number;
+    businessResolvedEpisodes: number;
+    exactResolvedEpisodes: number;
+    exactBusinessResolvedEpisodes: number;
+    observedPartialResolvedEpisodes: number;
+    uniqueProjectsWithEpisodes: number;
+    recurringProjectCount: number;
+    totalRecurrences: number;
+    policiesWithEpisodes: number;
+  };
+  resolutionDuration: {
+    metric: string;
+    sampleSize: number;
+    averageResolutionHours: number | null;
+    medianResolutionHours: number | null;
+    p25ResolutionHours: number | null;
+    p75ResolutionHours: number | null;
+    p90ResolutionHours: number | null;
+    minResolutionHours: number | null;
+    maxResolutionHours: number | null;
+  };
+  recurrence: {
+    totalRecurrences: number;
+    recurringProjectCount: number;
+    repeatIntervalsSample: number;
+    averageRepeatIntervalHours: number | null;
+    medianRepeatIntervalHours: number | null;
+  };
+  endReasonBreakdown: Record<string, number>;
+  severityBreakdown: Record<string, number>;
+  coverage: {
+    historyCoverageStartAt: string | null;
+    exactResolvedEpisodes: number;
+    observedPartialResolvedEpisodes: number;
+    exactDurationCoveragePercent: number | null;
+  };
+  policyBreakdown: PolicyAnalyticsItem[];
+  projectBreakdown: ProjectRecurrenceAnalyticsItem[];
+  repBreakdown: RepAnalyticsItem[];
 }

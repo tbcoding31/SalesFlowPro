@@ -6297,6 +6297,424 @@ app.get('/api/management/project-intervention-history', async (req, res) => {
   }
 });
 
+// ==========================================
+// R54 INTERVENTION RESOLUTION ANALYTICS & RECURRENCE INTELLIGENCE API
+// ==========================================
+app.get('/api/reports/intervention-analytics', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  if (req.query.tenantId && actorRole !== 'SUPER_ADMIN' && actorTenant !== 'SYSTEM' && req.query.tenantId !== actorTenant) {
+    return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
+  }
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+
+  try {
+    const hasViewPerm = actorRole === 'SUPER_ADMIN' ||
+      actorPermissions.includes('ALL') ||
+      actorPermissions.includes('MANAGE_TENANT') ||
+      actorPermissions.includes('VIEW_REPORTS') ||
+      actorPermissions.includes('MANAGE_USERS');
+
+    if (!hasViewPerm) {
+      return res.status(403).json({ error: 'Forbidden: Insufficient permissions to view intervention analytics.' });
+    }
+
+    let effectiveScope: 'OWN' | 'TEAM' | 'ORGANIZATION' = actorDataScope;
+    if (actorRole === 'SUPER_ADMIN' || actorPermissions.includes('ALL') || actorPermissions.includes('MANAGE_TENANT')) {
+      effectiveScope = 'ORGANIZATION';
+    }
+
+    const { projectId, policyId, repId, teamId, dateFrom, dateTo, status } = req.query;
+
+    let sql = `
+      SELECT 
+        pie.*,
+        p.title as projectTitle,
+        p.picId as currentPicId,
+        c.name as customerName,
+        u.name as picName,
+        snapU.name as picSnapshotName,
+        t.name as teamName
+      FROM project_intervention_episodes pie
+      JOIN projects p ON p.id = pie.projectId
+      LEFT JOIN customers c ON c.id = p.customerId
+      LEFT JOIN users u ON u.id = p.picId
+      LEFT JOIN users snapU ON snapU.id = pie.picIdSnapshot
+      LEFT JOIN tenant_users tu ON tu.userId = p.picId AND tu.tenantId = pie.tenantId
+      LEFT JOIN team_members tm ON tm.tenantUserId = tu.id
+      LEFT JOIN teams t ON t.id = pie.teamIdSnapshot
+      WHERE pie.tenantId = ?
+    `;
+    const params: any[] = [targetTenant];
+
+    if (effectiveScope === 'OWN') {
+      sql += ` AND p.picId = ?`;
+      params.push(actorUserId);
+    } else if (effectiveScope === 'TEAM') {
+      const [actorTeamRows]: any = await pool.query(`
+        SELECT tm.teamId FROM team_members tm
+        JOIN tenant_users tu ON tu.id = tm.tenantUserId
+        WHERE tu.userId = ? AND tu.tenantId = ?
+      `, [actorUserId, targetTenant]);
+      const teamIds = actorTeamRows.map((r: any) => r.teamId);
+      if (teamIds.length > 0) {
+        sql += ` AND tm.teamId IN (?)`;
+        params.push(teamIds);
+      } else {
+        sql += ` AND p.picId = ?`;
+        params.push(actorUserId);
+      }
+    }
+
+    if (projectId) {
+      sql += ` AND pie.projectId = ?`;
+      params.push(projectId);
+    }
+    if (policyId) {
+      sql += ` AND pie.policyId = ?`;
+      params.push(policyId);
+    }
+    if (repId) {
+      sql += ` AND p.picId = ?`;
+      params.push(repId);
+    }
+    if (teamId) {
+      sql += ` AND tm.teamId = ?`;
+      params.push(teamId);
+    }
+    if (status === 'ACTIVE') {
+      sql += ` AND pie.isActive = TRUE`;
+    } else if (status === 'RESOLVED') {
+      sql += ` AND pie.isActive = FALSE`;
+    }
+    if (dateFrom) {
+      sql += ` AND pie.startedAt >= ?`;
+      params.push(dateFrom);
+    }
+    if (dateTo) {
+      sql += ` AND pie.startedAt <= ?`;
+      params.push(dateTo);
+    }
+
+    sql += ` ORDER BY pie.projectId ASC, pie.policyId ASC, pie.startedAt ASC`;
+
+    const [rows]: any = await pool.query(sql, params);
+
+    // 1. Core Counts
+    const totalEpisodes = rows.length;
+    const activeEpisodes = rows.filter((r: any) => r.isActive).length;
+    const closedEpisodes = rows.filter((r: any) => !r.isActive).length;
+    const businessResolvedEpisodes = rows.filter((r: any) => !r.isActive && r.endReason === 'BUSINESS_STATE_CHANGED').length;
+    const exactResolvedEpisodes = rows.filter((r: any) => !r.isActive && r.startProvenance === 'TRANSITION_DETECTED').length;
+    const exactBusinessResolvedEpisodes = rows.filter((r: any) => !r.isActive && r.startProvenance === 'TRANSITION_DETECTED' && r.endReason === 'BUSINESS_STATE_CHANGED').length;
+    const observedPartialResolvedEpisodes = rows.filter((r: any) => !r.isActive && r.startProvenance !== 'TRANSITION_DETECTED').length;
+
+    // 2. Exact Resolution Duration Metrics (Strictly exact business-state resolved episodes)
+    const exactDurations = rows
+      .filter((r: any) => !r.isActive && r.startProvenance === 'TRANSITION_DETECTED' && r.endReason === 'BUSINESS_STATE_CHANGED' && r.durationHours !== null)
+      .map((r: any) => Number(r.durationHours))
+      .sort((a: number, b: number) => a - b);
+
+    const sampleSize = exactDurations.length;
+    let averageResolutionHours: number | null = null;
+    let medianResolutionHours: number | null = null;
+    let p25ResolutionHours: number | null = null;
+    let p75ResolutionHours: number | null = null;
+    let p90ResolutionHours: number | null = null;
+    let minResolutionHours: number | null = null;
+    let maxResolutionHours: number | null = null;
+
+    if (sampleSize > 0) {
+      const sum = exactDurations.reduce((acc: number, val: number) => acc + val, 0);
+      averageResolutionHours = Math.round((sum / sampleSize) * 100) / 100;
+      medianResolutionHours = calculatePercentile(exactDurations, 50);
+      p25ResolutionHours = calculatePercentile(exactDurations, 25);
+      p75ResolutionHours = calculatePercentile(exactDurations, 75);
+      p90ResolutionHours = calculatePercentile(exactDurations, 90);
+      minResolutionHours = exactDurations[0];
+      maxResolutionHours = exactDurations[exactDurations.length - 1];
+    }
+
+    // 3. End Reason Breakdown
+    const endReasonBreakdown: Record<string, number> = {
+      BUSINESS_STATE_CHANGED: 0,
+      POLICY_DEACTIVATED: 0,
+      POLICY_CHANGED: 0,
+      EVALUATION_BECAME_UNKNOWN: 0,
+      PROJECT_BECAME_TERMINAL: 0
+    };
+    for (const r of rows) {
+      if (r.endReason) {
+        endReasonBreakdown[r.endReason] = (endReasonBreakdown[r.endReason] || 0) + 1;
+      }
+    }
+
+    // 4. Severity Breakdown
+    const severityBreakdown: Record<string, number> = { INFO: 0, WARNING: 0, CRITICAL: 0 };
+    for (const r of rows) {
+      if (r.severitySnapshot) {
+        severityBreakdown[r.severitySnapshot] = (severityBreakdown[r.severitySnapshot] || 0) + 1;
+      }
+    }
+
+    // 5. Recurrence & Project-Policy Grouping
+    const projectPolicyMap: Record<string, any[]> = {};
+    const uniqueProjectIds = new Set<string>();
+    const uniquePolicyIds = new Set<string>();
+
+    for (const r of rows) {
+      uniqueProjectIds.add(r.projectId);
+      uniquePolicyIds.add(r.policyId);
+      const pairKey = `${r.projectId}:${r.policyId}`;
+      if (!projectPolicyMap[pairKey]) projectPolicyMap[pairKey] = [];
+      projectPolicyMap[pairKey].push(r);
+    }
+
+    let totalRecurrences = 0;
+    const recurringProjectsSet = new Set<string>();
+    const projectBreakdownMap: Record<string, any> = {};
+    const repeatIntervals: number[] = [];
+
+    for (const [pairKey, epList] of Object.entries(projectPolicyMap)) {
+      const pId = epList[0].projectId;
+      const polId = epList[0].policyId;
+      const epCount = epList.length;
+      const recurrenceCount = Math.max(0, epCount - 1);
+      totalRecurrences += recurrenceCount;
+      if (recurrenceCount > 0) {
+        recurringProjectsSet.add(pId);
+      }
+
+      // Calculate repeat intervals between consecutive episodes
+      for (let i = 1; i < epList.length; i++) {
+        const prev = epList[i - 1];
+        const curr = epList[i];
+        if (prev.endedAt && curr.startedAt && prev.startProvenance === 'TRANSITION_DETECTED' && curr.startProvenance === 'TRANSITION_DETECTED') {
+          const prevEnd = new Date(prev.endedAt).getTime();
+          const currStart = new Date(curr.startedAt).getTime();
+          if (currStart >= prevEnd) {
+            const intHours = Math.round(((currStart - prevEnd) / (1000 * 60 * 60)) * 100) / 100;
+            repeatIntervals.push(intHours);
+          }
+        }
+      }
+
+      if (!projectBreakdownMap[pId]) {
+        projectBreakdownMap[pId] = {
+          projectId: pId,
+          projectTitle: epList[0].projectTitle,
+          customerName: epList[0].customerName || 'Unknown Customer',
+          currentPicId: epList[0].currentPicId,
+          picName: epList[0].picName || 'Unassigned',
+          totalEpisodes: 0,
+          activeEpisodes: 0,
+          resolvedEpisodes: 0,
+          recurrenceCount: 0,
+          policies: []
+        };
+      }
+
+      const pObj = projectBreakdownMap[pId];
+      pObj.totalEpisodes += epCount;
+      pObj.activeEpisodes += epList.filter((e: any) => e.isActive).length;
+      pObj.resolvedEpisodes += epList.filter((e: any) => !e.isActive).length;
+      pObj.recurrenceCount += recurrenceCount;
+      pObj.policies.push({
+        policyId: polId,
+        policyCode: epList[0].policyCodeSnapshot,
+        policyName: epList[0].policyNameSnapshot,
+        severity: epList[0].severitySnapshot,
+        episodeCount: epCount,
+        recurrenceCount,
+        hasActive: epList.some((e: any) => e.isActive)
+      });
+    }
+
+    const sSortedIntervals = [...repeatIntervals].sort((a, b) => a - b);
+    const averageRepeatIntervalHours = repeatIntervals.length > 0 ? Math.round((repeatIntervals.reduce((a, b) => a + b, 0) / repeatIntervals.length) * 100) / 100 : null;
+    const medianRepeatIntervalHours = repeatIntervals.length > 0 ? calculatePercentile(sSortedIntervals, 50) : null;
+
+    // 6. Policy Breakdown
+    const policyMap: Record<string, any> = {};
+    for (const r of rows) {
+      if (!policyMap[r.policyId]) {
+        policyMap[r.policyId] = {
+          policyId: r.policyId,
+          policyCode: r.policyCodeSnapshot,
+          policyName: r.policyNameSnapshot,
+          severity: r.severitySnapshot,
+          totalEpisodes: 0,
+          activeEpisodes: 0,
+          resolvedEpisodes: 0,
+          businessResolvedEpisodes: 0,
+          exactDurations: [],
+          uniqueProjects: new Set<string>(),
+          recurringProjects: new Set<string>(),
+          endReasons: {
+            BUSINESS_STATE_CHANGED: 0,
+            POLICY_DEACTIVATED: 0,
+            POLICY_CHANGED: 0,
+            EVALUATION_BECAME_UNKNOWN: 0,
+            PROJECT_BECAME_TERMINAL: 0
+          }
+        };
+      }
+      const pol = policyMap[r.policyId];
+      pol.totalEpisodes++;
+      if (r.isActive) pol.activeEpisodes++;
+      else {
+        pol.resolvedEpisodes++;
+        if (r.endReason === 'BUSINESS_STATE_CHANGED') pol.businessResolvedEpisodes++;
+        if (r.startProvenance === 'TRANSITION_DETECTED' && r.endReason === 'BUSINESS_STATE_CHANGED' && r.durationHours !== null) {
+          pol.exactDurations.push(Number(r.durationHours));
+        }
+        if (r.endReason) {
+          pol.endReasons[r.endReason] = (pol.endReasons[r.endReason] || 0) + 1;
+        }
+      }
+      pol.uniqueProjects.add(r.projectId);
+    }
+
+    for (const [pairKey, epList] of Object.entries(projectPolicyMap)) {
+      const polId = epList[0].policyId;
+      if (epList.length > 1 && policyMap[polId]) {
+        policyMap[polId].recurringProjects.add(epList[0].projectId);
+      }
+    }
+
+    const policyBreakdown = Object.values(policyMap).map((pol: any) => {
+      const sorted = [...pol.exactDurations].sort((a: number, b: number) => a - b);
+      const medianHours = sorted.length > 0 ? calculatePercentile(sorted, 50) : null;
+      const averageHours = sorted.length > 0 ? Math.round((sorted.reduce((a: number, b: number) => a + b, 0) / sorted.length) * 100) / 100 : null;
+
+      return {
+        policyId: pol.policyId,
+        policyCode: pol.policyCode,
+        policyName: pol.policyName,
+        severity: pol.severity,
+        totalEpisodes: pol.totalEpisodes,
+        activeEpisodes: pol.activeEpisodes,
+        resolvedEpisodes: pol.resolvedEpisodes,
+        businessResolvedEpisodes: pol.businessResolvedEpisodes,
+        uniqueProjectsCount: pol.uniqueProjects.size,
+        recurringProjectsCount: pol.recurringProjects.size,
+        exactSampleSize: sorted.length,
+        medianBusinessResolutionHours: medianHours,
+        averageBusinessResolutionHours: averageHours,
+        endReasons: pol.endReasons
+      };
+    });
+
+    // 7. Rep Historical Attribution Breakdown
+    const repMap: Record<string, any> = {};
+    for (const r of rows) {
+      const repKey = r.picIdSnapshot || 'UNASSIGNED';
+      if (!repMap[repKey]) {
+        repMap[repKey] = {
+          picId: r.picIdSnapshot || null,
+          picName: r.picSnapshotName || (r.picIdSnapshot ? 'Former Assigned Rep' : 'Unassigned'),
+          totalEpisodes: 0,
+          activeEpisodes: 0,
+          resolvedEpisodes: 0,
+          businessResolvedEpisodes: 0,
+          exactDurations: []
+        };
+      }
+      const rep = repMap[repKey];
+      rep.totalEpisodes++;
+      if (r.isActive) rep.activeEpisodes++;
+      else {
+        rep.resolvedEpisodes++;
+        if (r.endReason === 'BUSINESS_STATE_CHANGED') rep.businessResolvedEpisodes++;
+        if (r.startProvenance === 'TRANSITION_DETECTED' && r.endReason === 'BUSINESS_STATE_CHANGED' && r.durationHours !== null) {
+          rep.exactDurations.push(Number(r.durationHours));
+        }
+      }
+    }
+
+    const repBreakdown = Object.values(repMap).map((rep: any) => {
+      const sorted = [...rep.exactDurations].sort((a: number, b: number) => a - b);
+      const medianHours = sorted.length > 0 ? calculatePercentile(sorted, 50) : null;
+      return {
+        picId: rep.picId,
+        picName: rep.picName,
+        totalEpisodes: rep.totalEpisodes,
+        activeEpisodes: rep.activeEpisodes,
+        resolvedEpisodes: rep.resolvedEpisodes,
+        businessResolvedEpisodes: rep.businessResolvedEpisodes,
+        exactSampleSize: sorted.length,
+        medianBusinessResolutionHours: medianHours
+      };
+    });
+
+    // 8. Coverage Metadata
+    const [earliestRow]: any = await pool.query(`SELECT MIN(startedAt) as earliest FROM project_intervention_episodes WHERE tenantId = ?`, [targetTenant]);
+    const historyCoverageStartAt = earliestRow.length > 0 ? earliestRow[0].earliest : null;
+    const exactDurationCoveragePercent = closedEpisodes > 0 ? Math.round((exactResolvedEpisodes / closedEpisodes) * 1000) / 10 : null;
+
+    res.json({
+      tenantId: targetTenant,
+      evaluatedAt: new Date().toISOString(),
+      scope: effectiveScope,
+      summary: {
+        totalEpisodes,
+        activeEpisodes,
+        closedEpisodes,
+        businessResolvedEpisodes,
+        exactResolvedEpisodes,
+        exactBusinessResolvedEpisodes,
+        observedPartialResolvedEpisodes,
+        uniqueProjectsWithEpisodes: uniqueProjectIds.size,
+        recurringProjectCount: recurringProjectsSet.size,
+        totalRecurrences,
+        policiesWithEpisodes: uniquePolicyIds.size
+      },
+      resolutionDuration: {
+        metric: 'EXACT_BUSINESS_STATE_CHANGED_HOURS',
+        sampleSize,
+        averageResolutionHours,
+        medianResolutionHours,
+        p25ResolutionHours,
+        p75ResolutionHours,
+        p90ResolutionHours,
+        minResolutionHours,
+        maxResolutionHours
+      },
+      recurrence: {
+        totalRecurrences,
+        recurringProjectCount: recurringProjectsSet.size,
+        repeatIntervalsSample: repeatIntervals.length,
+        averageRepeatIntervalHours,
+        medianRepeatIntervalHours
+      },
+      endReasonBreakdown,
+      severityBreakdown,
+      coverage: {
+        historyCoverageStartAt,
+        exactResolvedEpisodes,
+        observedPartialResolvedEpisodes,
+        exactDurationCoveragePercent
+      },
+      policyBreakdown,
+      projectBreakdown: Object.values(projectBreakdownMap),
+      repBreakdown
+    });
+
+  } catch (err: any) {
+    console.error('Error in GET /api/reports/intervention-analytics:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
 export interface StageTransitionValidationResult {
   allowed: boolean;
   code?: string;

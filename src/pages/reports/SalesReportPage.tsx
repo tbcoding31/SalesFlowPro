@@ -4,15 +4,16 @@ import {
 } from 'recharts';
 import { useAuth } from '../../context/AuthContext';
 import { crmApi } from '../../services/crmApi';
-import { PipelineAnalyticsResponse, PipelineVelocityResponse, ProjectInterventionsResponse, ProjectInterventionHistoryResponse } from '../../types';
+import { PipelineAnalyticsResponse, PipelineVelocityResponse, ProjectInterventionsResponse, ProjectInterventionHistoryResponse, InterventionAnalyticsResponse } from '../../types';
 
 export const SalesReportPage: React.FC = () => {
   const { currentTenant } = useAuth();
-  const [activeTab, setActiveTab] = useState<'ANALYTICS' | 'VELOCITY' | 'INTERVENTIONS' | 'INTERVENTION_HISTORY'>('ANALYTICS');
+  const [activeTab, setActiveTab] = useState<'ANALYTICS' | 'VELOCITY' | 'INTERVENTIONS' | 'INTERVENTION_HISTORY' | 'INTERVENTION_ANALYTICS'>('ANALYTICS');
   const [data, setData] = useState<PipelineAnalyticsResponse | null>(null);
   const [velocityData, setVelocityData] = useState<PipelineVelocityResponse | null>(null);
   const [interventionData, setInterventionData] = useState<ProjectInterventionsResponse | null>(null);
   const [historyData, setHistoryData] = useState<ProjectInterventionHistoryResponse | null>(null);
+  const [analyticsData, setAnalyticsData] = useState<InterventionAnalyticsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -54,7 +55,7 @@ export const SalesReportPage: React.FC = () => {
         } else {
           setError('Failed to load project interventions.');
         }
-      } else {
+      } else if (activeTab === 'INTERVENTION_HISTORY') {
         const hRes = await crmApi.fetchProjectInterventionHistory({
           teamId: selectedTeamId || undefined,
           repId: selectedRepId || undefined
@@ -63,6 +64,16 @@ export const SalesReportPage: React.FC = () => {
           setHistoryData(hRes);
         } else {
           setError('Failed to load project intervention history.');
+        }
+      } else {
+        const aRes = await crmApi.fetchInterventionAnalytics({
+          teamId: selectedTeamId || undefined,
+          repId: selectedRepId || undefined
+        });
+        if (aRes && aRes.summary) {
+          setAnalyticsData(aRes);
+        } else {
+          setError('Failed to load intervention resolution analytics.');
         }
       }
     } catch (err: any) {
@@ -181,6 +192,17 @@ export const SalesReportPage: React.FC = () => {
         >
           <span className="material-symbols-outlined text-[16px]">history</span>
           Intervention Episodes History & Timeline
+        </button>
+        <button
+          onClick={() => setActiveTab('INTERVENTION_ANALYTICS')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+            activeTab === 'INTERVENTION_ANALYTICS'
+              ? 'bg-indigo-600 text-white shadow-sm'
+              : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+          }`}
+        >
+          <span className="material-symbols-outlined text-[16px]">query_stats</span>
+          Intervention Resolution & Recurrence Analytics
         </button>
       </div>
 
@@ -753,7 +775,7 @@ export const SalesReportPage: React.FC = () => {
             </div>
           </div>
         </div>
-      ) : (
+      ) : activeTab === 'INTERVENTION_HISTORY' ? (
         <div className="space-y-6">
           {/* History KPI Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -866,6 +888,163 @@ export const SalesReportPage: React.FC = () => {
                           }`}>
                             {ep.isActive ? 'ACTIVE' : 'RESOLVED'}
                           </span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* R54 INTERVENTION RESOLUTION ANALYTICS & RECURRENCE INTELLIGENCE VIEW */
+        <div className="space-y-6">
+          {/* Summary KPIs */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+              <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Total Recorded Episodes</div>
+              <div className="text-2xl font-extrabold text-slate-900 mt-1 font-['Hanken_Grotesk']">
+                {analyticsData?.summary.totalEpisodes ?? 0}
+              </div>
+              <div className="text-[11px] text-slate-500 font-medium mt-1">
+                Active: {analyticsData?.summary.activeEpisodes ?? 0} • Closed: {analyticsData?.summary.closedEpisodes ?? 0}
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+              <div className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider">Business Resolved</div>
+              <div className="text-2xl font-extrabold text-emerald-700 mt-1 font-['Hanken_Grotesk']">
+                {analyticsData?.summary.businessResolvedEpisodes ?? 0}
+              </div>
+              <div className="text-[11px] text-emerald-600 font-medium mt-1">
+                Underlying condition stopped matching
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+              <div className="text-[11px] font-bold text-indigo-600 uppercase tracking-wider">Median Exact Resolution</div>
+              <div className="text-2xl font-extrabold text-indigo-700 mt-1 font-['Hanken_Grotesk']">
+                {analyticsData?.resolutionDuration.medianResolutionHours !== null && analyticsData?.resolutionDuration.medianResolutionHours !== undefined
+                  ? `${analyticsData.resolutionDuration.medianResolutionHours}h`
+                  : '-'}
+              </div>
+              <div className="text-[11px] text-slate-500 font-medium mt-1">
+                Sample: {analyticsData?.resolutionDuration.sampleSize ?? 0} exact resolved deals
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+              <div className="text-[11px] font-bold text-amber-600 uppercase tracking-wider">Recurring Projects</div>
+              <div className="text-2xl font-extrabold text-amber-700 mt-1 font-['Hanken_Grotesk']">
+                {analyticsData?.summary.recurringProjectCount ?? 0}
+              </div>
+              <div className="text-[11px] text-slate-500 font-medium mt-1">
+                Total Recurrences: {analyticsData?.summary.totalRecurrences ?? 0}
+              </div>
+            </div>
+          </div>
+
+          {/* Resolution Duration Percentiles Card */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+            <h3 className="text-sm font-bold text-slate-900 font-['Hanken_Grotesk']">
+              Exact Business-State Resolution Duration Distribution
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Strictly computed from transition-detected episodes ending with BUSINESS_STATE_CHANGED.
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 mt-4">
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-center">
+                <span className="text-[10px] font-bold text-slate-400 uppercase">Min</span>
+                <div className="text-base font-bold text-slate-800 mt-0.5">
+                  {analyticsData?.resolutionDuration.minResolutionHours !== null && analyticsData?.resolutionDuration.minResolutionHours !== undefined ? `${analyticsData.resolutionDuration.minResolutionHours}h` : '-'}
+                </div>
+              </div>
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-center">
+                <span className="text-[10px] font-bold text-slate-400 uppercase">P25</span>
+                <div className="text-base font-bold text-slate-800 mt-0.5">
+                  {analyticsData?.resolutionDuration.p25ResolutionHours !== null && analyticsData?.resolutionDuration.p25ResolutionHours !== undefined ? `${analyticsData.resolutionDuration.p25ResolutionHours}h` : '-'}
+                </div>
+              </div>
+              <div className="p-3 bg-indigo-50/50 rounded-xl border border-indigo-100 text-center">
+                <span className="text-[10px] font-bold text-indigo-600 uppercase">Median (P50)</span>
+                <div className="text-base font-extrabold text-indigo-700 mt-0.5">
+                  {analyticsData?.resolutionDuration.medianResolutionHours !== null && analyticsData?.resolutionDuration.medianResolutionHours !== undefined ? `${analyticsData.resolutionDuration.medianResolutionHours}h` : '-'}
+                </div>
+              </div>
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-center">
+                <span className="text-[10px] font-bold text-slate-400 uppercase">Average</span>
+                <div className="text-base font-bold text-slate-800 mt-0.5">
+                  {analyticsData?.resolutionDuration.averageResolutionHours !== null && analyticsData?.resolutionDuration.averageResolutionHours !== undefined ? `${analyticsData.resolutionDuration.averageResolutionHours}h` : '-'}
+                </div>
+              </div>
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-center">
+                <span className="text-[10px] font-bold text-slate-400 uppercase">P75</span>
+                <div className="text-base font-bold text-slate-800 mt-0.5">
+                  {analyticsData?.resolutionDuration.p75ResolutionHours !== null && analyticsData?.resolutionDuration.p75ResolutionHours !== undefined ? `${analyticsData.resolutionDuration.p75ResolutionHours}h` : '-'}
+                </div>
+              </div>
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-center">
+                <span className="text-[10px] font-bold text-slate-400 uppercase">P90 / Max</span>
+                <div className="text-base font-bold text-slate-800 mt-0.5">
+                  {analyticsData?.resolutionDuration.p90ResolutionHours !== null && analyticsData?.resolutionDuration.p90ResolutionHours !== undefined ? `${analyticsData.resolutionDuration.p90ResolutionHours}h` : '-'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Policy Breakdown Table */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-5 border-b border-slate-100">
+              <h3 className="text-sm font-bold text-slate-900 font-['Hanken_Grotesk']">
+                Intervention Policy Breakdown & Recurrence Intelligence
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Descriptive breakdown per policy identity based on historical snapshots.
+              </p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-600">
+                <thead className="bg-slate-50 text-[11px] font-bold text-slate-500 uppercase border-b border-slate-200">
+                  <tr>
+                    <th className="px-4 py-3">Policy Name</th>
+                    <th className="px-4 py-3">Severity</th>
+                    <th className="px-4 py-3 text-center">Total Episodes</th>
+                    <th className="px-4 py-3 text-center">Active</th>
+                    <th className="px-4 py-3 text-center">Business Resolved</th>
+                    <th className="px-4 py-3 text-center">Recurring Deals</th>
+                    <th className="px-4 py-3 text-center">Median Resolution</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium">
+                  {(!analyticsData?.policyBreakdown || analyticsData.policyBreakdown.length === 0) ? (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                        No policy analytics available.
+                      </td>
+                    </tr>
+                  ) : (
+                    analyticsData.policyBreakdown.map((pol) => (
+                      <tr key={pol.policyId} className="hover:bg-slate-50">
+                        <td className="px-4 py-3">
+                          <span className="font-bold text-slate-900">{pol.policyName}</span>
+                          <span className="text-[10px] text-slate-400 ml-2 font-mono">{pol.policyCode}</span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            pol.severity === 'CRITICAL' ? 'bg-rose-100 text-rose-700' :
+                            pol.severity === 'WARNING' ? 'bg-amber-100 text-amber-700' :
+                            'bg-blue-100 text-blue-700'
+                          }`}>
+                            {pol.severity}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-center font-bold text-slate-900">{pol.totalEpisodes}</td>
+                        <td className="px-4 py-3 text-center font-semibold text-amber-600">{pol.activeEpisodes}</td>
+                        <td className="px-4 py-3 text-center font-semibold text-emerald-600">{pol.businessResolvedEpisodes}</td>
+                        <td className="px-4 py-3 text-center font-semibold text-slate-700">{pol.recurringProjectsCount}</td>
+                        <td className="px-4 py-3 text-center font-bold text-indigo-700">
+                          {pol.medianBusinessResolutionHours !== null ? `${pol.medianBusinessResolutionHours}h` : '-'}
                         </td>
                       </tr>
                     ))
