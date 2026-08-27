@@ -56,13 +56,37 @@ export const ProjectDetailPage: React.FC = () => {
     }
   };
 
-  const handleStageChange = async (targetStage: string) => {
+  const handleStageChange = async (targetStage: string, isReopen = false) => {
     if (!project) return;
-    const res = await crmApi.transitionProjectStage(project.id, targetStage);
+    
+    let reasonInput: string | undefined = undefined;
+    if (targetStage === 'LOST') {
+      const promptRes = prompt('Please enter a business reason for marking this project as LOST:');
+      if (!promptRes || !promptRes.trim()) {
+        alert('A business loss reason is required to mark the project as LOST.');
+        return;
+      }
+      reasonInput = promptRes.trim();
+    } else if (isReopen) {
+      const promptRes = prompt('Please enter a business reason for reopening this project:');
+      if (!promptRes || !promptRes.trim()) {
+        alert('An explicit business reason is required to reopen this project.');
+        return;
+      }
+      reasonInput = promptRes.trim();
+    }
+
+    const res = await crmApi.transitionProjectStage(project.id, targetStage, {
+      lossReason: targetStage === 'LOST' ? reasonInput : undefined,
+      reopenReason: isReopen ? reasonInput : undefined,
+      isReopen,
+      expectedFromStage: project.stage
+    });
+
     if (res.success) {
       loadData();
     } else {
-      alert(`Failed to move stage: ${res.error}`);
+      alert(`Stage transition blocked: ${res.error}`);
     }
   };
 
@@ -354,14 +378,42 @@ export const ProjectDetailPage: React.FC = () => {
         <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-6">Pipeline Stage</div>
         
         {isLost ? (
-          <div className="flex items-center gap-4">
-             <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center">
-               <span className="material-symbols-outlined text-2xl">cancel</span>
-             </div>
-             <div>
-               <h3 className="text-lg font-bold text-rose-700">Project Lost</h3>
-               <p className="text-sm text-rose-600/80">This project was marked as lost.</p>
-             </div>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center">
+                <span className="material-symbols-outlined text-2xl">cancel</span>
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-rose-700">Project Closed as Lost</h3>
+                <p className="text-sm text-rose-600/80">This project is inactive and closed as lost.</p>
+              </div>
+            </div>
+            <button
+              onClick={() => handleStageChange('QUALIFICATION', true)}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-sm transition-colors flex items-center gap-1.5"
+            >
+              <span className="material-symbols-outlined text-base">restart_alt</span>
+              Reopen Project
+            </button>
+          </div>
+        ) : project.stage === 'WON' ? (
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center">
+                <span className="material-symbols-outlined text-2xl">verified</span>
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-emerald-700">Project Won</h3>
+                <p className="text-sm text-emerald-600/80">Contract finalized and deal marked as won.</p>
+              </div>
+            </div>
+            <button
+              onClick={() => handleStageChange('NEGOTIATION', true)}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-sm transition-colors flex items-center gap-1.5"
+            >
+              <span className="material-symbols-outlined text-base">restart_alt</span>
+              Reopen Deal
+            </button>
           </div>
         ) : (
           <div className="relative flex justify-between items-center w-full">

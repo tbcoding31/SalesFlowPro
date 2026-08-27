@@ -1134,6 +1134,14 @@ const setupEndpoint = (table: string) => {
         data.passwordHash = await bcrypt.hash(data.passwordHash, salt);
       }
 
+      // R47 Governance: Strip stageId, probability, tenantId from generic PUT on projects table
+      if (table === 'projects') {
+        if (data.stageId !== undefined) delete data.stageId;
+        if (data.probability !== undefined) delete data.probability;
+        if (data.tenantId !== undefined) delete data.tenantId;
+        if (data.createdAt !== undefined) delete data.createdAt;
+      }
+
       const keys = Object.keys(data).filter(k => k !== 'id');
       // For projects table, normalize expectedClosingDate if present
       if (table === 'projects' && data.expectedClosingDate && !data.expectedCloseDate) {
@@ -3037,8 +3045,127 @@ app.get('/api/reports/customers', async (req, res) => {
 });
 
 // ==========================================
-// R40.1 PROJECT COMMERCIAL STAGE TRANSITION
+// R47 PROJECT PIPELINE STAGE GOVERNANCE
 // ==========================================
+
+export interface StageTransitionValidationResult {
+  allowed: boolean;
+  code?: string;
+  message?: string;
+  missingFields?: string[];
+  invalidConditions?: string[];
+}
+
+export function validateProjectStageTransition(params: {
+  project: any;
+  fromStage: string;
+  toStage: string;
+  isReopenAction?: boolean;
+  reopenReason?: string;
+  lossReason?: string;
+  notes?: string;
+}): StageTransitionValidationResult {
+  const { project, fromStage, toStage, isReopenAction, reopenReason, lossReason, notes } = params;
+
+  // 1. Same stage self-loop
+  if (fromStage === toStage) {
+    return {
+      allowed: false,
+      code: 'SAME_STAGE_TRANSITION',
+      message: `Project is already in stage ${toStage}.`
+    };
+  }
+
+  // 2. Terminal Reopen Policy
+  const isCurrentlyTerminal = fromStage === 'WON' || fromStage === 'LOST';
+  const isTargetTerminal = toStage === 'WON' || toStage === 'LOST';
+
+  if (isCurrentlyTerminal && !isTargetTerminal) {
+    if (!isReopenAction) {
+      return {
+        allowed: false,
+        code: 'TERMINAL_STAGE_REOPEN_REQUIRES_EXPLICIT_ACTION',
+        message: `Project is closed as ${fromStage}. Reopening to ${toStage} requires an explicit reopen action and reason.`
+      };
+    }
+    const reasonText = (reopenReason || notes || '').trim();
+    if (!reasonText) {
+      return {
+        allowed: false,
+        code: 'REOPEN_REASON_REQUIRED',
+        message: 'An explicit business reason is required to reopen a closed project.',
+        missingFields: ['reopenReason']
+      };
+    }
+    return { allowed: true };
+  }
+
+  // 3. Transition Matrix: Allowed ordinary commercial transitions
+  const allowedTransitionMatrix: Record<string, string[]> = {
+    LEAD: ['QUALIFICATION', 'PROPOSAL', 'NEGOTIATION', 'WON', 'LOST'],
+    QUALIFICATION: ['LEAD', 'PROPOSAL', 'NEGOTIATION', 'WON', 'LOST'],
+    PROPOSAL: ['QUALIFICATION', 'NEGOTIATION', 'WON', 'LOST'],
+    NEGOTIATION: ['PROPOSAL', 'QUALIFICATION', 'WON', 'LOST'],
+    WON: ['LOST'], // If moving between terminals or reopening
+    LOST: ['WON']
+  };
+
+  const allowedTargets = allowedTransitionMatrix[fromStage] || [];
+  if (!allowedTargets.includes(toStage) && !isReopenAction) {
+    return {
+      allowed: false,
+      code: 'INVALID_STAGE_TRANSITION',
+      message: `Transition from ${fromStage} to ${toStage} is not permitted by domain policy.`
+    };
+  }
+
+  // 4. LOST Requirements: Requires business loss reason
+  if (toStage === 'LOST') {
+    const reasonText = (lossReason || notes || '').trim();
+    if (!reasonText) {
+      return {
+        allowed: false,
+        code: 'LOSS_REASON_REQUIRED',
+        message: 'A valid business reason or loss notes must be provided when marking a project as LOST.',
+        missingFields: ['lossReason']
+      };
+    }
+  }
+
+  // 5. WON Requirements: Requires commercial value > 0, active customer, and assigned PIC
+  if (toStage === 'WON') {
+    const missing: string[] = [];
+    const invalid: string[] = [];
+
+    const numVal = Number(project.value);
+    if (project.value === null || project.value === undefined || isNaN(numVal) || numVal <= 0) {
+      missing.push('value');
+      invalid.push('Project commercial value must be greater than 0 before closing as WON.');
+    }
+
+    if (!project.customerId) {
+      missing.push('customerId');
+      invalid.push('Project must be associated with a valid Customer before closing as WON.');
+    }
+
+    if (!project.picId) {
+      missing.push('picId');
+      invalid.push('Project must have an assigned PIC before closing as WON.');
+    }
+
+    if (missing.length > 0) {
+      return {
+        allowed: false,
+        code: 'PROJECT_STAGE_REQUIREMENTS_NOT_MET',
+        message: `Requirements not met for closing as WON: ${invalid.join(' ')}`,
+        missingFields: missing,
+        invalidConditions: invalid
+      };
+    }
+  }
+
+  return { allowed: true };
+}
 
 app.patch('/api/projects/:id/stage', async (req, res) => {
   const actorRole = (req as any).userRole;
@@ -3051,7 +3178,7 @@ app.patch('/api/projects/:id/stage', async (req, res) => {
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
   const projectId = req.params.id;
-  const { stageId, notes, reason } = req.body;
+  const { stageId, notes, reason, lossReason, reopenReason, isReopen, expectedFromStage } = req.body;
 
   if (!stageId) {
     return res.status(400).json({ error: 'Target stageId is required.', code: 'STAGE_REQUIRED' });
@@ -3066,8 +3193,8 @@ app.patch('/api/projects/:id/stage', async (req, res) => {
   await connection.beginTransaction();
 
   try {
-    // 1. Fetch current project record
-    const [projRows]: any = await connection.query('SELECT * FROM projects WHERE id = ?', [projectId]);
+    // 1. Fetch current project record WITH ROW LOCK (SELECT FOR UPDATE)
+    const [projRows]: any = await connection.query('SELECT * FROM projects WHERE id = ? FOR UPDATE', [projectId]);
     if (projRows.length === 0) {
       await connection.rollback();
       return res.status(404).json({ error: 'Project not found.', code: 'PROJECT_NOT_FOUND' });
@@ -3076,7 +3203,7 @@ app.patch('/api/projects/:id/stage', async (req, res) => {
     const project = projRows[0];
     const projectTenant = project.tenantId;
 
-    // BOLA Check
+    // Cross-Tenant BOLA Check
     if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && projectTenant !== actorTenant) {
       await connection.rollback();
       return res.status(403).json({ error: 'Cross-tenant mutation forbidden (BOLA).' });
@@ -3118,7 +3245,39 @@ app.patch('/api/projects/:id/stage', async (req, res) => {
     const fromStageId = project.stageId || 'LEAD';
     const toStageId = stageId;
 
-    // Determine probability based on target stage
+    // 2. Optimistic Concurrency / Stale Stage Check
+    if (expectedFromStage && expectedFromStage !== fromStageId) {
+      await connection.rollback();
+      return res.status(409).json({
+        error: `Stale project stage. Project was already moved from ${expectedFromStage} to ${fromStageId}.`,
+        code: 'STALE_PROJECT_STAGE',
+        currentStage: fromStageId,
+        expectedStage: expectedFromStage
+      });
+    }
+
+    // 3. Centralized Domain Governance Validation
+    const validation = validateProjectStageTransition({
+      project,
+      fromStage: fromStageId,
+      toStage: toStageId,
+      isReopenAction: isReopen === true || isReopen === 'true',
+      reopenReason: reopenReason || reason || notes,
+      lossReason: lossReason || reason || notes,
+      notes
+    });
+
+    if (!validation.allowed) {
+      await connection.rollback();
+      return res.status(422).json({
+        error: validation.message,
+        code: validation.code,
+        missingFields: validation.missingFields || [],
+        invalidConditions: validation.invalidConditions || []
+      });
+    }
+
+    // 4. Determine authoritative probability based on target stage
     let targetProbability = project.probability;
     if (toStageId === 'WON') targetProbability = 100;
     else if (toStageId === 'LOST') targetProbability = 0;
@@ -3127,40 +3286,44 @@ app.patch('/api/projects/:id/stage', async (req, res) => {
     else if (toStageId === 'PROPOSAL') targetProbability = 60;
     else if (toStageId === 'NEGOTIATION') targetProbability = 80;
 
-    // 2. Update Project stage and probability
+    // 5. Update Project stage and probability in database
     await connection.query(
       'UPDATE projects SET stageId = ?, probability = ? WHERE id = ?',
       [toStageId, targetProbability, projectId]
     );
 
-    // 3. Record Project Stage History
+    // 6. Record Project Stage History (Append-only immutable record)
+    const effectiveNotes = reopenReason || lossReason || notes || reason || (isReopen ? `Reopened project from ${fromStageId} to ${toStageId}` : `Stage changed from ${fromStageId} to ${toStageId}`);
     const historyId = `PSH-${Date.now()}-${Math.random().toString(36).slice(-4)}`;
     await connection.query(
       'INSERT INTO project_stage_histories (id, projectId, fromStageId, toStageId, changedById, notes) VALUES (?, ?, ?, ?, ?, ?)',
-      [historyId, projectId, fromStageId, toStageId, actorUserId, notes || reason || `Stage changed from ${fromStageId} to ${toStageId}`]
+      [historyId, projectId, fromStageId, toStageId, actorUserId, effectiveNotes]
     );
 
-    // 4. Customer Activation Rule on WON:
-    // If target stage is WON and customer status is PROSPECT, activate customer to ACTIVE
+    // 7. Customer Activation Rule on WON:
+    // If target stage is WON and customer status is PROSPECT or INACTIVE, activate customer to ACTIVE
     let customerActivated = false;
     if (toStageId === 'WON' && project.customerId) {
-      const [custRows]: any = await connection.query('SELECT statusId FROM customers WHERE id = ?', [project.customerId]);
+      const [custRows]: any = await connection.query('SELECT statusId FROM customers WHERE id = ? FOR UPDATE', [project.customerId]);
       if (custRows.length > 0 && (custRows[0].statusId === 'PROSPECT' || custRows[0].statusId === 'INACTIVE')) {
         await connection.query('UPDATE customers SET statusId = "ACTIVE" WHERE id = ?', [project.customerId]);
         customerActivated = true;
       }
     }
 
-    // 5. Emit STAGE_CHANGE Business Activity into activities table
-    let actSubject = `Project moved to ${toStageId}`;
-    let actDesc = `Project "${project.title}" transitioned from ${fromStageId} to ${toStageId}.`;
+    // 8. Emit STAGE_CHANGE Business Activity into activities table
+    let actSubject = isReopen ? `Project Reopened to ${toStageId}` : `Project moved to ${toStageId}`;
+    let actDesc = isReopen 
+      ? `Project "${project.title}" was reopened from ${fromStageId} to ${toStageId}. Reason: ${effectiveNotes}`
+      : `Project "${project.title}" transitioned from ${fromStageId} to ${toStageId}.`;
+
     if (toStageId === 'WON') {
       actSubject = 'Project Marked as Won';
       const formattedVal = project.value ? ` with contract value Rp ${Number(project.value).toLocaleString('id-ID')}` : '';
       actDesc = `Project "${project.title}" successfully closed as WON${formattedVal}.${customerActivated ? ' Customer activated.' : ''}`;
     } else if (toStageId === 'LOST') {
       actSubject = 'Project Marked as Lost';
-      actDesc = `Project "${project.title}" marked as LOST.${reason || notes ? ' Reason: ' + (reason || notes) : ''}`;
+      actDesc = `Project "${project.title}" marked as LOST. Reason: ${effectiveNotes}`;
       // R42: Auto-pause all active cadences belonging to this lost project
       await connection.query(`
         UPDATE maintenance_cadences 
@@ -3178,7 +3341,7 @@ app.patch('/api/projects/:id/stage', async (req, res) => {
       description: actDesc,
       entityType: 'PROJECT',
       entityId: projectId,
-      metadata: { fromStageId, toStageId, notes: notes || reason || null, customerActivated }
+      metadata: { fromStageId, toStageId, notes: effectiveNotes, customerActivated, isReopen: Boolean(isReopen) }
     });
 
     await connection.commit();
@@ -3189,7 +3352,8 @@ app.patch('/api/projects/:id/stage', async (req, res) => {
       fromStageId,
       toStageId,
       probability: targetProbability,
-      customerActivated
+      customerActivated,
+      notes: effectiveNotes
     });
   } catch (err: any) {
     await connection.rollback();

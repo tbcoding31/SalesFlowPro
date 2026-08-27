@@ -135,16 +135,36 @@ export const crmApi = {
   },
 
   // Project Commercial Stage Transition
-  transitionProjectStage: async (projectId: string, stageId: string, notes?: string): Promise<{ success: boolean; error?: string; code?: string; data?: any }> => {
+  transitionProjectStage: async (
+    projectId: string, 
+    stageId: string, 
+    options?: { notes?: string; lossReason?: string; reopenReason?: string; isReopen?: boolean; expectedFromStage?: string } | string
+  ): Promise<{ success: boolean; error?: string; code?: string; missingFields?: string[]; data?: any }> => {
     try {
+      const payload: any = { stageId };
+      if (typeof options === 'string') {
+        payload.notes = options;
+      } else if (options) {
+        if (options.notes) payload.notes = options.notes;
+        if (options.lossReason) payload.lossReason = options.lossReason;
+        if (options.reopenReason) payload.reopenReason = options.reopenReason;
+        if (options.isReopen !== undefined) payload.isReopen = options.isReopen;
+        if (options.expectedFromStage) payload.expectedFromStage = options.expectedFromStage;
+      }
+
       const res = await fetch(`${API_BASE}/projects/${projectId}/stage`, {
         method: 'PATCH',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ stageId, notes })
+        body: JSON.stringify(payload)
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        return { success: false, error: data.error || 'Failed to update stage', code: data.code };
+        return { 
+          success: false, 
+          error: data.error || 'Failed to update stage', 
+          code: data.code,
+          missingFields: data.missingFields
+        };
       }
       return { success: true, data };
     } catch (err: any) {
