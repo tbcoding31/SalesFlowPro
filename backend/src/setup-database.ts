@@ -117,7 +117,31 @@ async function setupDatabase() {
     // SYSTEM MODULES
     `CREATE TABLE IF NOT EXISTS notifications (id VARCHAR(50) PRIMARY KEY, tenantId VARCHAR(50), userId VARCHAR(50), title VARCHAR(255), message TEXT, type VARCHAR(50), isRead BOOLEAN, linkUrl TEXT, createdAt DATETIME DEFAULT CURRENT_TIMESTAMP)`,
     `CREATE TABLE IF NOT EXISTS notification_preferences (id VARCHAR(50) PRIMARY KEY, userId VARCHAR(50), type VARCHAR(50), emailEnabled BOOLEAN, pushEnabled BOOLEAN, inAppEnabled BOOLEAN)`,
-    `CREATE TABLE IF NOT EXISTS audit_logs (id VARCHAR(50) PRIMARY KEY, tenantId VARCHAR(50), userId VARCHAR(50), action VARCHAR(50), module VARCHAR(100), entity VARCHAR(100), entityId VARCHAR(50), description TEXT, ipAddress VARCHAR(100), timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)`
+    `CREATE TABLE IF NOT EXISTS audit_logs (id VARCHAR(50) PRIMARY KEY, tenantId VARCHAR(50), userId VARCHAR(50), action VARCHAR(50), module VARCHAR(100), entity VARCHAR(100), entityId VARCHAR(50), description TEXT, ipAddress VARCHAR(100), timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)`,
+
+    // R52 STALLED PROJECT INTERVENTION POLICIES
+    `CREATE TABLE IF NOT EXISTS project_intervention_policies (
+      id VARCHAR(50) PRIMARY KEY,
+      tenantId VARCHAR(50) NOT NULL,
+      code VARCHAR(100) NOT NULL,
+      name VARCHAR(255) NOT NULL,
+      description TEXT,
+      severity VARCHAR(20) NOT NULL DEFAULT 'WARNING',
+      matchMode VARCHAR(20) NOT NULL DEFAULT 'ALL',
+      status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+      createdById VARCHAR(50) NOT NULL,
+      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_tenant_policy_code (tenantId, code),
+      INDEX idx_pip_tenant_status (tenantId, status)
+    )`,
+    `CREATE TABLE IF NOT EXISTS project_intervention_policy_conditions (
+      id VARCHAR(50) PRIMARY KEY,
+      policyId VARCHAR(50) NOT NULL,
+      conditionType VARCHAR(100) NOT NULL,
+      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_pipc_policy (policyId)
+    )`
   ];
 
   for (const query of tableQueries) {
@@ -133,4 +157,8 @@ async function setupDatabase() {
   await pool.end();
 }
 
-setupDatabase().catch(console.error);
+export { setupDatabase };
+
+if (require.main === module) {
+  setupDatabase().catch(console.error);
+}

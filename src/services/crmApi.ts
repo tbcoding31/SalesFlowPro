@@ -457,6 +457,76 @@ export const crmApi = {
       console.error('[crmApi.updateTenantAnalyticsSettings error]', err);
       return null;
     }
+  },
+
+  fetchProjectInterventions: async (filters?: { teamId?: string; repId?: string }): Promise<any> => {
+    try {
+      const params = new URLSearchParams();
+      if (filters?.teamId) params.set('teamId', filters.teamId);
+      if (filters?.repId) params.set('repId', filters.repId);
+
+      const url = `${API_BASE}/management/project-interventions${params.toString() ? '?' + params.toString() : ''}`;
+      const res = await fetch(url, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch project interventions`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchProjectInterventions error]', err);
+      return null;
+    }
+  },
+
+  fetchProjectInterventionPolicies: async (): Promise<any> => {
+    try {
+      const res = await fetch(`${API_BASE}/tenant/project-intervention-policies`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch intervention policies`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchProjectInterventionPolicies error]', err);
+      return null;
+    }
+  },
+
+  createProjectInterventionPolicy: async (policy: {
+    code: string;
+    name: string;
+    description?: string;
+    severity?: 'INFO' | 'WARNING' | 'CRITICAL';
+    matchMode?: 'ALL';
+    conditions: string[];
+  }): Promise<any> => {
+    try {
+      const res = await fetch(`${API_BASE}/tenant/project-intervention-policies`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(policy)
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to create intervention policy`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.createProjectInterventionPolicy error]', err);
+      return null;
+    }
+  },
+
+  updateProjectInterventionPolicy: async (id: string, updates: {
+    name?: string;
+    description?: string;
+    severity?: 'INFO' | 'WARNING' | 'CRITICAL';
+    status?: 'ACTIVE' | 'INACTIVE';
+    conditions?: string[];
+  }): Promise<any> => {
+    try {
+      const res = await fetch(`${API_BASE}/tenant/project-intervention-policies/${id}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(updates)
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to update intervention policy`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.updateProjectInterventionPolicy error]', err);
+      return null;
+    }
   }
 };
 

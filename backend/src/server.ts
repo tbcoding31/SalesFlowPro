@@ -4730,6 +4730,813 @@ app.put('/api/tenant/analytics-settings', async (req, res) => {
   }
 });
 
+// ==========================================
+// R52 STALLED PROJECT GOVERNANCE & INTERVENTION POLICIES API
+// ==========================================
+
+export const VALID_INTERVENTION_CONDITION_TYPES = [
+  'MISSING_NEXT_ACTION',
+  'OVERDUE_ACTION',
+  'EXPECTED_CLOSE_OVERDUE',
+  'INVALID_PIC',
+  'BLOCKED_CADENCE',
+  'ABOVE_HISTORICAL_MEDIAN',
+  'ABOVE_HISTORICAL_P75'
+] as const;
+
+export const VALID_INTERVENTION_SEVERITIES = ['INFO', 'WARNING', 'CRITICAL'] as const;
+
+// GET /api/tenant/project-intervention-policies
+app.get('/api/tenant/project-intervention-policies', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && targetTenant !== actorTenant) {
+    return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
+  }
+
+  try {
+    const hasViewPerm = actorRole === 'SUPER_ADMIN' ||
+      actorPermissions.includes('ALL') ||
+      actorPermissions.includes('MANAGE_TENANT') ||
+      actorPermissions.includes('VIEW_REPORTS') ||
+      actorPermissions.includes('MANAGE_USERS');
+
+    if (!hasViewPerm) {
+      return res.status(403).json({ error: 'Forbidden: Insufficient permissions to view intervention policies.' });
+    }
+
+    const [policies]: any = await pool.query(
+      `SELECT * FROM project_intervention_policies WHERE tenantId = ? ORDER BY createdAt DESC`,
+      [targetTenant]
+    );
+
+    const policyIds = policies.map((p: any) => p.id);
+    let conditions: any[] = [];
+    if (policyIds.length > 0) {
+      const [cRows]: any = await pool.query(
+        `SELECT * FROM project_intervention_policy_conditions WHERE policyId IN (?)`,
+        [policyIds]
+      );
+      conditions = cRows;
+    }
+
+    const conditionsByPolicy: Record<string, string[]> = {};
+    for (const c of conditions) {
+      if (!conditionsByPolicy[c.policyId]) conditionsByPolicy[c.policyId] = [];
+      conditionsByPolicy[c.policyId].push(c.conditionType);
+    }
+
+    const result = policies.map((p: any) => ({
+      id: p.id,
+      tenantId: p.tenantId,
+      code: p.code,
+      name: p.name,
+      description: p.description,
+      severity: p.severity,
+      matchMode: p.matchMode,
+      status: p.status,
+      createdById: p.createdById,
+      createdAt: p.createdAt,
+      updatedAt: p.updatedAt,
+      conditions: conditionsByPolicy[p.id] || []
+    }));
+
+    res.json({
+      tenantId: targetTenant,
+      policies: result
+    });
+  } catch (err: any) {
+    console.error('Error in GET /api/tenant/project-intervention-policies:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
+// POST /api/tenant/project-intervention-policies
+app.post('/api/tenant/project-intervention-policies', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.body.tenantId || 'SYSTEM');
+  if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && targetTenant !== actorTenant) {
+    return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
+  }
+
+  try {
+    const hasManagePerm = actorRole === 'SUPER_ADMIN' ||
+      actorPermissions.includes('ALL') ||
+      actorPermissions.includes('MANAGE_TENANT');
+
+    if (!hasManagePerm) {
+      return res.status(403).json({ error: 'Forbidden: Insufficient permissions to create intervention policies.' });
+    }
+
+    const { code, name, description, severity = 'WARNING', matchMode = 'ALL', conditions = [] } = req.body;
+
+    if (!code || typeof code !== 'string' || !code.trim()) {
+      return res.status(400).json({ error: 'Policy code is required.', code: 'MISSING_POLICY_CODE' });
+    }
+
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'Policy name is required.', code: 'MISSING_POLICY_NAME' });
+    }
+
+    if (!VALID_INTERVENTION_SEVERITIES.includes(severity)) {
+      return res.status(400).json({ error: `Invalid severity. Allowed: ${VALID_INTERVENTION_SEVERITIES.join(', ')}`, code: 'INVALID_SEVERITY' });
+    }
+
+    if (!Array.isArray(conditions) || conditions.length === 0) {
+      return res.status(400).json({ error: 'At least one valid condition is required.', code: 'EMPTY_CONDITIONS' });
+    }
+
+    for (const c of conditions) {
+      if (!VALID_INTERVENTION_CONDITION_TYPES.includes(c)) {
+        return res.status(400).json({ error: `Invalid conditionType "${c}". Allowed: ${VALID_INTERVENTION_CONDITION_TYPES.join(', ')}`, code: 'INVALID_CONDITION_TYPE' });
+      }
+    }
+
+    // Check duplicate code in tenant
+    const [existing]: any = await pool.query(
+      `SELECT id FROM project_intervention_policies WHERE tenantId = ? AND code = ?`,
+      [targetTenant, code.trim()]
+    );
+    if (existing.length > 0) {
+      return res.status(400).json({ error: `Policy code "${code}" already exists for this tenant.`, code: 'DUPLICATE_POLICY_CODE' });
+    }
+
+    const policyId = `PIP-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+    const conn = await pool.getConnection();
+    await conn.beginTransaction();
+
+    try {
+      await conn.query(`
+        INSERT INTO project_intervention_policies (id, tenantId, code, name, description, severity, matchMode, status, createdById)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?)
+      `, [policyId, targetTenant, code.trim(), name.trim(), description || null, severity, matchMode, actorUserId || 'SYSTEM']);
+
+      for (const cond of conditions) {
+        const condId = `PIPC-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+        await conn.query(`
+          INSERT INTO project_intervention_policy_conditions (id, policyId, conditionType)
+          VALUES (?, ?, ?)
+        `, [condId, policyId, cond]);
+      }
+
+      // Record Audit Log
+      await conn.query(`
+        INSERT INTO audit_logs (id, tenantId, userId, action, module, entity, entityId, description)
+        VALUES (?, ?, ?, 'CREATE_INTERVENTION_POLICY', 'PROJECT_GOVERNANCE', 'project_intervention_policies', ?, ?)
+      `, [
+        `AUD-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+        targetTenant,
+        actorUserId || 'SYSTEM',
+        policyId,
+        `Created intervention policy "${name}" (${code}) with conditions: ${conditions.join(', ')}`
+      ]);
+
+      await conn.commit();
+
+      res.json({
+        success: true,
+        policy: {
+          id: policyId,
+          tenantId: targetTenant,
+          code: code.trim(),
+          name: name.trim(),
+          description: description || null,
+          severity,
+          matchMode,
+          status: 'ACTIVE',
+          createdById: actorUserId || 'SYSTEM',
+          conditions
+        }
+      });
+    } catch (e: any) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  } catch (err: any) {
+    console.error('Error in POST /api/tenant/project-intervention-policies:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
+// PUT /api/tenant/project-intervention-policies/:id
+app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.body.tenantId || 'SYSTEM');
+  if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && targetTenant !== actorTenant) {
+    return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
+  }
+
+  try {
+    const hasManagePerm = actorRole === 'SUPER_ADMIN' ||
+      actorPermissions.includes('ALL') ||
+      actorPermissions.includes('MANAGE_TENANT');
+
+    if (!hasManagePerm) {
+      return res.status(403).json({ error: 'Forbidden: Insufficient permissions to update intervention policies.' });
+    }
+
+    const policyId = req.params.id;
+    const [existing]: any = await pool.query(
+      `SELECT * FROM project_intervention_policies WHERE id = ? AND tenantId = ?`,
+      [policyId, targetTenant]
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({ error: 'Policy not found or cross-tenant violation.', code: 'POLICY_NOT_FOUND' });
+    }
+
+    const { name, description, severity, status, conditions } = req.body;
+
+    if (severity && !VALID_INTERVENTION_SEVERITIES.includes(severity)) {
+      return res.status(400).json({ error: `Invalid severity. Allowed: ${VALID_INTERVENTION_SEVERITIES.join(', ')}`, code: 'INVALID_SEVERITY' });
+    }
+
+    if (status && !['ACTIVE', 'INACTIVE'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status. Allowed: ACTIVE, INACTIVE', code: 'INVALID_STATUS' });
+    }
+
+    if (conditions) {
+      if (!Array.isArray(conditions) || conditions.length === 0) {
+        return res.status(400).json({ error: 'At least one condition is required.', code: 'EMPTY_CONDITIONS' });
+      }
+      for (const c of conditions) {
+        if (!VALID_INTERVENTION_CONDITION_TYPES.includes(c)) {
+          return res.status(400).json({ error: `Invalid conditionType "${c}".`, code: 'INVALID_CONDITION_TYPE' });
+        }
+      }
+    }
+
+    const conn = await pool.getConnection();
+    await conn.beginTransaction();
+
+    try {
+      await conn.query(`
+        UPDATE project_intervention_policies
+        SET name = COALESCE(?, name),
+            description = COALESCE(?, description),
+            severity = COALESCE(?, severity),
+            status = COALESCE(?, status)
+        WHERE id = ? AND tenantId = ?
+      `, [name || null, description !== undefined ? description : null, severity || null, status || null, policyId, targetTenant]);
+
+      if (conditions) {
+        await conn.query(`DELETE FROM project_intervention_policy_conditions WHERE policyId = ?`, [policyId]);
+        for (const cond of conditions) {
+          const condId = `PIPC-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+          await conn.query(`
+            INSERT INTO project_intervention_policy_conditions (id, policyId, conditionType)
+            VALUES (?, ?, ?)
+          `, [condId, policyId, cond]);
+        }
+      }
+
+      await conn.query(`
+        INSERT INTO audit_logs (id, tenantId, userId, action, module, entity, entityId, description)
+        VALUES (?, ?, ?, 'UPDATE_INTERVENTION_POLICY', 'PROJECT_GOVERNANCE', 'project_intervention_policies', ?, ?)
+      `, [
+        `AUD-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+        targetTenant,
+        actorUserId || 'SYSTEM',
+        policyId,
+        `Updated intervention policy #${policyId} (status=${status || existing[0].status}, severity=${severity || existing[0].severity})`
+      ]);
+
+      await conn.commit();
+      res.json({ success: true, policyId });
+    } catch (e: any) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  } catch (err: any) {
+    console.error('Error in PUT /api/tenant/project-intervention-policies/:id:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
+// GET /api/management/project-interventions
+app.get('/api/management/project-interventions', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  // Strictly enforce authenticated tenant context
+  if (req.query.tenantId && actorRole !== 'SUPER_ADMIN' && actorTenant !== 'SYSTEM' && req.query.tenantId !== actorTenant) {
+    return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
+  }
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+
+  const todayStr = getBusinessDate(new Date()) || new Date().toISOString().slice(0, 10);
+  const evaluatedAt = new Date().toISOString();
+
+  try {
+    const hasViewPerm = actorRole === 'SUPER_ADMIN' ||
+      actorPermissions.includes('ALL') ||
+      actorPermissions.includes('MANAGE_TENANT') ||
+      actorPermissions.includes('VIEW_REPORTS') ||
+      actorPermissions.includes('MANAGE_USERS');
+
+    if (!hasViewPerm) {
+      return res.status(403).json({ error: 'Forbidden: Insufficient permissions to view project interventions.' });
+    }
+
+    let effectiveScope: 'OWN' | 'TEAM' | 'ORGANIZATION' = actorDataScope;
+    if (actorRole === 'SUPER_ADMIN' || actorPermissions.includes('ALL') || actorPermissions.includes('MANAGE_TENANT')) {
+      effectiveScope = 'ORGANIZATION';
+    }
+
+    const requestedTeamId = req.query.teamId ? String(req.query.teamId).trim() : null;
+    const requestedRepId = req.query.repId ? String(req.query.repId).trim() : null;
+
+    if (requestedTeamId && effectiveScope === 'TEAM') {
+      const [actorTeamRows]: any = await pool.query(`
+        SELECT tm.teamId FROM team_members tm
+        JOIN tenant_users tu ON tu.id = tm.tenantUserId
+        WHERE tu.userId = ? AND tu.tenantId = ? AND tu.status = 'ACTIVE'
+      `, [actorUserId, targetTenant]);
+      const actorTeamIds = new Set(actorTeamRows.map((t: any) => t.teamId));
+      if (!actorTeamIds.has(requestedTeamId)) {
+        return res.status(403).json({ error: 'Access denied to requested team (BOLA/Scope violation).' });
+      }
+    }
+
+    // 1. Fetch Active Intervention Policies for Target Tenant
+    const [policies]: any = await pool.query(`
+      SELECT p.* FROM project_intervention_policies p
+      WHERE p.tenantId = ? AND p.status = 'ACTIVE'
+      ORDER BY p.createdAt ASC
+    `, [targetTenant]);
+
+    const interventionPolicyConfigured = policies.length > 0;
+    const policyIds = policies.map((p: any) => p.id);
+
+    let conditions: any[] = [];
+    if (policyIds.length > 0) {
+      const [cRows]: any = await pool.query(
+        `SELECT * FROM project_intervention_policy_conditions WHERE policyId IN (?)`,
+        [policyIds]
+      );
+      conditions = cRows;
+    }
+
+    const conditionsByPolicy: Record<string, string[]> = {};
+    for (const c of conditions) {
+      if (!conditionsByPolicy[c.policyId]) conditionsByPolicy[c.policyId] = [];
+      conditionsByPolicy[c.policyId].push(c.conditionType);
+    }
+
+    // 2. Fetch Velocity Comparison Policy (R51/R51R2)
+    const [velocityPolicyRows]: any = await pool.query(
+      `SELECT settingValue FROM tenant_settings WHERE tenantId = ? AND settingKey = 'velocityMinComparisonSampleSize'`,
+      [targetTenant]
+    );
+
+    let velocityComparisonPolicyConfigured = false;
+    let velocityMinComparisonSampleSize: number | null = null;
+    if (velocityPolicyRows.length > 0 && velocityPolicyRows[0].settingValue) {
+      const parsed = parseInt(velocityPolicyRows[0].settingValue, 10);
+      if (!isNaN(parsed) && parsed > 0 && String(parsed) === String(velocityPolicyRows[0].settingValue).trim()) {
+        velocityComparisonPolicyConfigured = true;
+        velocityMinComparisonSampleSize = parsed;
+      }
+    }
+
+    // 3. Batch Fetch Historical Stage Transitions for Baseline (R51 parity)
+    const [allHistories]: any = await pool.query(`
+      SELECT 
+        psh.id, psh.projectId, psh.fromStageId, psh.toStageId, psh.changedAt,
+        p.createdAt as projectCreatedAt
+      FROM project_stage_histories psh
+      JOIN projects p ON p.id = psh.projectId
+      WHERE p.tenantId = ?
+      ORDER BY psh.projectId ASC, psh.changedAt ASC, psh.id ASC
+    `, [targetTenant]);
+
+    const historiesByProject: Record<string, any[]> = {};
+    for (const h of allHistories) {
+      if (!historiesByProject[h.projectId]) historiesByProject[h.projectId] = [];
+      historiesByProject[h.projectId].push(h);
+    }
+
+    const canonicalOpenStages = ['LEAD', 'QUALIFICATION', 'PROPOSAL', 'NEGOTIATION'];
+    const stageDurations: Record<string, number[]> = { LEAD: [], QUALIFICATION: [], PROPOSAL: [], NEGOTIATION: [] };
+
+    for (const [projId, pHistList] of Object.entries(historiesByProject)) {
+      for (let i = 0; i < pHistList.length; i++) {
+        const curr = pHistList[i];
+        const prevTime = i === 0
+          ? (curr.projectCreatedAt ? new Date(curr.projectCreatedAt).getTime() : new Date(curr.changedAt).getTime())
+          : new Date(pHistList[i - 1].changedAt).getTime();
+        const currTime = new Date(curr.changedAt).getTime();
+
+        if (currTime < prevTime || !curr.fromStageId || !curr.toStageId || curr.fromStageId === curr.toStageId) continue;
+        const durationDays = Math.max(0, Math.round((currTime - prevTime) / (1000 * 60 * 60 * 24)));
+        if (canonicalOpenStages.includes(curr.fromStageId)) {
+          stageDurations[curr.fromStageId].push(durationDays);
+        }
+      }
+    }
+
+    const baselineMap: Record<string, any> = {};
+    for (const st of canonicalOpenStages) {
+      const arr = stageDurations[st] || [];
+      const sSorted = [...arr].sort((a, b) => a - b);
+      const sampleSize = arr.length;
+      const statisticsAvailable = sampleSize > 0;
+      const comparisonAvailable = velocityComparisonPolicyConfigured && velocityMinComparisonSampleSize !== null && sampleSize >= velocityMinComparisonSampleSize;
+      const medianDays = sampleSize > 0 ? calculatePercentile(sSorted, 50) : null;
+      const p75Days = sampleSize > 0 ? calculatePercentile(sSorted, 75) : null;
+      baselineMap[st] = { stageId: st, sampleSize, statisticsAvailable, comparisonAvailable, medianDays, p75Days };
+    }
+
+    // 4. Batch Fetch Scoped Open Projects
+    let repTeamIds: string[] = [];
+    if (effectiveScope === 'TEAM') {
+      const [userTeamRows]: any = await pool.query(`
+        SELECT tm.teamId FROM team_members tm
+        JOIN tenant_users tu ON tu.id = tm.tenantUserId
+        WHERE tu.userId = ? AND tu.tenantId = ?
+      `, [actorUserId, targetTenant]);
+      repTeamIds = userTeamRows.map((r: any) => r.teamId);
+    }
+
+    let openProjSql = `
+      SELECT 
+        p.id, p.title, p.customerId, p.picId, p.stageId, p.value, p.probability, p.expectedCloseDate, p.createdAt,
+        c.name as customerName,
+        u.name as picName, u.email as picEmail,
+        tu.id as picTenantUserId, tu.status as picTenantUserStatus,
+        tm.teamId as picTeamId, t.name as picTeamName
+      FROM projects p
+      LEFT JOIN customers c ON c.id = p.customerId
+      LEFT JOIN users u ON u.id = p.picId
+      LEFT JOIN tenant_users tu ON tu.userId = p.picId AND tu.tenantId = p.tenantId
+      LEFT JOIN team_members tm ON tm.tenantUserId = tu.id
+      LEFT JOIN teams t ON t.id = tm.teamId
+      WHERE p.tenantId = ? AND p.stageId NOT IN ('WON', 'LOST')
+    `;
+    const openProjParams: any[] = [targetTenant];
+
+    if (effectiveScope === 'OWN') {
+      openProjSql += ` AND p.picId = ?`;
+      openProjParams.push(actorUserId);
+    } else if (effectiveScope === 'TEAM') {
+      if (repTeamIds.length > 0) {
+        openProjSql += ` AND tm.teamId IN (?)`;
+        openProjParams.push(repTeamIds);
+      } else {
+        openProjSql += ` AND p.picId = ?`;
+        openProjParams.push(actorUserId);
+      }
+    }
+
+    if (requestedRepId) {
+      openProjSql += ` AND p.picId = ?`;
+      openProjParams.push(requestedRepId);
+    }
+    if (requestedTeamId) {
+      openProjSql += ` AND tm.teamId = ?`;
+      openProjParams.push(requestedTeamId);
+    }
+
+    openProjSql += ` ORDER BY p.id DESC`;
+    const [scopedOpenProjects]: any = await pool.query(openProjSql, openProjParams);
+
+    const scopedProjectIds = scopedOpenProjects.map((p: any) => p.id);
+
+    // 5. Batch Fetch Tasks, Visits, Follow-ups, and Cadences for Scoped Projects (R43 parity)
+    let openTasks: any[] = [];
+    let openVisits: any[] = [];
+    let openFollowups: any[] = [];
+    let activeCadences: any[] = [];
+
+    if (scopedProjectIds.length > 0) {
+      const [tRows]: any = await pool.query(
+        `SELECT id, relatedProjectId, dueDate, title, statusId FROM tasks WHERE relatedProjectId IN (?) AND statusId NOT IN ('COMPLETED', 'CANCELLED')`,
+        [scopedProjectIds]
+      );
+      openTasks = tRows;
+
+      const [vRows]: any = await pool.query(
+        `SELECT id, relatedProjectId, visitDate, title, purposeId, statusId FROM visits WHERE relatedProjectId IN (?) AND statusId NOT IN ('COMPLETED', 'CANCELLED')`,
+        [scopedProjectIds]
+      );
+      openVisits = vRows;
+
+      const [fRows]: any = await pool.query(
+        `SELECT id, relatedProjectId, followUpDate, notes, status FROM follow_ups WHERE relatedProjectId IN (?) AND status NOT IN ('COMPLETED', 'CANCELLED')`,
+        [scopedProjectIds]
+      );
+      openFollowups = fRows;
+
+      const [cRows]: any = await pool.query(
+        `SELECT * FROM maintenance_cadences WHERE projectId IN (?) AND status = 'ACTIVE'`,
+        [scopedProjectIds]
+      );
+      activeCadences = cRows;
+    }
+
+    // 6. Deterministic Intervention Evaluator per Project
+    let totalProjectsEvaluated = scopedOpenProjects.length;
+    let projectsWithMatchedInterventions = 0;
+    let criticalInterventionsCount = 0;
+    let warningInterventionsCount = 0;
+    let infoInterventionsCount = 0;
+    let unknownEvaluationProjectsCount = 0;
+
+    const evaluatedProjects = scopedOpenProjects.map((p: any) => {
+      // Days in stage and provenance
+      const pHistList = historiesByProject[p.id] || [];
+      let stageEnteredAt: string | null = null;
+      let stageEntryProvenance: 'CURRENT_STAGE_ENTRY_KNOWN_FROM_HISTORY' | 'CURRENT_STAGE_ENTRY_KNOWN_FROM_CREATION' | 'CURRENT_STAGE_ENTRY_UNKNOWN' = 'CURRENT_STAGE_ENTRY_UNKNOWN';
+
+      if (pHistList.length > 0) {
+        const matchingEntries = pHistList.filter((h: any) => h.toStageId === p.stageId);
+        if (matchingEntries.length > 0) {
+          stageEnteredAt = matchingEntries[matchingEntries.length - 1].changedAt;
+          stageEntryProvenance = 'CURRENT_STAGE_ENTRY_KNOWN_FROM_HISTORY';
+        } else {
+          stageEnteredAt = null;
+          stageEntryProvenance = 'CURRENT_STAGE_ENTRY_UNKNOWN';
+        }
+      } else {
+        if (p.createdAt) {
+          stageEnteredAt = p.createdAt;
+          stageEntryProvenance = 'CURRENT_STAGE_ENTRY_KNOWN_FROM_CREATION';
+        } else {
+          stageEnteredAt = null;
+          stageEntryProvenance = 'CURRENT_STAGE_ENTRY_UNKNOWN';
+        }
+      }
+
+      let daysInCurrentStage: number | null = null;
+      if (stageEnteredAt) {
+        const enteredDateStr = getBusinessDate(stageEnteredAt) || String(stageEnteredAt).slice(0, 10);
+        const enteredD = new Date(`${enteredDateStr}T00:00:00+07:00`);
+        const todayD = new Date(`${todayStr}T00:00:00+07:00`);
+        daysInCurrentStage = Math.max(0, Math.round((todayD.getTime() - enteredD.getTime()) / (1000 * 60 * 60 * 24)));
+      }
+
+      // Operational Facts (R43 Parity)
+      const pTasks = openTasks.filter(t => t.relatedProjectId === p.id);
+      const pVisits = openVisits.filter(v => v.relatedProjectId === p.id);
+      const pFollowups = openFollowups.filter(f => f.relatedProjectId === p.id);
+      const totalOpenActions = pTasks.length + pVisits.length + pFollowups.length;
+      const hasNextAction = totalOpenActions > 0;
+
+      // Overdue
+      const overdueTasks = pTasks.filter(t => {
+        const d = getBusinessDate(t.dueDate);
+        return d !== null && d < todayStr;
+      });
+      const overdueVisits = pVisits.filter(v => {
+        const d = getBusinessDate(v.visitDate);
+        return d !== null && d < todayStr;
+      });
+      const overdueFollowups = pFollowups.filter(f => {
+        const d = getBusinessDate(f.followUpDate);
+        return d !== null && d < todayStr;
+      });
+      const overdueActionsCount = overdueTasks.length + overdueVisits.length + overdueFollowups.length;
+      const hasOverdueAction = overdueActionsCount > 0;
+
+      // Expected Close Overdue
+      const expectedCloseDateStr = p.expectedCloseDate ? (getBusinessDate(p.expectedCloseDate) || String(p.expectedCloseDate).slice(0, 10)) : null;
+      const isExpectedCloseOverdue = Boolean(expectedCloseDateStr && expectedCloseDateStr < todayStr);
+
+      // PIC Validity
+      const isInvalidPic = !p.picId || !p.picTenantUserId || p.picTenantUserStatus !== 'ACTIVE';
+
+      // Cadence Blocked
+      const pCadences = activeCadences.filter(c => c.projectId === p.id);
+      const isCadenceBlocked = pCadences.some(c => c.status === 'BLOCKED' || (c.lastGeneratedActionType && c.lastGeneratedActionId && !hasNextAction));
+
+      // Velocity facts
+      const base = baselineMap[p.stageId];
+      const isAboveMedian = (daysInCurrentStage !== null && base && base.comparisonAvailable && base.medianDays !== null)
+        ? daysInCurrentStage > base.medianDays
+        : null;
+      const isAboveP75 = (daysInCurrentStage !== null && base && base.comparisonAvailable && base.p75Days !== null)
+        ? daysInCurrentStage > base.p75Days
+        : null;
+
+      // Supporting Facts Map
+      const supportingFacts: Record<string, any> = {
+        daysInCurrentStage,
+        stageEnteredAt,
+        stageEntryProvenance,
+        baselineMedianDays: base ? base.medianDays : null,
+        baselineP75Days: base ? base.p75Days : null,
+        comparisonAvailable: base ? base.comparisonAvailable : false,
+        hasNextAction,
+        openActionsCount: totalOpenActions,
+        overdueActionsCount,
+        hasOverdueAction,
+        isExpectedCloseOverdue,
+        expectedCloseDate: expectedCloseDateStr,
+        isInvalidPic,
+        isCadenceBlocked
+      };
+
+      // Evaluate Policies
+      const matchedInterventions: any[] = [];
+      let hasUnknownEvaluation = false;
+
+      if (interventionPolicyConfigured) {
+        for (const pol of policies) {
+          const condList = conditionsByPolicy[pol.id] || [];
+          if (condList.length === 0) continue;
+
+          let allMatched = true;
+          let hasUnknownCondition = false;
+          const conditionEvaluations: any[] = [];
+
+          for (const cond of condList) {
+            let condState: 'MATCHED' | 'NOT_MATCHED' | 'UNKNOWN' = 'NOT_MATCHED';
+            let condReason: string | null = null;
+
+            if (cond === 'MISSING_NEXT_ACTION') {
+              condState = !hasNextAction ? 'MATCHED' : 'NOT_MATCHED';
+            } else if (cond === 'OVERDUE_ACTION') {
+              condState = hasOverdueAction ? 'MATCHED' : 'NOT_MATCHED';
+            } else if (cond === 'EXPECTED_CLOSE_OVERDUE') {
+              condState = isExpectedCloseOverdue ? 'MATCHED' : 'NOT_MATCHED';
+            } else if (cond === 'INVALID_PIC') {
+              condState = isInvalidPic ? 'MATCHED' : 'NOT_MATCHED';
+            } else if (cond === 'BLOCKED_CADENCE') {
+              condState = isCadenceBlocked ? 'MATCHED' : 'NOT_MATCHED';
+            } else if (cond === 'ABOVE_HISTORICAL_MEDIAN') {
+              if (daysInCurrentStage === null) {
+                condState = 'UNKNOWN';
+                condReason = 'UNKNOWN_STAGE_ENTRY';
+              } else if (!velocityComparisonPolicyConfigured) {
+                condState = 'UNKNOWN';
+                condReason = 'VELOCITY_POLICY_NOT_CONFIGURED';
+              } else if (!base || !base.comparisonAvailable) {
+                condState = 'UNKNOWN';
+                condReason = 'INSUFFICIENT_VELOCITY_SAMPLE';
+              } else {
+                condState = isAboveMedian ? 'MATCHED' : 'NOT_MATCHED';
+              }
+            } else if (cond === 'ABOVE_HISTORICAL_P75') {
+              if (daysInCurrentStage === null) {
+                condState = 'UNKNOWN';
+                condReason = 'UNKNOWN_STAGE_ENTRY';
+              } else if (!velocityComparisonPolicyConfigured) {
+                condState = 'UNKNOWN';
+                condReason = 'VELOCITY_POLICY_NOT_CONFIGURED';
+              } else if (!base || !base.comparisonAvailable) {
+                condState = 'UNKNOWN';
+                condReason = 'INSUFFICIENT_VELOCITY_SAMPLE';
+              } else {
+                condState = isAboveP75 ? 'MATCHED' : 'NOT_MATCHED';
+              }
+            }
+
+            conditionEvaluations.push({ conditionType: cond, state: condState, reason: condReason });
+
+            if (condState === 'UNKNOWN') {
+              hasUnknownCondition = true;
+              allMatched = false;
+            } else if (condState !== 'MATCHED') {
+              allMatched = false;
+            }
+          }
+
+          if (hasUnknownCondition) {
+            hasUnknownEvaluation = true;
+          }
+
+          if (allMatched) {
+            matchedInterventions.push({
+              policyId: pol.id,
+              policyCode: pol.code,
+              policyName: pol.name,
+              severity: pol.severity,
+              matchedConditions: condList,
+              conditionEvaluations,
+              recommendedActions: getRecommendedActionsForIntervention(condList)
+            });
+
+            if (pol.severity === 'CRITICAL') criticalInterventionsCount++;
+            else if (pol.severity === 'WARNING') warningInterventionsCount++;
+            else infoInterventionsCount++;
+          }
+        }
+      }
+
+      const interventionStatus: 'NONE' | 'MATCHED' | 'UNKNOWN' =
+        matchedInterventions.length > 0
+          ? 'MATCHED'
+          : hasUnknownEvaluation
+          ? 'UNKNOWN'
+          : 'NONE';
+
+      if (interventionStatus === 'MATCHED') projectsWithMatchedInterventions++;
+      if (interventionStatus === 'UNKNOWN') unknownEvaluationProjectsCount++;
+
+      return {
+        projectId: p.id,
+        projectTitle: p.title,
+        customerId: p.customerId,
+        customerName: p.customerName || 'Unknown Customer',
+        picId: p.picId,
+        picName: p.picName || 'Unassigned',
+        picTeamName: p.picTeamName || 'General',
+        stageId: p.stageId,
+        value: p.value !== null ? Number(p.value) : null,
+        probability: p.probability !== null ? Number(p.probability) : null,
+        expectedCloseDate: expectedCloseDateStr,
+        stageEnteredAt,
+        daysInCurrentStage,
+        supportingFacts,
+        interventionStatus,
+        interventions: matchedInterventions
+      };
+    });
+
+    res.json({
+      businessDate: todayStr,
+      evaluatedAt,
+      scope: effectiveScope,
+      interventionPolicyConfigured,
+      activePoliciesCount: policies.length,
+      summary: {
+        totalProjectsEvaluated,
+        projectsWithMatchedInterventions,
+        unknownEvaluationProjectsCount,
+        criticalInterventionsCount,
+        warningInterventionsCount,
+        infoInterventionsCount
+      },
+      currentProjects: evaluatedProjects
+    });
+
+  } catch (err: any) {
+    console.error('Error in GET /api/management/project-interventions:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
+function getRecommendedActionsForIntervention(conditions: string[]): Array<{ actionType: string; description: string; path: string }> {
+  const actions: Array<{ actionType: string; description: string; path: string }> = [];
+  if (conditions.includes('MISSING_NEXT_ACTION')) {
+    actions.push({ actionType: 'CREATE_ACTION', description: 'Schedule a task, visit, or follow-up to maintain deal velocity.', path: '/tasks' });
+  }
+  if (conditions.includes('OVERDUE_ACTION')) {
+    actions.push({ actionType: 'RESCHEDULE_OR_COMPLETE', description: 'Complete or reschedule past-due operational actions.', path: '/tasks' });
+  }
+  if (conditions.includes('EXPECTED_CLOSE_OVERDUE')) {
+    actions.push({ actionType: 'UPDATE_EXPECTED_CLOSE', description: 'Update expected close date or transition deal to final outcome.', path: '/projects' });
+  }
+  if (conditions.includes('INVALID_PIC')) {
+    actions.push({ actionType: 'REASSIGN_PIC', description: 'Assign an active commercial representative as project PIC.', path: '/projects' });
+  }
+  if (conditions.includes('BLOCKED_CADENCE')) {
+    actions.push({ actionType: 'RECOVER_CADENCE', description: 'Review and generate next occurrence for active cadence.', path: '/maintenance' });
+  }
+  if (conditions.includes('ABOVE_HISTORICAL_P75') || conditions.includes('ABOVE_HISTORICAL_MEDIAN')) {
+    actions.push({ actionType: 'STAGE_PROGRESSION_REVIEW', description: 'Conduct commercial review to advance stage or identify disqualification.', path: '/projects' });
+  }
+  return actions;
+}
+
 export interface StageTransitionValidationResult {
   allowed: boolean;
   code?: string;

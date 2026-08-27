@@ -550,6 +550,75 @@ export interface PipelineVelocityResponse {
   };
 }
 
+export interface ProjectInterventionPolicy {
+  id: string;
+  tenantId: string;
+  code: string;
+  name: string;
+  description: string | null;
+  severity: 'INFO' | 'WARNING' | 'CRITICAL';
+  matchMode: 'ALL';
+  status: 'ACTIVE' | 'INACTIVE';
+  createdById: string;
+  createdAt: string;
+  updatedAt: string;
+  conditions: string[];
+}
+
+export interface ProjectInterventionItem {
+  policyId: string;
+  policyCode: string;
+  policyName: string;
+  severity: 'INFO' | 'WARNING' | 'CRITICAL';
+  matchedConditions: string[];
+  conditionEvaluations: Array<{
+    conditionType: string;
+    state: 'MATCHED' | 'NOT_MATCHED' | 'UNKNOWN';
+    reason: string | null;
+  }>;
+  recommendedActions: Array<{
+    actionType: string;
+    description: string;
+    path: string;
+  }>;
+}
+
+export interface EvaluatedProjectIntervention {
+  projectId: string;
+  projectTitle: string;
+  customerId: string;
+  customerName: string;
+  picId: string;
+  picName: string;
+  picTeamName: string;
+  stageId: string;
+  value: number | null;
+  probability: number | null;
+  expectedCloseDate: string | null;
+  stageEnteredAt: string | null;
+  daysInCurrentStage: number | null;
+  supportingFacts: Record<string, any>;
+  interventionStatus: 'NONE' | 'MATCHED' | 'UNKNOWN';
+  interventions: ProjectInterventionItem[];
+}
+
+export interface ProjectInterventionsResponse {
+  businessDate: string;
+  evaluatedAt: string;
+  scope: string;
+  interventionPolicyConfigured: boolean;
+  activePoliciesCount: number;
+  summary: {
+    totalProjectsEvaluated: number;
+    projectsWithMatchedInterventions: number;
+    unknownEvaluationProjectsCount: number;
+    criticalInterventionsCount: number;
+    warningInterventionsCount: number;
+    infoInterventionsCount: number;
+  };
+  currentProjects: EvaluatedProjectIntervention[];
+}
+
 export interface MasterDataItem {
   id: string;
   tenantId?: string; // empty if global
