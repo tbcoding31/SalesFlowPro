@@ -396,8 +396,92 @@ export interface SalesTargetAttainmentResponse {
     projectsWithProbability?: number;
     projectsMissingProbability?: number;
     projectsWithExpectedCloseDate?: number;
-    projectsMissingExpectedCloseDate?: number;
   };
+}
+
+export interface ProjectActivityCoverage {
+  projectId: string;
+  projectTitle: string;
+  customerId: string;
+  customerName: string;
+  picId: string;
+  picTenantUserId: string;
+  picName: string;
+  picTeamId?: string;
+  stageId: string;
+  expectedCloseDate: string;
+  value: number | null;
+  probability: number | null;
+  weightedValue: number | null;
+  hasNextAction: boolean;
+  hasOverdueAction: boolean;
+  overdueActionsCount: number;
+  hasActiveCadence: boolean;
+  isCadenceBlocked: boolean;
+  isPicInvalid: boolean;
+  nextAction?: {
+    id: string;
+    type: 'TASK' | 'VISIT' | 'FOLLOW_UP';
+    title: string;
+    date: string;
+  } | null;
+}
+
+export interface RepActivityCoverage {
+  tenantUserId: string;
+  userId: string;
+  name: string;
+  email: string;
+  teamId?: string;
+  teamName: string;
+  isCoverageAvailable: boolean;
+  eligibleTargetPeriodProjects: number | null;
+  projectsWithNextAction: number | null;
+  projectsMissingNextAction: number | null;
+  nextActionCoveragePercent: number | null;
+  projectsWithOverdueActions: number | null;
+  overdueActionsCount: number | null;
+  projectsWithBlockedCadence: number | null;
+  coveredPipelineValue: number | null;
+  uncoveredPipelineValue: number | null;
+  coveredWeightedPipelineValue: number | null;
+  uncoveredWeightedPipelineValue: number | null;
+  weightedPipelineCoveragePercent: number | null;
+}
+
+export interface TargetActivityCoverageResponse {
+  businessDate: string;
+  evaluatedAt: string;
+  scope: string;
+  period: {
+    periodStart: string;
+    periodEnd: string;
+    isHistoricalPeriod: boolean;
+    isCoverageAvailable: boolean;
+  };
+  summary: {
+    isCoverageAvailable: boolean;
+    linearPace: {
+      totalPeriodDays: number;
+      elapsedPeriodDays: number;
+      elapsedPeriodPercent: number;
+    };
+    eligibleTargetPeriodProjects: number | null;
+    projectsWithNextAction: number | null;
+    projectsMissingNextAction: number | null;
+    nextActionCoveragePercent: number | null;
+    projectsWithOverdueActions: number | null;
+    overdueActionsCount: number | null;
+    projectsWithBlockedCadence: number | null;
+    projectsWithInvalidPic: number | null;
+    coveredPipelineValue: number | null;
+    uncoveredPipelineValue: number | null;
+    coveredWeightedPipelineValue: number | null;
+    uncoveredWeightedPipelineValue: number | null;
+    weightedPipelineCoveragePercent: number | null;
+  };
+  repCoverage: RepActivityCoverage[];
+  projects: ProjectActivityCoverage[];
 }
 
 export interface MasterDataItem {

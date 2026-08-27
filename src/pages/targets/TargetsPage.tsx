@@ -18,7 +18,8 @@ export const TargetsPage: React.FC = () => {
   const [targetType, setTargetType] = useState<SalesTargetType>('WON_PROJECT_VALUE');
   
   const [attainmentData, setAttainmentData] = useState<SalesTargetAttainmentResponse | null>(null);
-  const [activeTab, setActiveTab] = useState<'REPS' | 'TEAMS'>('REPS');
+  const [coverageData, setCoverageData] = useState<any | null>(null);
+  const [activeTab, setActiveTab] = useState<'REPS' | 'TEAMS' | 'COVERAGE'>('REPS');
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [showModal, setShowModal] = useState<boolean>(false);
 
@@ -33,20 +34,27 @@ export const TargetsPage: React.FC = () => {
   const loadData = async () => {
     setIsLoading(true);
     try {
-      const res = await crmApi.fetchSalesTargetAttainment({
-        periodStart,
-        periodEnd,
-        targetType
-      });
-      setAttainmentData(res);
-      if (res && res.repAttainment && res.repAttainment.length > 0 && !modalTenantUserId) {
-        setModalTenantUserId(res.repAttainment[0].tenantUserId);
+      const [attainmentRes, coverageRes] = await Promise.all([
+        crmApi.fetchSalesTargetAttainment({
+          periodStart,
+          periodEnd,
+          targetType
+        }),
+        crmApi.fetchSalesTargetActivityCoverage({
+          periodStart,
+          periodEnd
+        })
+      ]);
+      setAttainmentData(attainmentRes);
+      setCoverageData(coverageRes);
+      if (attainmentRes && attainmentRes.repAttainment && attainmentRes.repAttainment.length > 0 && !modalTenantUserId) {
+        setModalTenantUserId(attainmentRes.repAttainment[0].tenantUserId);
       }
-      if (res && res.teamAttainment && res.teamAttainment.length > 0 && !modalTeamId) {
-        setModalTeamId(res.teamAttainment[0].teamId);
+      if (attainmentRes && attainmentRes.teamAttainment && attainmentRes.teamAttainment.length > 0 && !modalTeamId) {
+        setModalTeamId(attainmentRes.teamAttainment[0].teamId);
       }
     } catch (err) {
-      console.error('Error fetching target attainment from DB:', err);
+      console.error('Error fetching target data from DB:', err);
     } finally {
       setIsLoading(false);
     }
@@ -291,6 +299,18 @@ export const TargetsPage: React.FC = () => {
           <span className="material-symbols-outlined text-[18px]">groups</span>
           <span>Team Quotas & Forecast ({attainmentData?.teamAttainment?.length || 0})</span>
         </button>
+
+        <button
+          onClick={() => setActiveTab('COVERAGE')}
+          className={`px-4 py-2 font-bold text-sm rounded-xl transition-all flex items-center gap-2 ${
+            activeTab === 'COVERAGE'
+              ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <span className="material-symbols-outlined text-[18px]">checklist</span>
+          <span>Commercial Activity Coverage ({coverageData?.projects?.length || 0})</span>
+        </button>
       </div>
 
       {/* Representative Attainment & Forecast Table */}
@@ -509,7 +529,193 @@ export const TargetsPage: React.FC = () => {
         </div>
       )}
 
-      {/* ASSIGN TARGET MODAL */}
+      {/* Commercial Activity Coverage Table */}
+      {activeTab === 'COVERAGE' && (
+        <div className="space-y-6">
+          {/* Coverage Summary KPIs */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Target-Period Projects</span>
+              <div className="mt-2">
+                <div className="text-2xl font-black text-slate-900 font-['Hanken_Grotesk']">
+                  {coverageData?.summary?.eligibleTargetPeriodProjects ?? '-'}
+                </div>
+                <div className="text-[11px] text-slate-600 font-medium mt-1">
+                  Open commercial deals closing in period
+                </div>
+              </div>
+              <div className="mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500 font-medium">
+                Pace: {coverageData?.summary?.linearPace?.elapsedPeriodPercent ?? 0}% calendar elapsed
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Next Action Coverage</span>
+              <div className="mt-2">
+                <div className="text-2xl font-black text-indigo-600 font-['Hanken_Grotesk']">
+                  {coverageData?.summary?.nextActionCoveragePercent !== null && coverageData?.summary?.nextActionCoveragePercent !== undefined
+                    ? `${coverageData.summary.nextActionCoveragePercent}%`
+                    : 'N/A'}
+                </div>
+                <div className="text-[11px] text-slate-600 font-medium mt-1">
+                  {coverageData?.summary?.projectsWithNextAction ?? 0} with action / {coverageData?.summary?.projectsMissingNextAction ?? 0} missing action
+                </div>
+              </div>
+              <div className="mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500 font-medium">
+                {coverageData?.summary?.projectsMissingNextAction === 0 ? '✓ Full action coverage' : '⚠️ Action gap exists'}
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Overdue Actions</span>
+              <div className="mt-2">
+                <div className="text-2xl font-black text-rose-600 font-['Hanken_Grotesk']">
+                  {coverageData?.summary?.overdueActionsCount ?? 0}
+                </div>
+                <div className="text-[11px] text-rose-700 font-medium mt-1">
+                  Across {coverageData?.summary?.projectsWithOverdueActions ?? 0} open projects
+                </div>
+              </div>
+              <div className="mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500 font-medium">
+                Past due tasks, visits, follow-ups
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Covered Pipeline Value</span>
+              <div className="mt-2">
+                <div className="text-xl font-black text-emerald-600 font-['Hanken_Grotesk'] truncate">
+                  {coverageData?.summary?.isCoverageAvailable ? formatCurrency(coverageData.summary.coveredWeightedPipelineValue || 0) : 'Unavailable'}
+                </div>
+                <div className="text-[11px] text-slate-600 font-medium mt-1">
+                  Uncovered: {formatCurrency(coverageData?.summary?.uncoveredWeightedPipelineValue || 0)}
+                </div>
+              </div>
+              <div className="mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500 font-medium">
+                Weighted pipeline with active Next Action
+              </div>
+            </div>
+          </div>
+
+          {/* Project Details Table */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden p-6 space-y-4">
+            <div className="flex justify-between items-center">
+              <h2 className="text-base font-bold text-slate-900 font-['Hanken_Grotesk']">
+                Target-Period Commercial Pipeline Activity Coverage
+              </h2>
+              <span className="text-xs text-slate-500 font-medium">
+                {coverageData?.period?.isCoverageAvailable ? `${coverageData?.projects?.length || 0} Open Deals` : 'Historical Period Completed'}
+              </span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-900">
+                <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200 text-[10px]">
+                  <tr>
+                    <th className="px-5 py-3.5">Project / Customer</th>
+                    <th className="px-5 py-3.5">Assigned Rep</th>
+                    <th className="px-5 py-3.5">Stage / Close Date</th>
+                    <th className="px-5 py-3.5">Pipeline Value</th>
+                    <th className="px-5 py-3.5">Next Action</th>
+                    <th className="px-5 py-3.5">Overdue Work</th>
+                    <th className="px-5 py-3.5 text-right">Cadence State</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {isLoading ? (
+                    <tr>
+                      <td colSpan={7} className="px-6 py-8 text-center text-slate-400">Loading coverage details from database...</td>
+                    </tr>
+                  ) : coverageData?.projects?.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-6 py-8 text-center text-slate-400">No open projects expected to close in this period.</td>
+                    </tr>
+                  ) : (
+                    coverageData?.projects?.map((p: any) => {
+                      return (
+                        <tr key={p.projectId} className="hover:bg-slate-50/70 transition-colors">
+                          <td className="px-5 py-4">
+                            <div className="font-bold text-sm text-slate-900">{p.projectTitle}</div>
+                            <div className="text-[11px] text-slate-500">{p.customerName}</div>
+                          </td>
+
+                          <td className="px-5 py-4 font-medium text-slate-800">
+                            {p.picName}
+                            {p.isPicInvalid && (
+                              <span className="ml-1.5 px-1.5 py-0.5 bg-rose-100 text-rose-700 text-[9px] font-bold rounded">
+                                Invalid PIC
+                              </span>
+                            )}
+                          </td>
+
+                          <td className="px-5 py-4">
+                            <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 text-[10px] font-bold rounded-md">
+                              {p.stageId}
+                            </span>
+                            <div className="text-[11px] text-slate-500 font-mono mt-0.5">
+                              {p.expectedCloseDate ? String(p.expectedCloseDate).slice(0, 10) : 'No date'}
+                            </div>
+                          </td>
+
+                          <td className="px-5 py-4 font-mono font-bold text-slate-900">
+                            {formatCurrency(p.value)}
+                            <div className="text-[11px] text-indigo-600 font-semibold">
+                              {p.probability !== null ? `${p.probability}% (${formatCurrency(p.weightedValue)})` : 'No prob'}
+                            </div>
+                          </td>
+
+                          <td className="px-5 py-4">
+                            {p.hasNextAction ? (
+                              <div>
+                                <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 text-[10px] font-bold rounded-md border border-emerald-200">
+                                  {p.nextAction?.type || 'ACTION'}: {p.nextAction?.title || 'Scheduled'}
+                                </span>
+                                <div className="text-[10px] text-slate-500 font-mono mt-0.5">
+                                  Due: {p.nextAction?.date || '-'}
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="px-2 py-0.5 bg-amber-50 text-amber-800 text-[10px] font-bold rounded-md border border-amber-200">
+                                ⚠️ Missing Next Action
+                              </span>
+                            )}
+                          </td>
+
+                          <td className="px-5 py-4">
+                            {p.hasOverdueAction ? (
+                              <span className="px-2 py-0.5 bg-rose-50 text-rose-700 text-[10px] font-bold rounded-md border border-rose-200">
+                                {p.overdueActionsCount} overdue action{p.overdueActionsCount > 1 ? 's' : ''}
+                              </span>
+                            ) : (
+                              <span className="text-[11px] text-slate-400 font-medium">None</span>
+                            )}
+                          </td>
+
+                          <td className="px-5 py-4 text-right">
+                            {p.hasActiveCadence ? (
+                              p.isCadenceBlocked ? (
+                                <span className="px-2 py-0.5 bg-rose-100 text-rose-800 text-[10px] font-bold rounded-md">
+                                  Blocked Cadence
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 text-[10px] font-bold rounded-md">
+                                  Active Cadence
+                                </span>
+                              )
+                            ) : (
+                              <span className="text-slate-400 text-xs">-</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
       {showModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-md w-full p-6 space-y-4">

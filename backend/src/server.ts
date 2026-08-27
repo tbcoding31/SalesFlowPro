@@ -3832,8 +3832,392 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
 });
 
 // ==========================================
-// R47 PROJECT PIPELINE STAGE GOVERNANCE
+// R50 TARGET PACE & COMMERCIAL ACTIVITY COVERAGE
 // ==========================================
+
+app.get('/api/sales-targets/coverage', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && targetTenant !== actorTenant) {
+    return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
+  }
+
+  const todayStr = getBusinessDate(new Date()) || new Date().toISOString().slice(0, 10);
+  const evaluatedAt = new Date().toISOString();
+
+  try {
+    const hasReportPerm = actorRole === 'SUPER_ADMIN' ||
+      actorPermissions.includes('ALL') ||
+      actorPermissions.includes('MANAGE_TENANT') ||
+      actorPermissions.includes('VIEW_REPORTS') ||
+      actorPermissions.includes('MANAGE_USERS');
+
+    if (!hasReportPerm) {
+      return res.status(403).json({ error: 'Forbidden: Insufficient permissions to view commercial activity coverage.' });
+    }
+
+    let effectiveScope: 'OWN' | 'TEAM' | 'ORGANIZATION' = actorDataScope;
+    if (actorRole === 'SUPER_ADMIN' || actorPermissions.includes('ALL') || actorPermissions.includes('MANAGE_TENANT')) {
+      effectiveScope = 'ORGANIZATION';
+    }
+
+    // Default period: Current Month (e.g. 2026-08-01 to 2026-08-31)
+    const [curYear, curMonth] = todayStr.split('-');
+    const defaultPeriodStart = `${curYear}-${curMonth}-01`;
+    const lastDayOfMonth = new Date(Number(curYear), Number(curMonth), 0).getDate();
+    const defaultPeriodEnd = `${curYear}-${curMonth}-${String(lastDayOfMonth).padStart(2, '0')}`;
+
+    const periodStart = (req.query.periodStart as string) || defaultPeriodStart;
+    const periodEnd = (req.query.periodEnd as string) || defaultPeriodEnd;
+
+    const isHistoricalPeriod = periodEnd < todayStr;
+    const isCoverageAvailable = !isHistoricalPeriod;
+
+    // Linear Target Pace calculation
+    const dStart = new Date(`${periodStart}T00:00:00+07:00`);
+    const dEnd = new Date(`${periodEnd}T23:59:59+07:00`);
+    const dToday = new Date(`${todayStr}T12:00:00+07:00`);
+
+    const totalPeriodDays = Math.max(1, Math.round((dEnd.getTime() - dStart.getTime()) / (1000 * 60 * 60 * 24)) + 1);
+    let elapsedPeriodDays = 0;
+    let elapsedPeriodPercent = 0;
+
+    if (isHistoricalPeriod) {
+      elapsedPeriodDays = totalPeriodDays;
+      elapsedPeriodPercent = 100;
+    } else if (periodStart > todayStr) {
+      elapsedPeriodDays = 0;
+      elapsedPeriodPercent = 0;
+    } else {
+      elapsedPeriodDays = Math.max(1, Math.min(totalPeriodDays, Math.round((dToday.getTime() - dStart.getTime()) / (1000 * 60 * 60 * 24)) + 1));
+      elapsedPeriodPercent = parseFloat(((elapsedPeriodDays / totalPeriodDays) * 100).toFixed(1));
+    }
+
+    // 1. Fetch Reps and Teams
+    let repQuery = `
+      SELECT 
+        tu.id as tenantUserId, tu.userId, u.name, u.email, u.status as userStatus,
+        tm.teamId, t.name as teamName, tm.role as teamRole
+      FROM tenant_users tu
+      JOIN users u ON u.id = tu.userId
+      LEFT JOIN team_members tm ON tm.tenantUserId = tu.id
+      LEFT JOIN teams t ON t.id = tm.teamId
+      WHERE tu.tenantId = ?
+    `;
+    const repParams: any[] = [targetTenant];
+
+    if (effectiveScope === 'OWN') {
+      repQuery += ` AND u.id = ?`;
+      repParams.push(actorUserId);
+    } else if (effectiveScope === 'TEAM') {
+      repQuery += ` AND tm.teamId IN (
+        SELECT tm2.teamId FROM team_members tm2
+        JOIN tenant_users tu2 ON tu2.id = tm2.tenantUserId
+        WHERE tu2.userId = ? AND tu2.tenantId = ? AND tu2.status = 'ACTIVE'
+      )`;
+      repParams.push(actorUserId, targetTenant);
+    }
+
+    repQuery += ` ORDER BY u.name ASC`;
+    const [reps]: any = await pool.query(repQuery, repParams);
+    const repUserIds = reps.map((r: any) => r.userId);
+    const repTenantUserIds = reps.map((r: any) => r.tenantUserId);
+    const repTeamIds = Array.from(new Set(reps.map((r: any) => r.teamId).filter(Boolean)));
+
+    // 2. Batch Fetch Target-Period Open Projects in Tenant
+    const [periodOpenProjects]: any = await pool.query(`
+      SELECT 
+        p.id, p.title, p.value, p.probability, p.expectedCloseDate, p.stageId,
+        p.customerId, c.name as customerName,
+        p.picId, tu.id as picTenantUserId, tm.teamId as picTeamId,
+        u.name as picName, u.status as picUserStatus, tu.status as picTenantUserStatus
+      FROM projects p
+      LEFT JOIN customers c ON c.id = p.customerId
+      LEFT JOIN users u ON u.id = p.picId
+      LEFT JOIN tenant_users tu ON tu.userId = p.picId AND tu.tenantId = p.tenantId
+      LEFT JOIN team_members tm ON tm.tenantUserId = tu.id
+      WHERE p.tenantId = ?
+        AND p.stageId NOT IN ('WON', 'LOST')
+        AND p.expectedCloseDate IS NOT NULL
+        AND DATE(p.expectedCloseDate) >= ? AND DATE(p.expectedCloseDate) <= ?
+    `, [targetTenant, periodStart, periodEnd]);
+
+    // Scoped projects based on effective scope
+    const scopedProjects = periodOpenProjects.filter((p: any) => {
+      if (effectiveScope === 'ORGANIZATION') return true;
+      if (effectiveScope === 'TEAM') return p.picTeamId && repTeamIds.includes(p.picTeamId);
+      return p.picId === actorUserId;
+    });
+
+    const scopedProjectIds = scopedProjects.map((p: any) => p.id);
+
+    // 3. Batch Fetch Unresolved Actions (Tasks, Visits, Follow-ups) for Scoped Projects
+    let openTasks: any[] = [];
+    let openVisits: any[] = [];
+    let openFollowups: any[] = [];
+    let activeCadences: any[] = [];
+
+    if (scopedProjectIds.length > 0) {
+      const [tRows]: any = await pool.query(
+        `SELECT id, relatedProjectId, dueDate, title, statusId FROM tasks WHERE relatedProjectId IN (?) AND statusId NOT IN ('COMPLETED', 'CANCELLED')`,
+        [scopedProjectIds]
+      );
+      openTasks = tRows;
+
+      const [vRows]: any = await pool.query(
+        `SELECT id, relatedProjectId, visitDate, title, purposeId, statusId FROM visits WHERE relatedProjectId IN (?) AND statusId NOT IN ('COMPLETED', 'CANCELLED')`,
+        [scopedProjectIds]
+      );
+      openVisits = vRows;
+
+      const [fRows]: any = await pool.query(
+        `SELECT id, relatedProjectId, followUpDate, notes, status FROM follow_ups WHERE relatedProjectId IN (?) AND status NOT IN ('COMPLETED', 'CANCELLED')`,
+        [scopedProjectIds]
+      );
+      openFollowups = fRows;
+
+      const [cadRows]: any = await pool.query(
+        `SELECT id, projectId, title, status, lastGeneratedActionId, lastGeneratedActionType FROM maintenance_cadences WHERE projectId IN (?) AND status = 'ACTIVE'`,
+        [scopedProjectIds]
+      );
+      activeCadences = cadRows;
+    }
+
+    // 4. Deterministic Coverage Calculation per Project
+    const projectCoverageList = isCoverageAvailable ? scopedProjects.map((p: any) => {
+      const pTasks = openTasks.filter(t => t.relatedProjectId === p.id);
+      const pVisits = openVisits.filter(v => v.relatedProjectId === p.id);
+      const pFollowups = openFollowups.filter(f => f.relatedProjectId === p.id);
+      const pCadences = activeCadences.filter(c => c.projectId === p.id);
+
+      const totalOpenActions = pTasks.length + pVisits.length + pFollowups.length;
+      const hasNextAction = totalOpenActions > 0;
+
+      // Overdue action evaluation
+      const overdueTasks = pTasks.filter(t => t.dueDate && (getBusinessDate(t.dueDate) || String(t.dueDate).slice(0, 10)) < todayStr);
+      const overdueVisits = pVisits.filter(v => v.visitDate && (getBusinessDate(v.visitDate) || String(v.visitDate).slice(0, 10)) < todayStr);
+      const overdueFollowups = pFollowups.filter(f => f.followUpDate && (getBusinessDate(f.followUpDate) || String(f.followUpDate).slice(0, 10)) < todayStr);
+      const overdueActionsCount = overdueTasks.length + overdueVisits.length + overdueFollowups.length;
+      const hasOverdueAction = overdueActionsCount > 0;
+
+      // Cadence health evaluation
+      const hasActiveCadence = pCadences.length > 0;
+      let isCadenceBlocked = false;
+
+      // Check invalid PIC
+      const isPicInvalid = !p.picId || p.picUserStatus !== 'ACTIVE' || p.picTenantUserStatus !== 'ACTIVE';
+      if (hasActiveCadence && isPicInvalid) {
+        isCadenceBlocked = true;
+      }
+
+      // Next Action summary
+      let nextActionSummary: any = null;
+      if (hasNextAction) {
+        const actionCandidates: any[] = [
+          ...pTasks.map(t => ({ id: t.id, type: 'TASK', title: t.title, date: getBusinessDate(t.dueDate) })),
+          ...pVisits.map(v => ({ id: v.id, type: 'VISIT', title: v.purpose || 'Field Visit', date: getBusinessDate(v.visitDate) })),
+          ...pFollowups.map(f => ({ id: f.id, type: 'FOLLOW_UP', title: f.notes || 'Follow-up Call', date: getBusinessDate(f.followUpDate) }))
+        ].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+        nextActionSummary = actionCandidates[0] || null;
+      }
+
+      return {
+        projectId: p.id,
+        projectTitle: p.title,
+        customerId: p.customerId,
+        customerName: p.customerName || 'Unknown Customer',
+        picId: p.picId,
+        picTenantUserId: p.picTenantUserId,
+        picName: p.picName || 'Unassigned',
+        picTeamId: p.picTeamId,
+        stageId: p.stageId,
+        expectedCloseDate: p.expectedCloseDate,
+        value: p.value !== null ? Number(p.value) : null,
+        probability: p.probability !== null ? Number(p.probability) : null,
+        weightedValue: (p.value !== null && p.probability !== null) ? Number(p.value) * Number(p.probability) / 100 : null,
+        hasNextAction,
+        hasOverdueAction,
+        overdueActionsCount,
+        hasActiveCadence,
+        isCadenceBlocked,
+        isPicInvalid,
+        nextAction: nextActionSummary
+      };
+    }) : [];
+
+    // 5. Representative Aggregation
+    const repCoverageList = reps.map((rep: any) => {
+      if (!isCoverageAvailable) {
+        return {
+          tenantUserId: rep.tenantUserId,
+          userId: rep.userId,
+          name: rep.name,
+          email: rep.email,
+          teamId: rep.teamId,
+          teamName: rep.teamName || 'General',
+          isCoverageAvailable: false,
+          eligibleTargetPeriodProjects: null,
+          projectsWithNextAction: null,
+          projectsMissingNextAction: null,
+          nextActionCoveragePercent: null,
+          projectsWithOverdueActions: null,
+          overdueActionsCount: null,
+          projectsWithBlockedCadence: null,
+          coveredPipelineValue: null,
+          uncoveredPipelineValue: null,
+          coveredWeightedPipelineValue: null,
+          uncoveredWeightedPipelineValue: null,
+          weightedPipelineCoveragePercent: null
+        };
+      }
+
+      const repProjects = projectCoverageList.filter((p: any) => p.picTenantUserId === rep.tenantUserId);
+      const eligibleCount = repProjects.length;
+      const withNextAction = repProjects.filter((p: any) => p.hasNextAction);
+      const missingNextAction = repProjects.filter((p: any) => !p.hasNextAction);
+      const withOverdue = repProjects.filter((p: any) => p.hasOverdueAction);
+      const overdueCount = repProjects.reduce((sum: number, p: any) => sum + p.overdueActionsCount, 0);
+      const withBlockedCadence = repProjects.filter((p: any) => p.isCadenceBlocked);
+
+      const coveredPipelineValue = withNextAction.reduce((sum: number, p: any) => sum + (p.value || 0), 0);
+      const uncoveredPipelineValue = missingNextAction.reduce((sum: number, p: any) => sum + (p.value || 0), 0);
+
+      const coveredWeightedPipelineValue = withNextAction.reduce((sum: number, p: any) => sum + (p.weightedValue || 0), 0);
+      const uncoveredWeightedPipelineValue = missingNextAction.reduce((sum: number, p: any) => sum + (p.weightedValue || 0), 0);
+      const totalWeighted = coveredWeightedPipelineValue + uncoveredWeightedPipelineValue;
+
+      const nextActionCoveragePercent = eligibleCount > 0
+        ? parseFloat(((withNextAction.length / eligibleCount) * 100).toFixed(1))
+        : null;
+
+      const weightedPipelineCoveragePercent = totalWeighted > 0
+        ? parseFloat(((coveredWeightedPipelineValue / totalWeighted) * 100).toFixed(1))
+        : null;
+
+      return {
+        tenantUserId: rep.tenantUserId,
+        userId: rep.userId,
+        name: rep.name,
+        email: rep.email,
+        teamId: rep.teamId,
+        teamName: rep.teamName || 'General',
+        isCoverageAvailable: true,
+        eligibleTargetPeriodProjects: eligibleCount,
+        projectsWithNextAction: withNextAction.length,
+        projectsMissingNextAction: missingNextAction.length,
+        nextActionCoveragePercent,
+        projectsWithOverdueActions: withOverdue.length,
+        overdueActionsCount: overdueCount,
+        projectsWithBlockedCadence: withBlockedCadence.length,
+        coveredPipelineValue,
+        uncoveredPipelineValue,
+        coveredWeightedPipelineValue: parseFloat(coveredWeightedPipelineValue.toFixed(2)),
+        uncoveredWeightedPipelineValue: parseFloat(uncoveredWeightedPipelineValue.toFixed(2)),
+        weightedPipelineCoveragePercent
+      };
+    });
+
+    // 6. Summary Aggregation
+    let summaryData: any = {
+      isCoverageAvailable,
+      linearPace: {
+        totalPeriodDays,
+        elapsedPeriodDays,
+        elapsedPeriodPercent
+      },
+      eligibleTargetPeriodProjects: null,
+      projectsWithNextAction: null,
+      projectsMissingNextAction: null,
+      nextActionCoveragePercent: null,
+      projectsWithOverdueActions: null,
+      overdueActionsCount: null,
+      projectsWithBlockedCadence: null,
+      projectsWithInvalidPic: null,
+      coveredPipelineValue: null,
+      uncoveredPipelineValue: null,
+      coveredWeightedPipelineValue: null,
+      uncoveredWeightedPipelineValue: null,
+      weightedPipelineCoveragePercent: null
+    };
+
+    if (isCoverageAvailable) {
+      const eligibleCount = projectCoverageList.length;
+      const withNextAction = projectCoverageList.filter((p: any) => p.hasNextAction);
+      const missingNextAction = projectCoverageList.filter((p: any) => !p.hasNextAction);
+      const withOverdue = projectCoverageList.filter((p: any) => p.hasOverdueAction);
+      const overdueCount = projectCoverageList.reduce((sum: number, p: any) => sum + p.overdueActionsCount, 0);
+      const withBlockedCadence = projectCoverageList.filter((p: any) => p.isCadenceBlocked);
+      const withInvalidPic = projectCoverageList.filter((p: any) => p.isPicInvalid);
+
+      const coveredPipelineValue = withNextAction.reduce((sum: number, p: any) => sum + (p.value || 0), 0);
+      const uncoveredPipelineValue = missingNextAction.reduce((sum: number, p: any) => sum + (p.value || 0), 0);
+
+      const coveredWeightedPipelineValue = withNextAction.reduce((sum: number, p: any) => sum + (p.weightedValue || 0), 0);
+      const uncoveredWeightedPipelineValue = missingNextAction.reduce((sum: number, p: any) => sum + (p.weightedValue || 0), 0);
+      const totalWeighted = coveredWeightedPipelineValue + uncoveredWeightedPipelineValue;
+
+      const nextActionCoveragePercent = eligibleCount > 0
+        ? parseFloat(((withNextAction.length / eligibleCount) * 100).toFixed(1))
+        : null;
+
+      const weightedPipelineCoveragePercent = totalWeighted > 0
+        ? parseFloat(((coveredWeightedPipelineValue / totalWeighted) * 100).toFixed(1))
+        : null;
+
+      summaryData = {
+        isCoverageAvailable: true,
+        linearPace: {
+          totalPeriodDays,
+          elapsedPeriodDays,
+          elapsedPeriodPercent
+        },
+        eligibleTargetPeriodProjects: eligibleCount,
+        projectsWithNextAction: withNextAction.length,
+        projectsMissingNextAction: missingNextAction.length,
+        nextActionCoveragePercent,
+        projectsWithOverdueActions: withOverdue.length,
+        overdueActionsCount: overdueCount,
+        projectsWithBlockedCadence: withBlockedCadence.length,
+        projectsWithInvalidPic: withInvalidPic.length,
+        coveredPipelineValue,
+        uncoveredPipelineValue,
+        coveredWeightedPipelineValue: parseFloat(coveredWeightedPipelineValue.toFixed(2)),
+        uncoveredWeightedPipelineValue: parseFloat(uncoveredWeightedPipelineValue.toFixed(2)),
+        weightedPipelineCoveragePercent
+      };
+    }
+
+    res.json({
+      businessDate: todayStr,
+      evaluatedAt,
+      scope: effectiveScope,
+      period: {
+        periodStart,
+        periodEnd,
+        isHistoricalPeriod,
+        isCoverageAvailable
+      },
+      summary: summaryData,
+      repCoverage: repCoverageList,
+      projects: isCoverageAvailable ? projectCoverageList : []
+    });
+
+  } catch (err: any) {
+    console.error('Error in /api/sales-targets/coverage:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
 
 export interface StageTransitionValidationResult {
   allowed: boolean;

@@ -383,6 +383,23 @@ export const crmApi = {
     }
   },
 
+  fetchSalesTargetActivityCoverage: async (filters?: { periodStart?: string; periodEnd?: string; tenantId?: string }): Promise<any> => {
+    try {
+      const params = new URLSearchParams();
+      if (filters?.periodStart) params.set('periodStart', filters.periodStart);
+      if (filters?.periodEnd) params.set('periodEnd', filters.periodEnd);
+      if (filters?.tenantId && filters.tenantId !== 'ALL') params.set('tenantId', filters.tenantId);
+
+      const url = `${API_BASE}/sales-targets/coverage${params.toString() ? '?' + params.toString() : ''}`;
+      const res = await fetch(url, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch target activity coverage`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchSalesTargetActivityCoverage error]', err);
+      return null;
+    }
+  },
+
   fetchPipelineAnalytics: async (filters?: { fromDate?: string; toDate?: string; teamId?: string; repId?: string }): Promise<any> => {
     try {
       const params = new URLSearchParams();
