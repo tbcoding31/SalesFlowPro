@@ -300,6 +300,23 @@ export const crmApi = {
       console.error('[crmApi.fetchControlTower error]', err);
       return null;
     }
+  },
+
+  fetchPipelineAnalytics: async (filters?: { fromDate?: string; toDate?: string; teamId?: string; repId?: string }): Promise<any> => {
+    try {
+      const params = new URLSearchParams();
+      if (filters?.fromDate) params.set('fromDate', filters.fromDate);
+      if (filters?.toDate) params.set('toDate', filters.toDate);
+      if (filters?.teamId) params.set('teamId', filters.teamId);
+      if (filters?.repId) params.set('repId', filters.repId);
+      const url = `${API_BASE}/reports/pipeline${params.toString() ? '?' + params.toString() : ''}`;
+      const res = await fetch(url, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch pipeline analytics`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchPipelineAnalytics error]', err);
+      return null;
+    }
   }
 };
 

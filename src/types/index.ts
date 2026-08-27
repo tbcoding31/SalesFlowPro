@@ -527,3 +527,86 @@ export interface ControlTowerResponse {
   overdueWork: any[];
   blockedCadences: any[];
 }
+
+export interface PipelineStageSummary {
+  stage: string;
+  label: string;
+  count: number;
+  value: number;
+  weightedValue: number;
+}
+
+export interface RepPipelineSummary {
+  userId: string;
+  name: string;
+  email: string;
+  teamId?: string;
+  teamName?: string;
+  openProjects: number;
+  pipelineValue: number;
+  weightedPipelineValue: number;
+  wonProjects: number;
+  wonValue: number;
+  lostProjects: number;
+  lostValue: number;
+  winRate: number;
+}
+
+export interface StageVelocityMetric {
+  stage: string;
+  label: string;
+  transitionCount: number;
+  averageDays: number;
+  medianDays: number;
+}
+
+export interface ExpectedCloseForecastMonth {
+  month: string; // YYYY-MM
+  label: string;
+  projectCount: number;
+  pipelineValue: number;
+  weightedValue: number;
+}
+
+export interface PipelineAnalyticsSummary {
+  openProjects: number;
+  pipelineValue: number;
+  weightedPipelineValue: number;
+  wonProjects: number;
+  wonValue: number;
+  lostProjects: number;
+  lostValue: number;
+  winRate: number;
+  conversionRate: number;
+  averageSalesCycleDays: number;
+  medianSalesCycleDays: number;
+  averageOpenProjectAgeDays: number;
+}
+
+export interface PipelineAnalyticsCoverage {
+  totalProjects: number;
+  openProjects: number;
+  closedProjects: number;
+  projectsWithStageHistory: number;
+  projectsWithExpectedCloseDate: number;
+  projectsWithProbability: number;
+  projectsExcludedFromCycleMetrics: number;
+}
+
+export interface PipelineAnalyticsResponse {
+  businessDate: string;
+  evaluatedAt: string;
+  scope: 'OWN' | 'TEAM' | 'ORGANIZATION' | string;
+  currency: string;
+  summary: PipelineAnalyticsSummary;
+  stageDistribution: PipelineStageSummary[];
+  repPipeline: RepPipelineSummary[];
+  stageVelocity: StageVelocityMetric[];
+  expectedCloseForecast: {
+    overdue: { count: number; value: number; weightedValue: number };
+    upcomingMonths: ExpectedCloseForecastMonth[];
+    missingCloseDate: { count: number; value: number; weightedValue: number };
+  };
+  coverage: PipelineAnalyticsCoverage;
+  recentProjects: any[];
+}

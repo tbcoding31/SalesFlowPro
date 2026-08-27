@@ -2530,6 +2530,412 @@ app.get('/api/reports/sales', async (req, res) => {
   }
 });
 
+// GET /api/reports/pipeline: Comprehensive Project Pipeline Analytics & Sales Cycle Intelligence
+app.get('/api/reports/pipeline', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  // Capability check: VIEW_REPORTS or management
+  const canViewReports = actorPermissions.includes('ALL') ||
+    actorPermissions.includes('MANAGE_TENANT') ||
+    actorPermissions.includes('VIEW_REPORTS') ||
+    actorPermissions.includes('VIEW_ALL_TASKS') ||
+    actorPermissions.includes('VIEW_TEAM_TASKS') ||
+    actorRole === 'SUPER_ADMIN' ||
+    actorRole === 'TENANT_ADMIN' ||
+    actorRole === 'SALES_MANAGER' ||
+    actorRole === 'SUPERVISOR';
+
+  if (!canViewReports) {
+    return res.status(403).json({ error: 'Access denied. VIEW_REPORTS permission required.' });
+  }
+
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  const todayStr = getBusinessDate(new Date())!;
+  const evaluatedAt = new Date().toISOString();
+
+  try {
+    let effectiveScope = actorDataScope;
+    if (actorRole === 'SUPER_ADMIN' || actorPermissions.includes('ALL') || actorPermissions.includes('MANAGE_TENANT')) {
+      effectiveScope = 'ORGANIZATION';
+    }
+
+    const requestedRepId = req.query.repId ? String(req.query.repId).trim() : null;
+    const requestedTeamId = req.query.teamId ? String(req.query.teamId).trim() : null;
+
+    // Verify teamId access under TEAM scope
+    if (requestedTeamId && effectiveScope === 'TEAM') {
+      const [actorTeamRows]: any = await pool.query(`
+        SELECT tm.teamId FROM team_members tm
+        JOIN tenant_users tu ON tu.id = tm.tenantUserId
+        WHERE tu.userId = ? AND tu.tenantId = ? AND tu.status = 'ACTIVE'
+      `, [actorUserId, targetTenant]);
+      const actorTeamIds = new Set(actorTeamRows.map((t: any) => t.teamId));
+      if (!actorTeamIds.has(requestedTeamId)) {
+        return res.status(403).json({ error: 'Access denied to requested team (BOLA/Scope violation).' });
+      }
+    }
+
+    // 1. Resolve authorized reps in scope
+    let repListQuery = `
+      SELECT 
+        u.id as userId, u.name, u.email, tu.status,
+        tm.teamId, t.name as teamName, r.name as roleName
+      FROM users u
+      JOIN tenant_users tu ON tu.userId = u.id AND tu.tenantId = ?
+      LEFT JOIN team_members tm ON tm.tenantUserId = tu.id
+      LEFT JOIN teams t ON t.id = tm.teamId
+      LEFT JOIN tenant_user_roles tur ON tur.tenantUserId = tu.id
+      LEFT JOIN roles r ON r.id = tur.roleId
+      WHERE 1=1
+    `;
+    const repListParams: any[] = [targetTenant];
+
+    if (effectiveScope === 'OWN') {
+      repListQuery += ` AND u.id = ?`;
+      repListParams.push(actorUserId);
+    } else if (effectiveScope === 'TEAM') {
+      repListQuery += ` AND tm.teamId IN (
+        SELECT tm2.teamId FROM team_members tm2
+        JOIN tenant_users tu2 ON tu2.id = tm2.tenantUserId
+        WHERE tu2.userId = ? AND tu2.tenantId = ? AND tu2.status = 'ACTIVE'
+      )`;
+      repListParams.push(actorUserId, targetTenant);
+    }
+
+    if (requestedTeamId) {
+      repListQuery += ` AND tm.teamId = ?`;
+      repListParams.push(requestedTeamId);
+    }
+
+    if (requestedRepId) {
+      repListQuery += ` AND u.id = ?`;
+      repListParams.push(requestedRepId);
+    }
+
+    repListQuery += ` ORDER BY u.name ASC`;
+    const [authorizedReps]: any = await pool.query(repListQuery, repListParams);
+    const authorizedRepIds = new Set(authorizedReps.map((r: any) => r.userId));
+
+    if (requestedRepId && !authorizedRepIds.has(requestedRepId)) {
+      return res.status(403).json({ error: 'Access denied to requested representative (BOLA/Scope violation).' });
+    }
+
+    // 2. Fetch scoped projects
+    const { where: projWhere, params: projParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'p.picId');
+    let baseProjSql = `
+      SELECT 
+        p.id, p.tenantId, p.customerId, p.title, p.value, p.probability,
+        p.expectedCloseDate, p.stageId, p.source, p.picId, p.createdAt,
+        c.name as customerName, c.code as customerCode,
+        u.name as picName, u.email as picEmail
+      FROM projects p
+      LEFT JOIN customers c ON c.id = p.customerId
+      LEFT JOIN users u ON u.id = p.picId
+      ${projWhere.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
+    `;
+    const finalProjParams = [...projParams];
+
+    if (requestedRepId) {
+      baseProjSql += ` AND p.picId = ?`;
+      finalProjParams.push(requestedRepId);
+    }
+
+    const [scopedProjects]: any = await pool.query(baseProjSql, finalProjParams);
+
+    // 3. Batch fetch stage histories
+    const projectIds = scopedProjects.map((p: any) => p.id);
+    let stageHistories: any[] = [];
+    if (projectIds.length > 0) {
+      const [shRows]: any = await pool.query(`
+        SELECT projectId, fromStageId, toStageId, changedById, changedAt, notes
+        FROM project_stage_histories
+        WHERE projectId IN (?)
+        ORDER BY changedAt ASC
+      `, [projectIds]);
+      stageHistories = shRows;
+    }
+
+    const historiesByProject: Record<string, any[]> = {};
+    stageHistories.forEach((sh: any) => {
+      if (!historiesByProject[sh.projectId]) historiesByProject[sh.projectId] = [];
+      historiesByProject[sh.projectId].push(sh);
+    });
+
+    // 4. Compute Metrics
+    const canonicalStages = [
+      { key: 'LEAD', label: 'Lead' },
+      { key: 'QUALIFICATION', label: 'Qualification' },
+      { key: 'PROPOSAL', label: 'Proposal' },
+      { key: 'NEGOTIATION', label: 'Negotiation' },
+      { key: 'WON', label: 'Won' },
+      { key: 'LOST', label: 'Lost' }
+    ];
+
+    let openProjectsCount = 0;
+    let pipelineValueSum = 0;
+    let weightedPipelineValueSum = 0;
+    let wonProjectsCount = 0;
+    let wonValueSum = 0;
+    let lostProjectsCount = 0;
+    let lostValueSum = 0;
+
+    let totalOpenAgeDays = 0;
+    let openProjectsWithAgeCount = 0;
+
+    const closedCycleDurations: number[] = [];
+    const stageDurations: Record<string, number[]> = {
+      LEAD: [],
+      QUALIFICATION: [],
+      PROPOSAL: [],
+      NEGOTIATION: []
+    };
+
+    const stageSummaryMap: Record<string, { count: number; value: number; weightedValue: number }> = {};
+    canonicalStages.forEach(s => {
+      stageSummaryMap[s.key] = { count: 0, value: 0, weightedValue: 0 };
+    });
+
+    const repSummaryMap: Record<string, any> = {};
+    authorizedReps.forEach((r: any) => {
+      repSummaryMap[r.userId] = {
+        userId: r.userId,
+        name: r.name,
+        email: r.email,
+        teamId: r.teamId,
+        teamName: r.teamName || 'General',
+        openProjects: 0,
+        pipelineValue: 0,
+        weightedPipelineValue: 0,
+        wonProjects: 0,
+        wonValue: 0,
+        lostProjects: 0,
+        lostValue: 0
+      };
+    });
+
+    let overdueForecast = { count: 0, value: 0, weightedValue: 0 };
+    let missingCloseDateForecast = { count: 0, value: 0, weightedValue: 0 };
+    const monthBucketsMap: Record<string, { projectCount: number; pipelineValue: number; weightedValue: number }> = {};
+
+    let projectsWithExpectedCloseDateCount = 0;
+    let projectsWithProbabilityCount = 0;
+    let projectsWithStageHistoryCount = 0;
+
+    for (const proj of scopedProjects) {
+      const val = Number(proj.value) || 0;
+      let prob = proj.probability !== null && proj.probability !== undefined ? Number(proj.probability) : (proj.stageId === 'WON' ? 100 : proj.stageId === 'LOST' ? 0 : 50);
+      if (prob < 0) prob = 0;
+      if (prob > 100) prob = 100;
+
+      const weightedVal = (val * prob) / 100;
+      const stage = proj.stageId || 'LEAD';
+      const isOpen = stage !== 'WON' && stage !== 'LOST';
+      const isWon = stage === 'WON';
+      const isLost = stage === 'LOST';
+
+      if (proj.expectedCloseDate) projectsWithExpectedCloseDateCount++;
+      if (proj.probability !== null && proj.probability !== undefined) projectsWithProbabilityCount++;
+
+      if (stageSummaryMap[stage]) {
+        stageSummaryMap[stage].count++;
+        stageSummaryMap[stage].value += val;
+        stageSummaryMap[stage].weightedValue += weightedVal;
+      }
+
+      if (proj.picId && repSummaryMap[proj.picId]) {
+        if (isOpen) {
+          repSummaryMap[proj.picId].openProjects++;
+          repSummaryMap[proj.picId].pipelineValue += val;
+          repSummaryMap[proj.picId].weightedPipelineValue += weightedVal;
+        } else if (isWon) {
+          repSummaryMap[proj.picId].wonProjects++;
+          repSummaryMap[proj.picId].wonValue += val;
+        } else if (isLost) {
+          repSummaryMap[proj.picId].lostProjects++;
+          repSummaryMap[proj.picId].lostValue += val;
+        }
+      }
+
+      if (isOpen) {
+        openProjectsCount++;
+        pipelineValueSum += val;
+        weightedPipelineValueSum += weightedVal;
+
+        if (proj.createdAt) {
+          const createdDate = new Date(proj.createdAt);
+          const todayDate = new Date(todayStr);
+          const ageDays = Math.max(0, Math.floor((todayDate.getTime() - createdDate.getTime()) / (1000 * 60 * 60 * 24)));
+          totalOpenAgeDays += ageDays;
+          openProjectsWithAgeCount++;
+        }
+
+        if (!proj.expectedCloseDate) {
+          missingCloseDateForecast.count++;
+          missingCloseDateForecast.value += val;
+          missingCloseDateForecast.weightedValue += weightedVal;
+        } else {
+          const expClose = getBusinessDate(proj.expectedCloseDate)!;
+          if (expClose < todayStr) {
+            overdueForecast.count++;
+            overdueForecast.value += val;
+            overdueForecast.weightedValue += weightedVal;
+          } else {
+            const mKey = expClose.slice(0, 7);
+            if (!monthBucketsMap[mKey]) {
+              monthBucketsMap[mKey] = { projectCount: 0, pipelineValue: 0, weightedValue: 0 };
+            }
+            monthBucketsMap[mKey].projectCount++;
+            monthBucketsMap[mKey].pipelineValue += val;
+            monthBucketsMap[mKey].weightedValue += weightedVal;
+          }
+        }
+      } else if (isWon) {
+        wonProjectsCount++;
+        wonValueSum += val;
+      } else if (isLost) {
+        lostProjectsCount++;
+        lostValueSum += val;
+      }
+
+      const pHistories = historiesByProject[proj.id] || [];
+      if (pHistories.length > 0) {
+        projectsWithStageHistoryCount++;
+
+        for (let i = 0; i < pHistories.length; i++) {
+          const curr = pHistories[i];
+          const prevTime = i === 0 ? (proj.createdAt ? new Date(proj.createdAt).getTime() : new Date(curr.changedAt).getTime()) : new Date(pHistories[i - 1].changedAt).getTime();
+          const currTime = new Date(curr.changedAt).getTime();
+          const durationDays = Math.max(0, Math.round((currTime - prevTime) / (1000 * 60 * 60 * 24)));
+          const fromSt = curr.fromStageId;
+          if (fromSt && stageDurations[fromSt]) {
+            stageDurations[fromSt].push(durationDays);
+          }
+        }
+
+        if (isWon || isLost) {
+          const terminalHistory = pHistories.filter((h: any) => h.toStageId === 'WON' || h.toStageId === 'LOST').pop();
+          if (terminalHistory) {
+            const startTime = proj.createdAt ? new Date(proj.createdAt).getTime() : new Date(pHistories[0].changedAt).getTime();
+            const endTime = new Date(terminalHistory.changedAt).getTime();
+            const cycleDays = Math.max(0, Math.round((endTime - startTime) / (1000 * 60 * 60 * 24)));
+            closedCycleDurations.push(cycleDays);
+          }
+        }
+      } else if ((isWon || isLost) && proj.createdAt) {
+        const cycleDays = Math.max(0, Math.round((new Date().getTime() - new Date(proj.createdAt).getTime()) / (1000 * 60 * 60 * 24)));
+        closedCycleDurations.push(cycleDays);
+      }
+    }
+
+    const closedProjectsCount = wonProjectsCount + lostProjectsCount;
+    const winRate = closedProjectsCount > 0 ? parseFloat(((wonProjectsCount / closedProjectsCount) * 100).toFixed(1)) : 0;
+    const totalProjectsCount = scopedProjects.length;
+    const conversionRate = totalProjectsCount > 0 ? parseFloat(((wonProjectsCount / totalProjectsCount) * 100).toFixed(1)) : 0;
+
+    const sortedCycles = [...closedCycleDurations].sort((a, b) => a - b);
+    const avgCycle = closedCycleDurations.length > 0 ? Math.round(closedCycleDurations.reduce((a, b) => a + b, 0) / closedCycleDurations.length) : 0;
+    let medianCycle = 0;
+    if (sortedCycles.length > 0) {
+      const mid = Math.floor(sortedCycles.length / 2);
+      medianCycle = sortedCycles.length % 2 !== 0 ? sortedCycles[mid] : Math.round((sortedCycles[mid - 1] + sortedCycles[mid]) / 2);
+    }
+
+    const avgOpenAge = openProjectsWithAgeCount > 0 ? Math.round(totalOpenAgeDays / openProjectsWithAgeCount) : 0;
+
+    const stageVelocityList = canonicalStages.filter(s => s.key !== 'WON' && s.key !== 'LOST').map(s => {
+      const arr = stageDurations[s.key] || [];
+      const sSorted = [...arr].sort((a, b) => a - b);
+      const avg = arr.length > 0 ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0;
+      let med = 0;
+      if (sSorted.length > 0) {
+        const mid = Math.floor(sSorted.length / 2);
+        med = sSorted.length % 2 !== 0 ? sSorted[mid] : Math.round((sSorted[mid - 1] + sSorted[mid]) / 2);
+      }
+      return {
+        stage: s.key,
+        label: s.label,
+        transitionCount: arr.length,
+        averageDays: avg,
+        medianDays: med
+      };
+    });
+
+    const stageDistributionList = canonicalStages.map(s => ({
+      stage: s.key,
+      label: s.label,
+      count: stageSummaryMap[s.key].count,
+      value: stageSummaryMap[s.key].value,
+      weightedValue: stageSummaryMap[s.key].weightedValue
+    }));
+
+    const repPipelineList = Object.values(repSummaryMap).map((r: any) => {
+      const cCount = r.wonProjects + r.lostProjects;
+      const wRate = cCount > 0 ? parseFloat(((r.wonProjects / cCount) * 100).toFixed(1)) : 0;
+      return {
+        ...r,
+        winRate: wRate
+      };
+    });
+
+    const sortedMonths = Object.keys(monthBucketsMap).sort().map(mKey => ({
+      month: mKey,
+      label: new Date(`${mKey}-01`).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+      projectCount: monthBucketsMap[mKey].projectCount,
+      pipelineValue: monthBucketsMap[mKey].pipelineValue,
+      weightedValue: monthBucketsMap[mKey].weightedValue
+    }));
+
+    res.json({
+      businessDate: todayStr,
+      evaluatedAt,
+      scope: effectiveScope,
+      currency: 'IDR',
+      summary: {
+        openProjects: openProjectsCount,
+        pipelineValue: pipelineValueSum,
+        weightedPipelineValue: weightedPipelineValueSum,
+        wonProjects: wonProjectsCount,
+        wonValue: wonValueSum,
+        lostProjects: lostProjectsCount,
+        lostValue: lostValueSum,
+        winRate,
+        conversionRate,
+        averageSalesCycleDays: avgCycle,
+        medianSalesCycleDays: medianCycle,
+        averageOpenProjectAgeDays: avgOpenAge
+      },
+      stageDistribution: stageDistributionList,
+      repPipeline: repPipelineList,
+      stageVelocity: stageVelocityList,
+      expectedCloseForecast: {
+        overdue: overdueForecast,
+        upcomingMonths: sortedMonths,
+        missingCloseDate: missingCloseDateForecast
+      },
+      coverage: {
+        totalProjects: totalProjectsCount,
+        openProjects: openProjectsCount,
+        closedProjects: closedProjectsCount,
+        projectsWithStageHistory: projectsWithStageHistoryCount,
+        projectsWithExpectedCloseDate: projectsWithExpectedCloseDateCount,
+        projectsWithProbability: projectsWithProbabilityCount,
+        projectsExcludedFromCycleMetrics: closedProjectsCount - closedCycleDurations.length
+      },
+      recentProjects: scopedProjects.slice(0, 50)
+    });
+  } catch (err: any) {
+    console.error('Error in /api/reports/pipeline:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
 // GET /api/reports/customers: Authoritative Database Aggregated Customer Report
 app.get('/api/reports/customers', async (req, res) => {
   const actorRole = (req as any).userRole;
