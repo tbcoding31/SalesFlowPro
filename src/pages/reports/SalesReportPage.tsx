@@ -4,14 +4,15 @@ import {
 } from 'recharts';
 import { useAuth } from '../../context/AuthContext';
 import { crmApi } from '../../services/crmApi';
-import { PipelineAnalyticsResponse, PipelineVelocityResponse, ProjectInterventionsResponse } from '../../types';
+import { PipelineAnalyticsResponse, PipelineVelocityResponse, ProjectInterventionsResponse, ProjectInterventionHistoryResponse } from '../../types';
 
 export const SalesReportPage: React.FC = () => {
   const { currentTenant } = useAuth();
-  const [activeTab, setActiveTab] = useState<'ANALYTICS' | 'VELOCITY' | 'INTERVENTIONS'>('ANALYTICS');
+  const [activeTab, setActiveTab] = useState<'ANALYTICS' | 'VELOCITY' | 'INTERVENTIONS' | 'INTERVENTION_HISTORY'>('ANALYTICS');
   const [data, setData] = useState<PipelineAnalyticsResponse | null>(null);
   const [velocityData, setVelocityData] = useState<PipelineVelocityResponse | null>(null);
   const [interventionData, setInterventionData] = useState<ProjectInterventionsResponse | null>(null);
+  const [historyData, setHistoryData] = useState<ProjectInterventionHistoryResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,7 +44,7 @@ export const SalesReportPage: React.FC = () => {
         } else {
           setError('Failed to load authoritative pipeline velocity & stage duration intelligence.');
         }
-      } else {
+      } else if (activeTab === 'INTERVENTIONS') {
         const iRes = await crmApi.fetchProjectInterventions({
           teamId: selectedTeamId || undefined,
           repId: selectedRepId || undefined
@@ -52,6 +53,16 @@ export const SalesReportPage: React.FC = () => {
           setInterventionData(iRes);
         } else {
           setError('Failed to load project interventions.');
+        }
+      } else {
+        const hRes = await crmApi.fetchProjectInterventionHistory({
+          teamId: selectedTeamId || undefined,
+          repId: selectedRepId || undefined
+        });
+        if (hRes && hRes.summary) {
+          setHistoryData(hRes);
+        } else {
+          setError('Failed to load project intervention history.');
         }
       }
     } catch (err: any) {
@@ -159,6 +170,17 @@ export const SalesReportPage: React.FC = () => {
         >
           <span className="material-symbols-outlined text-[16px]">warning</span>
           Project Interventions & Stalled Governance
+        </button>
+        <button
+          onClick={() => setActiveTab('INTERVENTION_HISTORY')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+            activeTab === 'INTERVENTION_HISTORY'
+              ? 'bg-indigo-600 text-white shadow-sm'
+              : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
+          }`}
+        >
+          <span className="material-symbols-outlined text-[16px]">history</span>
+          Intervention Episodes History & Timeline
         </button>
       </div>
 
@@ -590,7 +612,7 @@ export const SalesReportPage: React.FC = () => {
             </div>
           </div>
         </div>
-      ) : (
+      ) : activeTab === 'INTERVENTIONS' ? (
         /* R52 Project Interventions & Stalled Governance Tab */
         <div className="space-y-6">
           {/* Summary KPIs */}
@@ -722,6 +744,128 @@ export const SalesReportPage: React.FC = () => {
                           ) : (
                             <span className="text-slate-400 font-medium">-</span>
                           )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {/* History KPI Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Total Recorded Episodes</span>
+              <div className="mt-2 text-2xl font-extrabold text-slate-900 font-['Hanken_Grotesk']">
+                {historyData?.summary.totalEpisodes || 0}
+              </div>
+              <div className="text-[11px] text-slate-500 mt-1">
+                Append-only historical records
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Currently Active Episodes</span>
+              <div className="mt-2 text-2xl font-extrabold text-amber-600 font-['Hanken_Grotesk']">
+                {historyData?.summary.activeEpisodesCount || 0}
+              </div>
+              <div className="text-[11px] text-amber-700 font-medium mt-1">
+                Awaiting underlying operational resolution
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Resolved Episodes</span>
+              <div className="mt-2 text-2xl font-extrabold text-emerald-600 font-['Hanken_Grotesk']">
+                {historyData?.summary.resolvedEpisodesCount || 0}
+              </div>
+              <div className="text-[11px] text-emerald-700 font-medium mt-1">
+                Resolved by canonical state changes
+              </div>
+            </div>
+          </div>
+
+          {/* Historical Episodes Table */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-5 border-b border-slate-100 flex justify-between items-center">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 font-['Hanken_Grotesk']">
+                  Historical Intervention Episodes & State Transitions
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Traceable audit of when projects entered/exited intervention states and underlying trigger events.
+                </p>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-600">
+                <thead className="bg-slate-50 text-[11px] font-bold text-slate-500 uppercase border-b border-slate-200">
+                  <tr>
+                    <th className="px-4 py-3">Episode ID</th>
+                    <th className="px-4 py-3">Project / Customer</th>
+                    <th className="px-4 py-3">Policy / Severity</th>
+                    <th className="px-4 py-3">Started At (Trigger)</th>
+                    <th className="px-4 py-3">Ended At (Resolution)</th>
+                    <th className="px-4 py-3">Duration</th>
+                    <th className="px-4 py-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium">
+                  {(!historyData?.episodes || historyData.episodes.length === 0) ? (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-12 text-center text-slate-400">
+                        No intervention episodes recorded for this organization scope yet.
+                      </td>
+                    </tr>
+                  ) : (
+                    historyData.episodes.map((ep) => (
+                      <tr key={ep.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="px-4 py-3 font-mono text-[11px] text-slate-500">{ep.id}</td>
+                        <td className="px-4 py-3">
+                          <div className="font-bold text-slate-900">{ep.projectTitle}</div>
+                          <div className="text-[11px] text-slate-500">{ep.customerName} • PIC: {ep.picName}</div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="font-bold text-slate-800">{ep.policyName}</div>
+                          <div className="text-[10px] text-slate-400">
+                            {ep.severity} • {ep.conditions.join(', ')}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="text-slate-800 font-semibold">{ep.startedAt.slice(0, 16).replace('T', ' ')}</div>
+                          <div className="text-[10px] text-slate-400 font-mono">{ep.startedByEventType}</div>
+                        </td>
+                        <td className="px-4 py-3">
+                          {ep.endedAt ? (
+                            <>
+                              <div className="text-slate-800 font-semibold">{ep.endedAt.slice(0, 16).replace('T', ' ')}</div>
+                              <div className="text-[10px] text-emerald-600 font-semibold">{ep.endReason || 'RESOLVED'}</div>
+                            </>
+                          ) : (
+                            <span className="text-amber-600 font-bold text-[11px]">Active</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {ep.durationHours !== null && ep.durationHours !== undefined ? (
+                            <span className="font-semibold text-slate-700">
+                              {ep.durationDays && ep.durationDays >= 1 ? `${ep.durationDays} days` : `${ep.durationHours} hrs`}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            ep.isActive
+                              ? 'bg-amber-100 text-amber-700'
+                              : 'bg-emerald-100 text-emerald-700'
+                          }`}>
+                            {ep.isActive ? 'ACTIVE' : 'RESOLVED'}
+                          </span>
                         </td>
                       </tr>
                     ))

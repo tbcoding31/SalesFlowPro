@@ -142,6 +142,36 @@ async function setupDatabase() {
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
       UNIQUE KEY uq_policy_condition (policyId, conditionType),
       INDEX idx_pipc_policy (policyId)
+    )`,
+
+    // R53 STALLED PROJECT INTERVENTION EPISODES HISTORY
+    `CREATE TABLE IF NOT EXISTS project_intervention_episodes (
+      id VARCHAR(50) PRIMARY KEY,
+      tenantId VARCHAR(50) NOT NULL,
+      projectId VARCHAR(50) NOT NULL,
+      policyId VARCHAR(50) NOT NULL,
+      policyCodeSnapshot VARCHAR(100) NOT NULL,
+      policyNameSnapshot VARCHAR(255) NOT NULL,
+      severitySnapshot VARCHAR(20) NOT NULL,
+      matchModeSnapshot VARCHAR(20) NOT NULL,
+      conditionSnapshot JSON NOT NULL,
+      startFacts JSON NOT NULL,
+      endFacts JSON,
+      startReason VARCHAR(100) NOT NULL,
+      endReason VARCHAR(100),
+      startedByEventType VARCHAR(100) NOT NULL,
+      endedByEventType VARCHAR(100),
+      startedByEntityId VARCHAR(50),
+      endedByEntityId VARCHAR(50),
+      startedByUserId VARCHAR(50),
+      endedByUserId VARCHAR(50),
+      startedAt DATETIME NOT NULL,
+      endedAt DATETIME,
+      isActive BOOLEAN NOT NULL DEFAULT TRUE,
+      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_pie_tenant_project (tenantId, projectId, startedAt),
+      INDEX idx_pie_tenant_policy (tenantId, policyId, startedAt),
+      INDEX idx_pie_active (tenantId, projectId, policyId, isActive)
     )`
   ];
 

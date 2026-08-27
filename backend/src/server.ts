@@ -1046,6 +1046,22 @@ const setupEndpoint = (table: string) => {
         }).catch(err => console.error('[ACTIVITY] Failed to record project created activity:', err.message));
       }
 
+      // R53: Synchronize Intervention Episodes History on business creation
+      if (['tasks', 'visits', 'follow_ups', 'projects', 'maintenance_cadences'].includes(table)) {
+        const relProjectId = data.relatedProjectId || data.projectId || (table === 'projects' ? data.id : null);
+        try {
+          await synchronizeProjectInterventionHistory(pool, {
+            tenantId: targetTenant,
+            projectId: relProjectId || undefined,
+            triggerEventType: `${table.toUpperCase()}_CREATED`,
+            triggerEntityId: data.id,
+            actorUserId: actorUserId || null
+          });
+        } catch (syncErr: any) {
+          console.error('[R53] Sync intervention history error on POST:', syncErr.message);
+        }
+      }
+
       res.json({ success: true, data });
     } catch (err: any) {
       console.error(`Error POST ${table}:`, err.message);
@@ -1309,6 +1325,22 @@ const setupEndpoint = (table: string) => {
               }
               await generateNextCadenceOccurrence(connection, cadence, targetDue, actorUserId);
             }
+          }
+        }
+
+        // R53: Synchronize Intervention Episodes History on business mutation
+        if (['tasks', 'visits', 'follow_ups', 'projects', 'maintenance_cadences'].includes(table)) {
+          const relProjectId = data.relatedProjectId || data.projectId || (table === 'projects' ? id : null);
+          try {
+            await synchronizeProjectInterventionHistory(connection, {
+              tenantId: targetTenant,
+              projectId: relProjectId || undefined,
+              triggerEventType: `${table.toUpperCase()}_UPDATED`,
+              triggerEntityId: id,
+              actorUserId: actorUserId || null
+            });
+          } catch (syncErr: any) {
+            console.error('[R53] Sync intervention history error on PUT:', syncErr.message);
           }
         }
 
@@ -5111,7 +5143,44 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
         })
       ]);
 
+      // R53: If policy status changed to INACTIVE, close active episodes for this policy
+      if (status === 'INACTIVE') {
+        const nowIso = new Date().toISOString().slice(0, 19).replace('T', ' ');
+        await conn.query(`
+          UPDATE project_intervention_episodes
+          SET isActive = FALSE,
+              endedAt = ?,
+              endReason = 'POLICY_DEACTIVATED',
+              endedByEventType = 'POLICY_DEACTIVATED',
+              endedByUserId = ?
+          WHERE policyId = ? AND tenantId = ? AND isActive = TRUE
+        `, [nowIso, actorUserId || null, policyId, targetTenant]);
+      } else if (validatedConditions || severity) {
+        // If conditions or severity changed, close existing episodes with POLICY_CHANGED and re-evaluate
+        const nowIso = new Date().toISOString().slice(0, 19).replace('T', ' ');
+        await conn.query(`
+          UPDATE project_intervention_episodes
+          SET isActive = FALSE,
+              endedAt = ?,
+              endReason = 'POLICY_CHANGED',
+              endedByEventType = 'POLICY_CHANGED',
+              endedByUserId = ?
+          WHERE policyId = ? AND tenantId = ? AND isActive = TRUE
+        `, [nowIso, actorUserId || null, policyId, targetTenant]);
+      }
+
       await conn.commit();
+
+      // Trigger full tenant synchronization for active policies
+      if (status !== 'INACTIVE') {
+        synchronizeProjectInterventionHistory(pool, {
+          tenantId: targetTenant,
+          triggerEventType: 'POLICY_UPDATED',
+          triggerEntityId: policyId,
+          actorUserId: actorUserId || null
+        }).catch(syncErr => console.error('[R53] Sync intervention history error on policy PUT:', syncErr.message));
+      }
+
       res.json({ success: true, policyId });
     } catch (e: any) {
       await conn.rollback();
@@ -5643,6 +5712,508 @@ function getRecommendedActionsForIntervention(conditions: string[]): Array<{ act
   return actions;
 }
 
+// ==========================================
+// R53 INTERVENTION EPISODES HISTORY SYNCHRONIZER
+// ==========================================
+
+export async function synchronizeProjectInterventionHistory(
+  connectionOrPool: any,
+  params: {
+    tenantId: string;
+    projectId?: string;
+    triggerEventType: string;
+    triggerEntityId?: string;
+    actorUserId?: string | null;
+    observedAt?: string;
+  }
+) {
+  const { tenantId, projectId, triggerEventType, triggerEntityId, actorUserId, observedAt = new Date().toISOString().slice(0, 19).replace('T', ' ') } = params;
+
+  // 1. Fetch Active Policies for Tenant
+  const [policies]: any = await connectionOrPool.query(
+    `SELECT * FROM project_intervention_policies WHERE tenantId = ? AND status = 'ACTIVE'`,
+    [tenantId]
+  );
+  if (policies.length === 0 && !projectId) return;
+
+  const policyIds = policies.map((p: any) => p.id);
+  let conditions: any[] = [];
+  if (policyIds.length > 0) {
+    const [cRows]: any = await connectionOrPool.query(
+      `SELECT * FROM project_intervention_policy_conditions WHERE policyId IN (?)`,
+      [policyIds]
+    );
+    conditions = cRows;
+  }
+  const conditionsByPolicy: Record<string, string[]> = {};
+  for (const c of conditions) {
+    if (!conditionsByPolicy[c.policyId]) conditionsByPolicy[c.policyId] = [];
+    conditionsByPolicy[c.policyId].push(c.conditionType);
+  }
+
+  // 2. Fetch Projects to Evaluate
+  let projectSql = `SELECT * FROM projects WHERE tenantId = ?`;
+  const projectParams: any[] = [tenantId];
+  if (projectId) {
+    projectSql += ` AND id = ?`;
+    projectParams.push(projectId);
+  }
+  const [projects]: any = await connectionOrPool.query(projectSql, projectParams);
+  if (projects.length === 0) return;
+
+  const projectIds = projects.map((p: any) => p.id);
+
+  // 3. Batch Fetch Supporting Data
+  const todayStr = getBusinessDate(new Date()) || new Date().toISOString().slice(0, 10);
+  const [openTasks]: any = await connectionOrPool.query(
+    `SELECT id, relatedProjectId, dueDate FROM tasks WHERE relatedProjectId IN (?) AND statusId NOT IN ('COMPLETED', 'CANCELLED')`,
+    [projectIds]
+  );
+  const [openVisits]: any = await connectionOrPool.query(
+    `SELECT id, relatedProjectId, visitDate FROM visits WHERE relatedProjectId IN (?) AND statusId NOT IN ('COMPLETED', 'CANCELLED')`,
+    [projectIds]
+  );
+  const [openFollowups]: any = await connectionOrPool.query(
+    `SELECT id, relatedProjectId, followUpDate FROM follow_ups WHERE relatedProjectId IN (?) AND status NOT IN ('COMPLETED', 'CANCELLED')`,
+    [projectIds]
+  );
+  const [activeCadences]: any = await connectionOrPool.query(
+    `SELECT * FROM maintenance_cadences WHERE projectId IN (?) AND status = 'ACTIVE'`,
+    [projectIds]
+  );
+  const [tenantUsers]: any = await connectionOrPool.query(
+    `SELECT userId, status FROM tenant_users WHERE tenantId = ?`,
+    [tenantId]
+  );
+  const activeTenantUserIds = new Set(tenantUsers.filter((tu: any) => tu.status === 'ACTIVE').map((tu: any) => tu.userId));
+
+  // Velocity Baseline Lookup
+  const [velocityPolicyRows]: any = await connectionOrPool.query(
+    `SELECT settingValue FROM tenant_settings WHERE tenantId = ? AND settingKey = 'velocityMinComparisonSampleSize'`,
+    [tenantId]
+  );
+  let velocityComparisonPolicyConfigured = false;
+  let velocityMinComparisonSampleSize: number | null = null;
+  if (velocityPolicyRows.length > 0 && velocityPolicyRows[0].settingValue) {
+    const parsed = parseInt(velocityPolicyRows[0].settingValue, 10);
+    if (!isNaN(parsed) && parsed > 0) {
+      velocityComparisonPolicyConfigured = true;
+      velocityMinComparisonSampleSize = parsed;
+    }
+  }
+
+  const [allHistories]: any = await connectionOrPool.query(`
+    SELECT psh.projectId, psh.fromStageId, psh.toStageId, psh.changedAt, p.createdAt as projectCreatedAt
+    FROM project_stage_histories psh
+    JOIN projects p ON p.id = psh.projectId
+    WHERE p.tenantId = ?
+    ORDER BY psh.projectId ASC, psh.changedAt ASC
+  `, [tenantId]);
+
+  const historiesByProject: Record<string, any[]> = {};
+  for (const h of allHistories) {
+    if (!historiesByProject[h.projectId]) historiesByProject[h.projectId] = [];
+    historiesByProject[h.projectId].push(h);
+  }
+
+  const canonicalOpenStages = ['LEAD', 'QUALIFICATION', 'PROPOSAL', 'NEGOTIATION'];
+  const stageDurations: Record<string, number[]> = { LEAD: [], QUALIFICATION: [], PROPOSAL: [], NEGOTIATION: [] };
+  for (const [_, pHistList] of Object.entries(historiesByProject)) {
+    for (let i = 0; i < pHistList.length; i++) {
+      const curr = pHistList[i];
+      const prevTime = i === 0 ? (curr.projectCreatedAt ? new Date(curr.projectCreatedAt).getTime() : new Date(curr.changedAt).getTime()) : new Date(pHistList[i - 1].changedAt).getTime();
+      const currTime = new Date(curr.changedAt).getTime();
+      if (currTime < prevTime || !curr.fromStageId || !curr.toStageId || curr.fromStageId === curr.toStageId) continue;
+      const durationDays = Math.max(0, Math.round((currTime - prevTime) / (1000 * 60 * 60 * 24)));
+      if (canonicalOpenStages.includes(curr.fromStageId)) {
+        stageDurations[curr.fromStageId].push(durationDays);
+      }
+    }
+  }
+
+  const baselineMap: Record<string, any> = {};
+  for (const st of canonicalOpenStages) {
+    const arr = stageDurations[st] || [];
+    const sSorted = [...arr].sort((a, b) => a - b);
+    const sampleSize = arr.length;
+    const comparisonAvailable = velocityComparisonPolicyConfigured && velocityMinComparisonSampleSize !== null && sampleSize >= velocityMinComparisonSampleSize;
+    const medianDays = sampleSize > 0 ? calculatePercentile(sSorted, 50) : null;
+    const p75Days = sampleSize > 0 ? calculatePercentile(sSorted, 75) : null;
+    baselineMap[st] = { stageId: st, comparisonAvailable, medianDays, p75Days };
+  }
+
+  // 4. Fetch Currently Active Episodes for Target Projects
+  const [activeEpisodes]: any = await connectionOrPool.query(
+    `SELECT * FROM project_intervention_episodes WHERE tenantId = ? AND projectId IN (?) AND isActive = TRUE`,
+    [tenantId, projectIds]
+  );
+  const activeEpisodeMap: Record<string, any> = {};
+  for (const ep of activeEpisodes) {
+    activeEpisodeMap[`${ep.projectId}:${ep.policyId}`] = ep;
+  }
+
+  // 5. Evaluate Each Project
+  for (const p of projects) {
+    const isTerminal = p.stageId === 'WON' || p.stageId === 'LOST';
+
+    // If project is terminal, close any open episodes
+    if (isTerminal) {
+      for (const ep of activeEpisodes.filter((e: any) => e.projectId === p.id)) {
+        await connectionOrPool.query(`
+          UPDATE project_intervention_episodes
+          SET isActive = FALSE,
+              endedAt = ?,
+              endReason = 'PROJECT_BECAME_TERMINAL',
+              endedByEventType = ?,
+              endedByEntityId = ?,
+              endedByUserId = ?,
+              endFacts = ?
+          WHERE id = ?
+        `, [
+          observedAt,
+          triggerEventType,
+          triggerEntityId || null,
+          actorUserId || null,
+          JSON.stringify({ stageId: p.stageId, terminalState: true }),
+          ep.id
+        ]);
+      }
+      continue;
+    }
+
+    // Days in current stage
+    const pHistList = historiesByProject[p.id] || [];
+    let stageEnteredAt: string | null = null;
+    if (pHistList.length > 0) {
+      const matching = pHistList.filter((h: any) => h.toStageId === p.stageId);
+      stageEnteredAt = matching.length > 0 ? matching[matching.length - 1].changedAt : null;
+    } else {
+      stageEnteredAt = p.createdAt || null;
+    }
+    let daysInCurrentStage: number | null = null;
+    if (stageEnteredAt) {
+      const enteredDateStr = getBusinessDate(stageEnteredAt) || String(stageEnteredAt).slice(0, 10);
+      const enteredD = new Date(`${enteredDateStr}T00:00:00+07:00`);
+      const todayD = new Date(`${todayStr}T00:00:00+07:00`);
+      daysInCurrentStage = Math.max(0, Math.round((todayD.getTime() - enteredD.getTime()) / (1000 * 60 * 60 * 24)));
+    }
+
+    // Operational facts
+    const pTasks = openTasks.filter((t: any) => t.relatedProjectId === p.id);
+    const pVisits = openVisits.filter((v: any) => v.relatedProjectId === p.id);
+    const pFollowups = openFollowups.filter((f: any) => f.relatedProjectId === p.id);
+    const totalOpenActions = pTasks.length + pVisits.length + pFollowups.length;
+    const hasNextAction = totalOpenActions > 0;
+
+    const overdueTasks = pTasks.filter((t: any) => { const d = getBusinessDate(t.dueDate); return d !== null && d < todayStr; });
+    const overdueVisits = pVisits.filter((v: any) => { const d = getBusinessDate(v.visitDate); return d !== null && d < todayStr; });
+    const overdueFollowups = pFollowups.filter((f: any) => { const d = getBusinessDate(f.followUpDate); return d !== null && d < todayStr; });
+    const overdueActionsCount = overdueTasks.length + overdueVisits.length + overdueFollowups.length;
+    const hasOverdueAction = overdueActionsCount > 0;
+
+    const expectedCloseDateStr = p.expectedCloseDate ? (getBusinessDate(p.expectedCloseDate) || String(p.expectedCloseDate).slice(0, 10)) : null;
+    const isExpectedCloseOverdue = Boolean(expectedCloseDateStr && expectedCloseDateStr < todayStr);
+
+    const isInvalidPic = !p.picId || !activeTenantUserIds.has(p.picId);
+    const pCadences = activeCadences.filter((c: any) => c.projectId === p.id);
+    const isCadenceBlocked = pCadences.some((c: any) => c.status === 'BLOCKED' || (c.lastGeneratedActionType && c.lastGeneratedActionId && !hasNextAction));
+
+    const base = baselineMap[p.stageId];
+    const isAboveMedian = (daysInCurrentStage !== null && base && base.comparisonAvailable && base.medianDays !== null)
+      ? daysInCurrentStage > base.medianDays
+      : null;
+    const isAboveP75 = (daysInCurrentStage !== null && base && base.comparisonAvailable && base.p75Days !== null)
+      ? daysInCurrentStage > base.p75Days
+      : null;
+
+    const currentFacts: Record<string, any> = {
+      stageId: p.stageId,
+      daysInCurrentStage,
+      hasNextAction,
+      openActionsCount: totalOpenActions,
+      hasOverdueAction,
+      overdueActionsCount,
+      isExpectedCloseOverdue,
+      isInvalidPic,
+      isCadenceBlocked,
+      isAboveMedian,
+      isAboveP75
+    };
+
+    // Evaluate against each active policy
+    for (const pol of policies) {
+      const condList = conditionsByPolicy[pol.id] || [];
+      if (condList.length === 0) continue;
+
+      let hasNotMatched = false;
+      let hasUnknownCondition = false;
+
+      for (const cond of condList) {
+        let condState: 'MATCHED' | 'NOT_MATCHED' | 'UNKNOWN' = 'NOT_MATCHED';
+        if (cond === 'MISSING_NEXT_ACTION') condState = !hasNextAction ? 'MATCHED' : 'NOT_MATCHED';
+        else if (cond === 'OVERDUE_ACTION') condState = hasOverdueAction ? 'MATCHED' : 'NOT_MATCHED';
+        else if (cond === 'EXPECTED_CLOSE_OVERDUE') condState = isExpectedCloseOverdue ? 'MATCHED' : 'NOT_MATCHED';
+        else if (cond === 'INVALID_PIC') condState = isInvalidPic ? 'MATCHED' : 'NOT_MATCHED';
+        else if (cond === 'BLOCKED_CADENCE') condState = isCadenceBlocked ? 'MATCHED' : 'NOT_MATCHED';
+        else if (cond === 'ABOVE_HISTORICAL_MEDIAN') {
+          if (daysInCurrentStage === null || !velocityComparisonPolicyConfigured || !base || !base.comparisonAvailable) condState = 'UNKNOWN';
+          else condState = isAboveMedian ? 'MATCHED' : 'NOT_MATCHED';
+        } else if (cond === 'ABOVE_HISTORICAL_P75') {
+          if (daysInCurrentStage === null || !velocityComparisonPolicyConfigured || !base || !base.comparisonAvailable) condState = 'UNKNOWN';
+          else condState = isAboveP75 ? 'MATCHED' : 'NOT_MATCHED';
+        }
+
+        if (condState === 'NOT_MATCHED') hasNotMatched = true;
+        else if (condState === 'UNKNOWN') hasUnknownCondition = true;
+      }
+
+      let policyOutcome: 'MATCHED' | 'NOT_MATCHED' | 'UNKNOWN' = 'NOT_MATCHED';
+      if (hasNotMatched) policyOutcome = 'NOT_MATCHED';
+      else if (hasUnknownCondition) policyOutcome = 'UNKNOWN';
+      else policyOutcome = 'MATCHED';
+
+      const key = `${p.id}:${pol.id}`;
+      const activeEp = activeEpisodeMap[key];
+
+      if (policyOutcome === 'MATCHED') {
+        if (!activeEp) {
+          // ENTER boundary
+          const epId = `PIE-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+          await connectionOrPool.query(`
+            INSERT INTO project_intervention_episodes (
+              id, tenantId, projectId, policyId, policyCodeSnapshot, policyNameSnapshot,
+              severitySnapshot, matchModeSnapshot, conditionSnapshot, startFacts,
+              startReason, startedByEventType, startedByEntityId, startedByUserId, startedAt, isActive
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)
+          `, [
+            epId,
+            tenantId,
+            p.id,
+            pol.id,
+            pol.code,
+            pol.name,
+            pol.severity,
+            pol.matchMode,
+            JSON.stringify(condList),
+            JSON.stringify(currentFacts),
+            'CONDITIONS_MATCHED',
+            triggerEventType,
+            triggerEntityId || null,
+            actorUserId || null,
+            observedAt
+          ]);
+        }
+      } else if (policyOutcome === 'NOT_MATCHED') {
+        if (activeEp) {
+          // EXIT boundary
+          await connectionOrPool.query(`
+            UPDATE project_intervention_episodes
+            SET isActive = FALSE,
+                endedAt = ?,
+                endReason = 'BUSINESS_STATE_CHANGED',
+                endedByEventType = ?,
+                endedByEntityId = ?,
+                endedByUserId = ?,
+                endFacts = ?
+            WHERE id = ?
+          `, [
+            observedAt,
+            triggerEventType,
+            triggerEntityId || null,
+            actorUserId || null,
+            JSON.stringify(currentFacts),
+            activeEp.id
+          ]);
+        }
+      } else if (policyOutcome === 'UNKNOWN') {
+        if (activeEp) {
+          // MATCHED -> UNKNOWN boundary
+          await connectionOrPool.query(`
+            UPDATE project_intervention_episodes
+            SET isActive = FALSE,
+                endedAt = ?,
+                endReason = 'EVALUATION_BECAME_UNKNOWN',
+                endedByEventType = ?,
+                endedByEntityId = ?,
+                endedByUserId = ?,
+                endFacts = ?
+            WHERE id = ?
+          `, [
+            observedAt,
+            triggerEventType,
+            triggerEntityId || null,
+            actorUserId || null,
+            JSON.stringify(currentFacts),
+            activeEp.id
+          ]);
+        }
+      }
+    }
+  }
+}
+
+// GET /api/management/project-intervention-history
+app.get('/api/management/project-intervention-history', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  if (req.query.tenantId && actorRole !== 'SUPER_ADMIN' && actorTenant !== 'SYSTEM' && req.query.tenantId !== actorTenant) {
+    return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
+  }
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+
+  try {
+    const hasViewPerm = actorRole === 'SUPER_ADMIN' ||
+      actorPermissions.includes('ALL') ||
+      actorPermissions.includes('MANAGE_TENANT') ||
+      actorPermissions.includes('VIEW_REPORTS') ||
+      actorPermissions.includes('MANAGE_USERS');
+
+    if (!hasViewPerm) {
+      return res.status(403).json({ error: 'Forbidden: Insufficient permissions to view intervention history.' });
+    }
+
+    let effectiveScope: 'OWN' | 'TEAM' | 'ORGANIZATION' = actorDataScope;
+    if (actorRole === 'SUPER_ADMIN' || actorPermissions.includes('ALL') || actorPermissions.includes('MANAGE_TENANT')) {
+      effectiveScope = 'ORGANIZATION';
+    }
+
+    const { projectId, policyId, repId, teamId, dateFrom, dateTo } = req.query;
+
+    let sql = `
+      SELECT 
+        pie.*,
+        p.title as projectTitle,
+        p.picId as currentPicId,
+        c.name as customerName,
+        u.name as picName
+      FROM project_intervention_episodes pie
+      JOIN projects p ON p.id = pie.projectId
+      LEFT JOIN customers c ON c.id = p.customerId
+      LEFT JOIN users u ON u.id = p.picId
+      LEFT JOIN tenant_users tu ON tu.userId = p.picId AND tu.tenantId = pie.tenantId
+      LEFT JOIN team_members tm ON tm.tenantUserId = tu.id
+      WHERE pie.tenantId = ?
+    `;
+    const params: any[] = [targetTenant];
+
+    if (effectiveScope === 'OWN') {
+      sql += ` AND p.picId = ?`;
+      params.push(actorUserId);
+    } else if (effectiveScope === 'TEAM') {
+      const [actorTeamRows]: any = await pool.query(`
+        SELECT tm.teamId FROM team_members tm
+        JOIN tenant_users tu ON tu.id = tm.tenantUserId
+        WHERE tu.userId = ? AND tu.tenantId = ?
+      `, [actorUserId, targetTenant]);
+      const teamIds = actorTeamRows.map((r: any) => r.teamId);
+      if (teamIds.length > 0) {
+        sql += ` AND tm.teamId IN (?)`;
+        params.push(teamIds);
+      } else {
+        sql += ` AND p.picId = ?`;
+        params.push(actorUserId);
+      }
+    }
+
+    if (projectId) {
+      sql += ` AND pie.projectId = ?`;
+      params.push(projectId);
+    }
+    if (policyId) {
+      sql += ` AND pie.policyId = ?`;
+      params.push(policyId);
+    }
+    if (repId) {
+      sql += ` AND p.picId = ?`;
+      params.push(repId);
+    }
+    if (teamId) {
+      sql += ` AND tm.teamId = ?`;
+      params.push(teamId);
+    }
+    if (dateFrom) {
+      sql += ` AND pie.startedAt >= ?`;
+      params.push(dateFrom);
+    }
+    if (dateTo) {
+      sql += ` AND pie.startedAt <= ?`;
+      params.push(dateTo);
+    }
+
+    sql += ` ORDER BY pie.startedAt DESC, pie.id DESC`;
+
+    const [rows]: any = await pool.query(sql, params);
+
+    const episodes = rows.map((r: any) => {
+      let durationHours: number | null = null;
+      let durationDays: number | null = null;
+      if (r.endedAt && r.startedAt) {
+        const diffMs = new Date(r.endedAt).getTime() - new Date(r.startedAt).getTime();
+        durationHours = Math.max(0, Math.round((diffMs / (1000 * 60 * 60)) * 10) / 10);
+        durationDays = Math.max(0, Math.round((diffMs / (1000 * 60 * 60 * 24)) * 10) / 10);
+      }
+
+      return {
+        id: r.id,
+        tenantId: r.tenantId,
+        projectId: r.projectId,
+        projectTitle: r.projectTitle,
+        customerName: r.customerName || 'Unknown Customer',
+        currentPicId: r.currentPicId,
+        picName: r.picName || 'Unassigned',
+        policyId: r.policyId,
+        policyCode: r.policyCodeSnapshot,
+        policyName: r.policyNameSnapshot,
+        severity: r.severitySnapshot,
+        matchMode: r.matchModeSnapshot,
+        conditions: typeof r.conditionSnapshot === 'string' ? JSON.parse(r.conditionSnapshot) : r.conditionSnapshot,
+        startFacts: typeof r.startFacts === 'string' ? JSON.parse(r.startFacts) : r.startFacts,
+        endFacts: r.endFacts ? (typeof r.endFacts === 'string' ? JSON.parse(r.endFacts) : r.endFacts) : null,
+        startReason: r.startReason,
+        endReason: r.endReason,
+        startedByEventType: r.startedByEventType,
+        endedByEventType: r.endedByEventType,
+        startedByUserId: r.startedByUserId,
+        endedByUserId: r.endedByUserId,
+        startedAt: r.startedAt,
+        endedAt: r.endedAt,
+        durationHours,
+        durationDays,
+        isActive: Boolean(r.isActive),
+        createdAt: r.createdAt
+      };
+    });
+
+    const activeEpisodesCount = episodes.filter((e: any) => e.isActive).length;
+    const resolvedEpisodesCount = episodes.filter((e: any) => !e.isActive).length;
+
+    res.json({
+      tenantId: targetTenant,
+      evaluatedAt: new Date().toISOString(),
+      scope: effectiveScope,
+      summary: {
+        totalEpisodes: episodes.length,
+        activeEpisodesCount,
+        resolvedEpisodesCount
+      },
+      episodes
+    });
+
+  } catch (err: any) {
+    console.error('Error in GET /api/management/project-intervention-history:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
 export interface StageTransitionValidationResult {
   allowed: boolean;
   code?: string;
@@ -5958,6 +6529,19 @@ app.patch('/api/projects/:id/stage', async (req, res) => {
       entityId: projectId,
       metadata: { fromStageId, toStageId, notes: effectiveNotes, customerActivated, isReopen: Boolean(isReopen) }
     });
+
+    // R53: Synchronize Intervention Episodes History on Stage Transition / Reopen / Win / Loss
+    try {
+      await synchronizeProjectInterventionHistory(connection, {
+        tenantId: projectTenant,
+        projectId,
+        triggerEventType: toStageId === 'WON' ? 'PROJECT_WON' : toStageId === 'LOST' ? 'PROJECT_LOST' : isReopen ? 'PROJECT_REOPENED' : 'PROJECT_STAGE_CHANGED',
+        triggerEntityId: projectId,
+        actorUserId: actorUserId || null
+      });
+    } catch (syncErr: any) {
+      console.error('[R53] Sync intervention history error on stage transition:', syncErr.message);
+    }
 
     await connection.commit();
 

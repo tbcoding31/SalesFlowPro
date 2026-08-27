@@ -930,3 +930,45 @@ export interface PipelineAnalyticsResponse {
   coverage: PipelineAnalyticsCoverage;
   recentProjects: any[];
 }
+
+export interface ProjectInterventionEpisode {
+  id: string;
+  tenantId: string;
+  projectId: string;
+  projectTitle: string;
+  customerName: string;
+  currentPicId?: string;
+  picName: string;
+  policyId: string;
+  policyCode: string;
+  policyName: string;
+  severity: 'INFO' | 'WARNING' | 'CRITICAL';
+  matchMode: string;
+  conditions: string[];
+  startFacts: Record<string, any>;
+  endFacts?: Record<string, any> | null;
+  startReason: string;
+  endReason?: string | null;
+  startedByEventType: string;
+  endedByEventType?: string | null;
+  startedByUserId?: string | null;
+  endedByUserId?: string | null;
+  startedAt: string;
+  endedAt?: string | null;
+  durationHours?: number | null;
+  durationDays?: number | null;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface ProjectInterventionHistoryResponse {
+  tenantId: string;
+  evaluatedAt: string;
+  scope: string;
+  summary: {
+    totalEpisodes: number;
+    activeEpisodesCount: number;
+    resolvedEpisodesCount: number;
+  };
+  episodes: ProjectInterventionEpisode[];
+}
