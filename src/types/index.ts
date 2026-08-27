@@ -482,3 +482,48 @@ export interface SalesAttentionResponse {
     projectAttentionSummary?: ProjectAttentionSummary;
   }[];
 }
+
+export interface RepWorkloadSummary {
+  userId: string;
+  name: string;
+  email: string;
+  avatarUrl?: string;
+  status: string;
+  teamId?: string;
+  teamName?: string;
+  openProjects: number;
+  openTasks: number;
+  overdueActions: number;
+  todayVisits: number;
+  todayTasks: number;
+  pendingFollowups: number;
+  attentionSignals: number;
+  blockedCadences: number;
+  completedToday: number;
+}
+
+export interface ControlTowerSummary {
+  activeSalesReps: number;
+  openProjects: number;
+  projectsNeedingAttention: number;
+  overdueActions: number;
+  dueToday: number;
+  upcomingWork: number;
+  blockedCadences: number;
+  projectsMissingNextAction: number;
+  expectedCloseOverdue: number;
+  completedToday: number;
+  criticalSignals: number;
+  warningSignals: number;
+}
+
+export interface ControlTowerResponse {
+  businessDate: string;
+  evaluatedAt: string;
+  scope: 'TEAM' | 'ORGANIZATION' | 'OWN' | string;
+  summary: ControlTowerSummary;
+  reps: RepWorkloadSummary[];
+  projectsNeedingAttention: any[];
+  overdueWork: any[];
+  blockedCadences: any[];
+}

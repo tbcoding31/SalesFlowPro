@@ -284,6 +284,22 @@ export const crmApi = {
       console.error('[crmApi.fetchSalesAttention error]', err);
       return null;
     }
+  },
+
+  fetchControlTower: async (date?: string, teamId?: string, repId?: string): Promise<any> => {
+    try {
+      const params = new URLSearchParams();
+      if (date) params.set('date', date);
+      if (teamId) params.set('teamId', teamId);
+      if (repId) params.set('repId', repId);
+      const url = `${API_BASE}/management/control-tower${params.toString() ? '?' + params.toString() : ''}`;
+      const res = await fetch(url, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch control tower`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchControlTower error]', err);
+      return null;
+    }
   }
 };
 
