@@ -4887,6 +4887,15 @@ app.post('/api/tenant/project-intervention-policies', async (req, res) => {
       uniqueConditions.add(c);
     }
 
+    // Validate target tenant exists in database
+    const [tenantExists]: any = await pool.query(
+      `SELECT id FROM tenants WHERE id = ? AND status = 'ACTIVE'`,
+      [targetTenant]
+    );
+    if (tenantExists.length === 0) {
+      return res.status(404).json({ error: `Target tenant "${targetTenant}" does not exist or is inactive.`, code: 'TENANT_NOT_FOUND' });
+    }
+
     // Check duplicate code in tenant
     const [existing]: any = await pool.query(
       `SELECT id FROM project_intervention_policies WHERE tenantId = ? AND code = ?`,
@@ -4991,21 +5000,11 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
     }
 
     const policyId = req.params.id;
-    const [existing]: any = await pool.query(
-      `SELECT * FROM project_intervention_policies WHERE id = ? AND tenantId = ?`,
-      [policyId, targetTenant]
-    );
 
-    if (existing.length === 0) {
-      return res.status(404).json({ error: 'Policy not found or cross-tenant violation.', code: 'POLICY_NOT_FOUND' });
+    // Disallow mutating tenantId
+    if (req.body.tenantId && req.body.tenantId !== targetTenant && actorTenant && actorTenant !== 'SYSTEM') {
+      return res.status(400).json({ error: 'Policy tenantId is immutable and cannot be changed.', code: 'IMMUTABLE_TENANT_ID' });
     }
-
-    const oldPolicy = existing[0];
-    const [oldConditionsRows]: any = await pool.query(
-      `SELECT conditionType FROM project_intervention_policy_conditions WHERE policyId = ?`,
-      [policyId]
-    );
-    const oldConditions = oldConditionsRows.map((r: any) => r.conditionType);
 
     const { name, description, severity, matchMode, status, conditions } = req.body;
 
@@ -5021,6 +5020,7 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
       return res.status(400).json({ error: 'Invalid status. Allowed: ACTIVE, INACTIVE', code: 'INVALID_STATUS' });
     }
 
+    let validatedConditions: string[] | null = null;
     if (conditions !== undefined) {
       if (!Array.isArray(conditions) || conditions.length === 0) {
         return res.status(400).json({ error: 'At least one condition is required.', code: 'EMPTY_CONDITIONS' });
@@ -5028,19 +5028,38 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
       const uniqueConds = new Set<string>();
       for (const c of conditions) {
         if (!VALID_INTERVENTION_CONDITION_TYPES.includes(c)) {
-          return res.status(400).json({ error: `Invalid conditionType "${c}".`, code: 'INVALID_CONDITION_TYPE' });
+          return res.status(400).json({ error: `Invalid conditionType "${c}". Allowed: ${VALID_INTERVENTION_CONDITION_TYPES.join(', ')}`, code: 'INVALID_CONDITION_TYPE' });
         }
         if (uniqueConds.has(c)) {
           return res.status(400).json({ error: `Duplicate condition "${c}" is not allowed.`, code: 'DUPLICATE_CONDITION' });
         }
         uniqueConds.add(c);
       }
+      validatedConditions = Array.from(uniqueConds);
     }
 
     const conn = await pool.getConnection();
     await conn.beginTransaction();
 
     try {
+      // Row lock policy for update
+      const [existing]: any = await conn.query(
+        `SELECT * FROM project_intervention_policies WHERE id = ? AND tenantId = ? FOR UPDATE`,
+        [policyId, targetTenant]
+      );
+
+      if (existing.length === 0) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'Policy not found or cross-tenant violation.', code: 'POLICY_NOT_FOUND' });
+      }
+
+      const oldPolicy = existing[0];
+      const [oldConditionsRows]: any = await conn.query(
+        `SELECT conditionType FROM project_intervention_policy_conditions WHERE policyId = ?`,
+        [policyId]
+      );
+      const oldConditions = oldConditionsRows.map((r: any) => r.conditionType);
+
       await conn.query(`
         UPDATE project_intervention_policies
         SET name = COALESCE(?, name),
@@ -5051,9 +5070,9 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
         WHERE id = ? AND tenantId = ?
       `, [name || null, description !== undefined ? description : null, severity || null, matchMode || null, status || null, policyId, targetTenant]);
 
-      if (conditions) {
+      if (validatedConditions) {
         await conn.query(`DELETE FROM project_intervention_policy_conditions WHERE policyId = ?`, [policyId]);
-        for (const cond of conditions) {
+        for (const cond of validatedConditions) {
           const condId = `PIPC-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
           await conn.query(`
             INSERT INTO project_intervention_policy_conditions (id, policyId, conditionType)
@@ -5087,7 +5106,7 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
             severity: severity || oldPolicy.severity,
             matchMode: matchMode || oldPolicy.matchMode,
             status: status || oldPolicy.status,
-            conditions: conditions || oldConditions
+            conditions: validatedConditions || oldConditions
           }
         })
       ]);

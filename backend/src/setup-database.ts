@@ -154,6 +154,16 @@ async function setupDatabase() {
     }
   }
 
+  // Ensure UNIQUE constraint on project_intervention_policy_conditions
+  try {
+    await pool.query(`
+      ALTER TABLE project_intervention_policy_conditions
+      ADD UNIQUE KEY uq_policy_condition (policyId, conditionType)
+    `);
+  } catch (err: any) {
+    // Ignore if constraint already exists
+  }
+
   console.log('All 42 tables verified/created successfully.');
   await pool.end();
 }
