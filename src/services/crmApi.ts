@@ -417,12 +417,11 @@ export const crmApi = {
     }
   },
 
-  fetchPipelineVelocity: async (filters?: { teamId?: string; repId?: string; tenantId?: string }): Promise<any> => {
+  fetchPipelineVelocity: async (filters?: { teamId?: string; repId?: string }): Promise<any> => {
     try {
       const params = new URLSearchParams();
       if (filters?.teamId) params.set('teamId', filters.teamId);
       if (filters?.repId) params.set('repId', filters.repId);
-      if (filters?.tenantId && filters.tenantId !== 'ALL') params.set('tenantId', filters.tenantId);
 
       const url = `${API_BASE}/reports/pipeline-velocity${params.toString() ? '?' + params.toString() : ''}`;
       const res = await fetch(url, { headers: getAuthHeaders() });

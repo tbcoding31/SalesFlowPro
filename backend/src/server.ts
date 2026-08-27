@@ -4246,10 +4246,11 @@ app.get('/api/reports/pipeline-velocity', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
-  if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && targetTenant !== actorTenant) {
+  // Strictly enforce authenticated tenant context: client query param cannot switch tenant context for tenant users
+  if (req.query.tenantId && actorRole !== 'SUPER_ADMIN' && actorTenant !== 'SYSTEM' && req.query.tenantId !== actorTenant) {
     return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
   }
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
 
   const todayStr = getBusinessDate(new Date()) || new Date().toISOString().slice(0, 10);
   const evaluatedAt = new Date().toISOString();
@@ -4455,48 +4456,68 @@ app.get('/api/reports/pipeline-velocity', async (req, res) => {
     }
 
     // 4. Map Current Project Velocity & Relative Position
-    const todayDate = new Date(`${todayStr}T00:00:00+07:00`);
     let projectsWithHistoryCount = 0;
     let projectsMissingHistoryCount = 0;
+    let projectsUsingCreationEntryCount = 0;
+    let projectsUsingHistoryEntryCount = 0;
+    let projectsWithUnknownEntryCount = 0;
 
     const currentProjectVelocityList = scopedOpenProjects.map((p: any) => {
       const pHistList = historiesByProject[p.id] || [];
 
-      // Determine latest transition into current stage
+      // Determine latest transition into current stage and provenance
       let stageEnteredAt: string | null = null;
+      let stageEntryProvenance: 'CURRENT_STAGE_ENTRY_KNOWN_FROM_HISTORY' | 'CURRENT_STAGE_ENTRY_KNOWN_FROM_CREATION' | 'CURRENT_STAGE_ENTRY_UNKNOWN' = 'CURRENT_STAGE_ENTRY_UNKNOWN';
+
       if (pHistList.length > 0) {
         projectsWithHistoryCount++;
         // Find latest history entry transitioning into current stage
         const matchingEntries = pHistList.filter((h: any) => h.toStageId === p.stageId);
         if (matchingEntries.length > 0) {
           stageEnteredAt = matchingEntries[matchingEntries.length - 1].changedAt;
+          stageEntryProvenance = 'CURRENT_STAGE_ENTRY_KNOWN_FROM_HISTORY';
+          projectsUsingHistoryEntryCount++;
         } else {
-          // If project was created directly in this stage without transitions
-          stageEnteredAt = pHistList[0].changedAt || p.createdAt;
+          // Has history, but NO transition into current stage exists (corrupt/incomplete history)
+          stageEnteredAt = null;
+          stageEntryProvenance = 'CURRENT_STAGE_ENTRY_UNKNOWN';
+          projectsWithUnknownEntryCount++;
         }
       } else {
+        // No stage transitions exist. If project has never transitioned, createdAt authoritatively marks entry into initial stage
         projectsMissingHistoryCount++;
-        stageEnteredAt = p.createdAt;
+        if (p.createdAt) {
+          stageEnteredAt = p.createdAt;
+          stageEntryProvenance = 'CURRENT_STAGE_ENTRY_KNOWN_FROM_CREATION';
+          projectsUsingCreationEntryCount++;
+        } else {
+          stageEnteredAt = null;
+          stageEntryProvenance = 'CURRENT_STAGE_ENTRY_UNKNOWN';
+          projectsWithUnknownEntryCount++;
+        }
       }
 
-      let daysInCurrentStage = 0;
+      let daysInCurrentStage: number | null = null;
       if (stageEnteredAt) {
-        const enteredDate = new Date(stageEnteredAt);
-        const todayD = new Date(todayStr);
-        daysInCurrentStage = Math.max(0, Math.round((todayD.getTime() - enteredDate.getTime()) / (1000 * 60 * 60 * 24)));
+        const enteredDateStr = getBusinessDate(stageEnteredAt) || String(stageEnteredAt).slice(0, 10);
+        const enteredD = new Date(`${enteredDateStr}T00:00:00+07:00`);
+        const todayD = new Date(`${todayStr}T00:00:00+07:00`);
+        daysInCurrentStage = Math.max(0, Math.round((todayD.getTime() - enteredD.getTime()) / (1000 * 60 * 60 * 24)));
       }
 
       // Benchmark Comparison
       const base = baselineMap[p.stageId];
-      let relativePosition: 'BELOW_MEDIAN' | 'AROUND_MEDIAN' | 'ABOVE_MEDIAN' | 'ABOVE_P75' | 'INSUFFICIENT_DATA' = 'INSUFFICIENT_DATA';
+      let relativePosition: 'BELOW_MEDIAN' | 'AT_MEDIAN' | 'ABOVE_MEDIAN' | 'ABOVE_P75' | 'INSUFFICIENT_DATA' | 'UNKNOWN_STAGE_ENTRY' = 'INSUFFICIENT_DATA';
 
-      if (base && base.isBaselineAvailable && base.medianDays !== null && base.p75Days !== null) {
+      if (daysInCurrentStage === null) {
+        relativePosition = 'UNKNOWN_STAGE_ENTRY';
+      } else if (base && base.isBaselineAvailable && base.medianDays !== null && base.p75Days !== null) {
         if (daysInCurrentStage > base.p75Days) {
           relativePosition = 'ABOVE_P75';
         } else if (daysInCurrentStage > base.medianDays) {
           relativePosition = 'ABOVE_MEDIAN';
         } else if (daysInCurrentStage === base.medianDays) {
-          relativePosition = 'AROUND_MEDIAN';
+          relativePosition = 'AT_MEDIAN';
         } else {
           relativePosition = 'BELOW_MEDIAN';
         }
@@ -4532,6 +4553,7 @@ app.get('/api/reports/pipeline-velocity', async (req, res) => {
         probability: p.probability !== null ? Number(p.probability) : null,
         expectedCloseDate: p.expectedCloseDate,
         stageEnteredAt,
+        stageEntryProvenance,
         daysInCurrentStage,
         baselineMedianDays: base ? base.medianDays : null,
         baselineP75Days: base ? base.p75Days : null,
@@ -4554,6 +4576,9 @@ app.get('/api/reports/pipeline-velocity', async (req, res) => {
         totalOpenProjectsInScope: scopedOpenProjects.length,
         projectsWithHistoryCount,
         projectsMissingHistoryCount,
+        projectsUsingCreationEntryCount,
+        projectsUsingHistoryEntryCount,
+        projectsWithUnknownEntryCount,
         totalStageIntervalsEvaluated: totalStageIntervals,
         validStageIntervals,
         invalidIntervalsExcluded

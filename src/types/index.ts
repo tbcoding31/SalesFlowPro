@@ -508,11 +508,12 @@ export interface CurrentProjectVelocity {
   probability: number | null;
   expectedCloseDate: string | null;
   stageEnteredAt: string | null;
-  daysInCurrentStage: number;
+  stageEntryProvenance: 'CURRENT_STAGE_ENTRY_KNOWN_FROM_HISTORY' | 'CURRENT_STAGE_ENTRY_KNOWN_FROM_CREATION' | 'CURRENT_STAGE_ENTRY_UNKNOWN';
+  daysInCurrentStage: number | null;
   baselineMedianDays: number | null;
   baselineP75Days: number | null;
   isBaselineAvailable: boolean;
-  relativePosition: 'BELOW_MEDIAN' | 'AROUND_MEDIAN' | 'ABOVE_MEDIAN' | 'ABOVE_P75' | 'INSUFFICIENT_DATA';
+  relativePosition: 'BELOW_MEDIAN' | 'AT_MEDIAN' | 'ABOVE_MEDIAN' | 'ABOVE_P75' | 'INSUFFICIENT_DATA' | 'UNKNOWN_STAGE_ENTRY';
   hasNextAction: boolean;
   nextAction: {
     id: string;
@@ -534,6 +535,9 @@ export interface PipelineVelocityResponse {
     totalOpenProjectsInScope: number;
     projectsWithHistoryCount: number;
     projectsMissingHistoryCount: number;
+    projectsUsingCreationEntryCount: number;
+    projectsUsingHistoryEntryCount: number;
+    projectsWithUnknownEntryCount: number;
     totalStageIntervalsEvaluated: number;
     validStageIntervals: number;
     invalidIntervalsExcluded: number;
