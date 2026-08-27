@@ -322,6 +322,13 @@ export interface UserTargetAttainment {
   attainmentPercent: number | null;
   remainingValue: number | null;
   hasTargetAssigned: boolean;
+  isForecastAvailable?: boolean;
+  rawPipelineValue?: number;
+  weightedPipelineValue?: number;
+  rawPipelineCount?: number;
+  weightedPipelineCount?: number;
+  projectedCoveragePercent?: number | null;
+  projectedGap?: number | null;
 }
 
 export interface TeamTargetAttainment {
@@ -335,6 +342,13 @@ export interface TeamTargetAttainment {
   attainmentPercent: number | null;
   remainingValue: number | null;
   hasTargetAssigned: boolean;
+  isForecastAvailable?: boolean;
+  rawPipelineValue?: number;
+  weightedPipelineValue?: number;
+  rawPipelineCount?: number;
+  weightedPipelineCount?: number;
+  projectedCoveragePercent?: number | null;
+  projectedGap?: number | null;
 }
 
 export interface SalesTargetAttainmentResponse {
@@ -345,6 +359,8 @@ export interface SalesTargetAttainmentResponse {
     periodStart: string;
     periodEnd: string;
     targetType: SalesTargetType;
+    isHistoricalPeriod?: boolean;
+    isForecastAvailable?: boolean;
   };
   summary: {
     totalReps: number;
@@ -353,6 +369,13 @@ export interface SalesTargetAttainmentResponse {
     totalActualValue: number;
     totalActualCount: number;
     overallAttainmentPercent: number | null;
+    remainingTarget?: number;
+    rawPipelineValue?: number;
+    weightedPipelineValue?: number;
+    rawPipelineCount?: number;
+    weightedPipelineCount?: number;
+    projectedCoveragePercent?: number | null;
+    projectedGap?: number | null;
   };
   repAttainment: UserTargetAttainment[];
   teamAttainment: TeamTargetAttainment[];
@@ -363,6 +386,16 @@ export interface SalesTargetAttainmentResponse {
     wonProjectsWithTeamAttribution: number;
     wonProjectsMissingTeamAttribution: number;
     missingAttributionCount: number;
+    eligibleOpenProjectsInPeriod?: number;
+    qualifyingForecastProjectsInPeriod?: number;
+    projectsWithValue?: number;
+    projectsMissingValue?: number;
+    projectsWithProbability?: number;
+    projectsMissingProbability?: number;
+    projectsWithExpectedCloseDate?: number;
+    projectsMissingExpectedCloseDate?: number;
+    projectsExpectedInsidePeriod?: number;
+    projectsExpectedOutsidePeriod?: number;
   };
 }
 

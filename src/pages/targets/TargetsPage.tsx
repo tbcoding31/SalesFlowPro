@@ -93,6 +93,7 @@ export const TargetsPage: React.FC = () => {
 
   const summary = attainmentData?.summary;
   const coverage = attainmentData?.coverage;
+  const period = attainmentData?.period;
 
   return (
     <div className="space-y-6 font-['Inter',sans-serif] max-w-7xl mx-auto pb-12">
@@ -172,7 +173,7 @@ export const TargetsPage: React.FC = () => {
 
       {/* Top KPI Cards */}
       {summary && (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           {/* Target Sum */}
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
             <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Total Target Assigned</span>
@@ -205,35 +206,59 @@ export const TargetsPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Overall Attainment */}
+          {/* Remaining Target Gap */}
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
-            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Attainment Rate</span>
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Remaining Quota Gap</span>
             <div className="mt-2">
-              <div className="text-2xl font-black text-indigo-600 font-['Hanken_Grotesk']">
-                {summary.overallAttainmentPercent !== null ? `${summary.overallAttainmentPercent}%` : 'No Target'}
+              <div className="text-xl font-black text-amber-600 font-['Hanken_Grotesk'] truncate">
+                {summary.remainingTarget !== undefined
+                  ? (targetType === 'WON_PROJECT_VALUE' ? formatCurrency(summary.remainingTarget) : `${summary.remainingTarget} Projects`)
+                  : '-'}
               </div>
-              <div className="text-[11px] text-slate-500 font-medium mt-1">
-                Actual Won / Assigned Quota
+              <div className="text-[11px] text-amber-700 font-bold mt-1">
+                {summary.overallAttainmentPercent !== null ? `${summary.overallAttainmentPercent}% Achieved` : 'No Target'}
               </div>
             </div>
             <div className="mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500 font-medium">
-              Calculated dynamically on read
+              Target − Realized Actual
             </div>
           </div>
 
-          {/* Data Coverage Health */}
+          {/* Weighted Pipeline Forecast */}
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
-            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Historical Attribution Health</span>
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Period Target Forecast</span>
             <div className="mt-2">
-              <div className="text-xl font-black text-slate-900 font-['Hanken_Grotesk']">
-                {coverage?.wonProjectsInPeriod || 0} <span className="text-xs font-bold text-slate-500">Won in Period</span>
+              <div className="text-xl font-black text-indigo-600 font-['Hanken_Grotesk'] truncate">
+                {period?.isForecastAvailable
+                  ? (targetType === 'WON_PROJECT_VALUE' ? formatCurrency(summary.weightedPipelineValue || 0) : `${summary.weightedPipelineCount || 0} Projects`)
+                  : 'Unavailable'}
               </div>
-              <div className="text-[11px] text-slate-600 font-semibold mt-1">
-                {coverage?.missingAttributionCount === 0 ? '✓ 100% Attribution Complete' : `${coverage?.missingAttributionCount} missing attribution`}
+              <div className="text-[11px] text-slate-600 font-medium mt-1">
+                {period?.isForecastAvailable ? `${coverage?.qualifyingForecastProjectsInPeriod || 0} open qualifying deals` : 'Historical period completed'}
               </div>
             </div>
             <div className="mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500 font-medium">
-              Immutable terminal transition snapshot
+              Σ (Value × Prob) within period
+            </div>
+          </div>
+
+          {/* Projected Coverage & Gap */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Projected Coverage</span>
+            <div className="mt-2">
+              <div className="text-2xl font-black text-indigo-700 font-['Hanken_Grotesk']">
+                {summary.projectedCoveragePercent !== null && summary.projectedCoveragePercent !== undefined
+                  ? `${summary.projectedCoveragePercent}%`
+                  : (period?.isForecastAvailable ? 'No Target' : 'N/A')}
+              </div>
+              <div className="text-[11px] text-slate-600 font-medium mt-1">
+                {summary.projectedGap !== null && summary.projectedGap !== undefined && summary.projectedGap > 0
+                  ? `Projected Gap: ${formatCurrency(summary.projectedGap)}`
+                  : (summary.projectedGap === 0 ? '✓ Projected Fully Covered' : '-')}
+              </div>
+            </div>
+            <div className="mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500 font-medium">
+              (Actual + Weighted) / Target
             </div>
           </div>
         </div>
@@ -250,7 +275,7 @@ export const TargetsPage: React.FC = () => {
           }`}
         >
           <span className="material-symbols-outlined text-[18px]">person</span>
-          <span>Representative Attainment ({attainmentData?.repAttainment?.length || 0})</span>
+          <span>Representative Attainment & Forecast ({attainmentData?.repAttainment?.length || 0})</span>
         </button>
 
         <button
@@ -262,16 +287,16 @@ export const TargetsPage: React.FC = () => {
           }`}
         >
           <span className="material-symbols-outlined text-[18px]">groups</span>
-          <span>Team Quotas ({attainmentData?.teamAttainment?.length || 0})</span>
+          <span>Team Quotas & Forecast ({attainmentData?.teamAttainment?.length || 0})</span>
         </button>
       </div>
 
-      {/* Representative Attainment Table */}
+      {/* Representative Attainment & Forecast Table */}
       {activeTab === 'REPS' && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden p-6 space-y-4">
           <div className="flex justify-between items-center">
             <h2 className="text-base font-bold text-slate-900 font-['Hanken_Grotesk']">
-              Sales Representatives Quota Attainment Table
+              Sales Representatives Target Attainment & Pipeline Forecast
             </h2>
             <span className="text-xs text-slate-500 font-medium">
               Period: {periodStart} to {periodEnd}
@@ -282,22 +307,24 @@ export const TargetsPage: React.FC = () => {
             <table className="w-full text-left text-xs text-slate-900">
               <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200 text-[10px]">
                 <tr>
-                  <th className="px-6 py-3.5">Representative</th>
-                  <th className="px-6 py-3.5">Team</th>
-                  <th className="px-6 py-3.5">Target Quota</th>
-                  <th className="px-6 py-3.5">Actual Won Outcome</th>
-                  <th className="px-6 py-3.5">Attainment Rate</th>
-                  <th className="px-6 py-3.5 text-right">Remaining Quota</th>
+                  <th className="px-5 py-3.5">Representative</th>
+                  <th className="px-5 py-3.5">Team</th>
+                  <th className="px-5 py-3.5">Target</th>
+                  <th className="px-5 py-3.5">Realized Actual</th>
+                  <th className="px-5 py-3.5">Attainment</th>
+                  <th className="px-5 py-3.5">Remaining</th>
+                  <th className="px-5 py-3.5">Weighted Pipeline</th>
+                  <th className="px-5 py-3.5 text-right">Projected Coverage</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={6} className="px-6 py-8 text-center text-slate-400">Loading quota data from database...</td>
+                    <td colSpan={8} className="px-6 py-8 text-center text-slate-400">Loading quota and forecast data from database...</td>
                   </tr>
                 ) : attainmentData?.repAttainment?.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-6 py-8 text-center text-slate-400">No representative targets found in scope.</td>
+                    <td colSpan={8} className="px-6 py-8 text-center text-slate-400">No representative targets found in scope.</td>
                   </tr>
                 ) : (
                   attainmentData?.repAttainment?.map((r) => {
@@ -306,34 +333,36 @@ export const TargetsPage: React.FC = () => {
                     const targetDisplay = hasTarget ? (isCount ? `${r.targetValue} Projects` : formatCurrency(r.targetValue)) : 'No target assigned';
                     const actualDisplay = isCount ? `${r.actualCount} Projects` : formatCurrency(r.actualValue);
                     const remainingDisplay = hasTarget ? (isCount ? `${r.remainingValue} Projects` : formatCurrency(r.remainingValue)) : '-';
+                    const weightedPipeDisplay = isCount ? `${r.weightedPipelineCount} Projects` : formatCurrency(r.weightedPipelineValue || 0);
                     const rate = r.attainmentPercent;
+                    const projCoverage = r.projectedCoveragePercent;
 
                     return (
                       <tr key={r.userId} className="hover:bg-slate-50/70 transition-colors">
-                        <td className="px-6 py-4">
+                        <td className="px-5 py-4">
                           <div className="font-bold text-sm text-slate-900">{r.name}</div>
                           <div className="text-[11px] text-slate-500">{r.email}</div>
                         </td>
 
-                        <td className="px-6 py-4">
+                        <td className="px-5 py-4">
                           <span className="px-2.5 py-1 bg-slate-100 text-slate-700 text-[10px] font-bold rounded-md">
                             {r.teamName}
                           </span>
                         </td>
 
-                        <td className="px-6 py-4 font-mono font-bold text-slate-900">
+                        <td className="px-5 py-4 font-mono font-bold text-slate-900">
                           {targetDisplay}
                         </td>
 
-                        <td className="px-6 py-4 font-mono font-bold text-emerald-600">
+                        <td className="px-5 py-4 font-mono font-bold text-emerald-600">
                           {actualDisplay} ({r.actualCount} won)
                         </td>
 
-                        <td className="px-6 py-4">
+                        <td className="px-5 py-4">
                           {rate !== null ? (
-                            <div className="flex items-center gap-2.5">
-                              <span className="font-black text-indigo-600 text-sm">{rate}%</span>
-                              <div className="w-24 bg-slate-100 h-2 rounded-full overflow-hidden">
+                            <div className="flex items-center gap-2">
+                              <span className="font-black text-indigo-600 text-xs">{rate}%</span>
+                              <div className="w-16 bg-slate-100 h-1.5 rounded-full overflow-hidden">
                                 <div
                                   className={`h-full rounded-full ${rate >= 100 ? 'bg-emerald-500' : 'bg-indigo-600'}`}
                                   style={{ width: `${Math.min(rate, 100)}%` }}
@@ -345,8 +374,22 @@ export const TargetsPage: React.FC = () => {
                           )}
                         </td>
 
-                        <td className="px-6 py-4 text-right font-mono font-semibold text-slate-600">
+                        <td className="px-5 py-4 font-mono font-semibold text-slate-600">
                           {remainingDisplay}
+                        </td>
+
+                        <td className="px-5 py-4 font-mono font-bold text-indigo-600">
+                          {r.isForecastAvailable ? weightedPipeDisplay : <span className="text-slate-400 font-normal italic">N/A</span>}
+                        </td>
+
+                        <td className="px-5 py-4 text-right">
+                          {projCoverage !== null && projCoverage !== undefined ? (
+                            <span className={`font-black text-xs ${projCoverage >= 100 ? 'text-emerald-600' : 'text-indigo-600'}`}>
+                              {projCoverage}%
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
                         </td>
                       </tr>
                     );
@@ -358,12 +401,12 @@ export const TargetsPage: React.FC = () => {
         </div>
       )}
 
-      {/* Team Attainment Table */}
+      {/* Team Attainment & Forecast Table */}
       {activeTab === 'TEAMS' && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden p-6 space-y-4">
           <div className="flex justify-between items-center">
             <h2 className="text-base font-bold text-slate-900 font-['Hanken_Grotesk']">
-              Team Target Quotas & Attainment
+              Team Target Quotas & Pipeline Forecast
             </h2>
             <span className="text-xs text-slate-500 font-medium">
               Period: {periodStart} to {periodEnd}
@@ -374,21 +417,23 @@ export const TargetsPage: React.FC = () => {
             <table className="w-full text-left text-xs text-slate-900">
               <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200 text-[10px]">
                 <tr>
-                  <th className="px-6 py-3.5">Team Name</th>
-                  <th className="px-6 py-3.5">Team Target</th>
-                  <th className="px-6 py-3.5">Team Realized Outcome</th>
-                  <th className="px-6 py-3.5">Attainment Rate</th>
-                  <th className="px-6 py-3.5 text-right">Remaining Quota</th>
+                  <th className="px-5 py-3.5">Team Name</th>
+                  <th className="px-5 py-3.5">Target</th>
+                  <th className="px-5 py-3.5">Realized Actual</th>
+                  <th className="px-5 py-3.5">Attainment</th>
+                  <th className="px-5 py-3.5">Remaining</th>
+                  <th className="px-5 py-3.5">Weighted Pipeline</th>
+                  <th className="px-5 py-3.5 text-right">Projected Coverage</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={5} className="px-6 py-8 text-center text-slate-400">Loading team quota data...</td>
+                    <td colSpan={7} className="px-6 py-8 text-center text-slate-400">Loading team quota data...</td>
                   </tr>
                 ) : attainmentData?.teamAttainment?.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-6 py-8 text-center text-slate-400">No teams found in scope.</td>
+                    <td colSpan={7} className="px-6 py-8 text-center text-slate-400">No teams found in scope.</td>
                   </tr>
                 ) : (
                   attainmentData?.teamAttainment?.map((tm) => {
@@ -397,27 +442,29 @@ export const TargetsPage: React.FC = () => {
                     const targetDisplay = hasTarget ? (isCount ? `${tm.targetValue} Projects` : formatCurrency(tm.targetValue)) : 'No target assigned';
                     const actualDisplay = isCount ? `${tm.actualCount} Projects` : formatCurrency(tm.actualValue);
                     const remainingDisplay = hasTarget ? (isCount ? `${tm.remainingValue} Projects` : formatCurrency(tm.remainingValue)) : '-';
+                    const weightedPipeDisplay = isCount ? `${tm.weightedPipelineCount} Projects` : formatCurrency(tm.weightedPipelineValue || 0);
                     const rate = tm.attainmentPercent;
+                    const projCoverage = tm.projectedCoveragePercent;
 
                     return (
                       <tr key={tm.teamId} className="hover:bg-slate-50/70 transition-colors">
-                        <td className="px-6 py-4 font-bold text-sm text-slate-900">
+                        <td className="px-5 py-4 font-bold text-sm text-slate-900">
                           {tm.teamName}
                         </td>
 
-                        <td className="px-6 py-4 font-mono font-bold text-slate-900">
+                        <td className="px-5 py-4 font-mono font-bold text-slate-900">
                           {targetDisplay}
                         </td>
 
-                        <td className="px-6 py-4 font-mono font-bold text-emerald-600">
+                        <td className="px-5 py-4 font-mono font-bold text-emerald-600">
                           {actualDisplay} ({tm.actualCount} won)
                         </td>
 
-                        <td className="px-6 py-4">
+                        <td className="px-5 py-4">
                           {rate !== null ? (
-                            <div className="flex items-center gap-2.5">
-                              <span className="font-black text-indigo-600 text-sm">{rate}%</span>
-                              <div className="w-24 bg-slate-100 h-2 rounded-full overflow-hidden">
+                            <div className="flex items-center gap-2">
+                              <span className="font-black text-indigo-600 text-xs">{rate}%</span>
+                              <div className="w-16 bg-slate-100 h-1.5 rounded-full overflow-hidden">
                                 <div
                                   className={`h-full rounded-full ${rate >= 100 ? 'bg-emerald-500' : 'bg-indigo-600'}`}
                                   style={{ width: `${Math.min(rate, 100)}%` }}
@@ -426,6 +473,24 @@ export const TargetsPage: React.FC = () => {
                             </div>
                           ) : (
                             <span className="text-slate-400 font-semibold italic">Unassigned</span>
+                          )}
+                        </td>
+
+                        <td className="px-5 py-4 font-mono font-semibold text-slate-600">
+                          {remainingDisplay}
+                        </td>
+
+                        <td className="px-5 py-4 font-mono font-bold text-indigo-600">
+                          {tm.isForecastAvailable ? weightedPipeDisplay : <span className="text-slate-400 font-normal italic">N/A</span>}
+                        </td>
+
+                        <td className="px-5 py-4 text-right">
+                          {projCoverage !== null && projCoverage !== undefined ? (
+                            <span className={`font-black text-xs ${projCoverage >= 100 ? 'text-emerald-600' : 'text-indigo-600'}`}>
+                              {projCoverage}%
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">-</span>
                           )}
                         </td>
 

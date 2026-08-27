@@ -3534,7 +3534,34 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
     const totalWonProjectsInPeriod = uniqueWonProjects.length;
     const totalWonValueInPeriod = uniqueWonProjects.reduce((sum, p) => sum + p.value, 0);
 
-    // 4. Map Attainment per Representative (strictly by immutable creditedTenantUserId)
+    // 4. Batch Fetch Open Projects for Target Forecast (if period is active/current or future)
+    const [openProjects]: any = await pool.query(`
+      SELECT 
+        p.id, p.title, p.value, p.probability, p.expectedCloseDate, p.stageId,
+        p.picId, tu.id as picTenantUserId, tm.teamId as picTeamId
+      FROM projects p
+      LEFT JOIN tenant_users tu ON tu.userId = p.picId AND tu.tenantId = p.tenantId
+      LEFT JOIN team_members tm ON tm.tenantUserId = tu.id
+      WHERE p.tenantId = ?
+        AND p.stageId NOT IN ('WON', 'LOST')
+        AND p.expectedCloseDate IS NOT NULL
+        AND DATE(p.expectedCloseDate) >= ? AND DATE(p.expectedCloseDate) <= ?
+    `, [targetTenant, periodStart, periodEnd]);
+
+    // Track forecast data quality coverage
+    const [allOpenInTenant]: any = await pool.query(`
+      SELECT id, value, probability, expectedCloseDate, stageId, picId
+      FROM projects
+      WHERE tenantId = ? AND stageId NOT IN ('WON', 'LOST')
+    `, [targetTenant]);
+
+    const isHistoricalPeriod = periodEnd < todayStr;
+    const isForecastAvailable = !isHistoricalPeriod;
+
+    // Filter valid qualifying open forecast candidates
+    const validOpenForecastProjects = isForecastAvailable ? openProjects.filter((p: any) => p.value !== null && p.probability !== null) : [];
+
+    // Map open forecast per representative (by current PIC tenantUserId)
     const userAttainmentList = reps.map((rep: any) => {
       const userTarget = targets.find((t: any) => t.targetScope === 'USER' && t.tenantUserId === rep.tenantUserId);
       const repWonProjects = uniqueWonProjects.filter(p => p.creditedTenantUserId === rep.tenantUserId);
@@ -3553,6 +3580,22 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
         remainingValue = Math.max(0, targetVal - actualMetric);
       }
 
+      // Forecast metrics (current open pipeline owned by rep)
+      const repOpenProjects = validOpenForecastProjects.filter((p: any) => p.picTenantUserId === rep.tenantUserId);
+      const rawPipelineValue = repOpenProjects.reduce((sum: number, p: any) => sum + Number(p.value), 0);
+      const weightedPipelineValue = repOpenProjects.reduce((sum: number, p: any) => sum + (Number(p.value) * Number(p.probability) / 100), 0);
+      const rawPipelineCount = repOpenProjects.length;
+      const weightedPipelineCount = repOpenProjects.reduce((sum: number, p: any) => sum + (Number(p.probability) / 100), 0);
+
+      const forecastMetric = isCountTarget ? weightedPipelineCount : weightedPipelineValue;
+      let projectedCoveragePercent: number | null = null;
+      let projectedGap: number | null = null;
+
+      if (targetVal !== null && targetVal > 0 && isForecastAvailable) {
+        projectedCoveragePercent = parseFloat((((actualMetric + forecastMetric) / targetVal) * 100).toFixed(1));
+        projectedGap = Math.max(0, targetVal - actualMetric - forecastMetric);
+      }
+
       return {
         tenantUserId: rep.tenantUserId,
         userId: rep.userId,
@@ -3567,11 +3610,19 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
         actualCount,
         attainmentPercent,
         remainingValue,
-        hasTargetAssigned: Boolean(userTarget)
+        hasTargetAssigned: Boolean(userTarget),
+        // R49 Forecast additions
+        isForecastAvailable,
+        rawPipelineValue,
+        weightedPipelineValue,
+        rawPipelineCount,
+        weightedPipelineCount: parseFloat(weightedPipelineCount.toFixed(2)),
+        projectedCoveragePercent,
+        projectedGap: projectedGap !== null ? parseFloat(projectedGap.toFixed(2)) : null
       };
     });
 
-    // 5. Map Attainment per Team (strictly by immutable creditedTeamId)
+    // 5. Map Attainment and Forecast per Team (strictly by immutable creditedTeamId for actual, current team for forecast)
     const [allTeams]: any = await pool.query(`SELECT id, name FROM teams WHERE tenantId = ?`, [targetTenant]);
     const teamAttainmentList = allTeams.filter((tm: any) => effectiveScope === 'ORGANIZATION' || repTeamIds.includes(tm.id)).map((tm: any) => {
       const teamTarget = targets.find((t: any) => t.targetScope === 'TEAM' && t.teamId === tm.id);
@@ -3591,6 +3642,22 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
         remainingValue = Math.max(0, targetVal - actualMetric);
       }
 
+      // Team Forecast metrics (current open projects owned by members of team)
+      const teamOpenProjects = validOpenForecastProjects.filter((p: any) => p.picTeamId === tm.id);
+      const rawPipelineValue = teamOpenProjects.reduce((sum: number, p: any) => sum + Number(p.value), 0);
+      const weightedPipelineValue = teamOpenProjects.reduce((sum: number, p: any) => sum + (Number(p.value) * Number(p.probability) / 100), 0);
+      const rawPipelineCount = teamOpenProjects.length;
+      const weightedPipelineCount = teamOpenProjects.reduce((sum: number, p: any) => sum + (Number(p.probability) / 100), 0);
+
+      const forecastMetric = isCountTarget ? weightedPipelineCount : weightedPipelineValue;
+      let projectedCoveragePercent: number | null = null;
+      let projectedGap: number | null = null;
+
+      if (targetVal !== null && targetVal > 0 && isForecastAvailable) {
+        projectedCoveragePercent = parseFloat((((actualMetric + forecastMetric) / targetVal) * 100).toFixed(1));
+        projectedGap = Math.max(0, targetVal - actualMetric - forecastMetric);
+      }
+
       return {
         teamId: tm.id,
         teamName: tm.name,
@@ -3601,15 +3668,56 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
         actualCount,
         attainmentPercent,
         remainingValue,
-        hasTargetAssigned: Boolean(teamTarget)
+        hasTargetAssigned: Boolean(teamTarget),
+        // R49 Forecast additions
+        isForecastAvailable,
+        rawPipelineValue,
+        weightedPipelineValue,
+        rawPipelineCount,
+        weightedPipelineCount: parseFloat(weightedPipelineCount.toFixed(2)),
+        projectedCoveragePercent,
+        projectedGap: projectedGap !== null ? parseFloat(projectedGap.toFixed(2)) : null
       };
     });
 
-    // 6. Organization Aggregates
-    const orgTarget = targets.find((t: any) => t.targetScope === 'TENANT'); // Optional
+    // 6. Organization Aggregates & Forecast
     const totalAssignedTargetValue = targets.filter((t: any) => t.targetScope === 'USER').reduce((sum: number, t: any) => sum + Number(t.targetValue), 0);
     const orgActualMetric = requestedTargetType === 'WON_PROJECT_COUNT' ? totalWonProjectsInPeriod : totalWonValueInPeriod;
     const orgAttainmentPercent = totalAssignedTargetValue > 0 ? parseFloat(((orgActualMetric / totalAssignedTargetValue) * 100).toFixed(1)) : null;
+
+    const orgRawPipelineValue = validOpenForecastProjects.reduce((sum: number, p: any) => sum + Number(p.value), 0);
+    const orgWeightedPipelineValue = validOpenForecastProjects.reduce((sum: number, p: any) => sum + (Number(p.value) * Number(p.probability) / 100), 0);
+    const orgRawPipelineCount = validOpenForecastProjects.length;
+    const orgWeightedPipelineCount = validOpenForecastProjects.reduce((sum: number, p: any) => sum + (Number(p.probability) / 100), 0);
+
+    const orgForecastMetric = requestedTargetType === 'WON_PROJECT_COUNT' ? orgWeightedPipelineCount : orgWeightedPipelineValue;
+    const orgRemainingTarget = Math.max(0, totalAssignedTargetValue - orgActualMetric);
+    const orgProjectedCoveragePercent = totalAssignedTargetValue > 0 && isForecastAvailable
+      ? parseFloat((((orgActualMetric + orgForecastMetric) / totalAssignedTargetValue) * 100).toFixed(1))
+      : null;
+    const orgProjectedGap = totalAssignedTargetValue > 0 && isForecastAvailable
+      ? Math.max(0, totalAssignedTargetValue - orgActualMetric - orgForecastMetric)
+      : null;
+
+    // Data Quality & Coverage Breakdown
+    const projectsWithValue = allOpenInTenant.filter((p: any) => p.value !== null).length;
+    const projectsMissingValue = allOpenInTenant.filter((p: any) => p.value === null).length;
+    const projectsWithProbability = allOpenInTenant.filter((p: any) => p.probability !== null).length;
+    const projectsMissingProbability = allOpenInTenant.filter((p: any) => p.probability === null).length;
+    const projectsWithExpectedCloseDate = allOpenInTenant.filter((p: any) => p.expectedCloseDate !== null).length;
+    const projectsMissingExpectedCloseDate = allOpenInTenant.filter((p: any) => p.expectedCloseDate === null).length;
+
+    const projectsExpectedInsidePeriod = allOpenInTenant.filter((p: any) => {
+      if (!p.expectedCloseDate) return false;
+      const dStr = p.expectedCloseDate instanceof Date ? p.expectedCloseDate.toISOString().slice(0, 10) : String(p.expectedCloseDate).slice(0, 10);
+      return dStr >= periodStart && dStr <= periodEnd;
+    }).length;
+
+    const projectsExpectedOutsidePeriod = allOpenInTenant.filter((p: any) => {
+      if (!p.expectedCloseDate) return false;
+      const dStr = p.expectedCloseDate instanceof Date ? p.expectedCloseDate.toISOString().slice(0, 10) : String(p.expectedCloseDate).slice(0, 10);
+      return dStr < periodStart || dStr > periodEnd;
+    }).length;
 
     res.json({
       businessDate: todayStr,
@@ -3618,7 +3726,9 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
       period: {
         periodStart,
         periodEnd,
-        targetType: requestedTargetType
+        targetType: requestedTargetType,
+        isHistoricalPeriod,
+        isForecastAvailable
       },
       summary: {
         totalReps: reps.length,
@@ -3626,7 +3736,15 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
         totalTargetValue: totalAssignedTargetValue,
         totalActualValue: totalWonValueInPeriod,
         totalActualCount: totalWonProjectsInPeriod,
-        overallAttainmentPercent: orgAttainmentPercent
+        overallAttainmentPercent: orgAttainmentPercent,
+        // R49 Gap & Forecast summary
+        remainingTarget: orgRemainingTarget,
+        rawPipelineValue: orgRawPipelineValue,
+        weightedPipelineValue: orgWeightedPipelineValue,
+        rawPipelineCount: orgRawPipelineCount,
+        weightedPipelineCount: parseFloat(orgWeightedPipelineCount.toFixed(2)),
+        projectedCoveragePercent: orgProjectedCoveragePercent,
+        projectedGap: orgProjectedGap !== null ? parseFloat(orgProjectedGap.toFixed(2)) : null
       },
       repAttainment: userAttainmentList,
       teamAttainment: teamAttainmentList,
@@ -3636,7 +3754,18 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
         wonProjectsMissingUserAttribution: uniqueWonProjects.filter((p: any) => !p.creditedTenantUserId).length,
         wonProjectsWithTeamAttribution: uniqueWonProjects.filter((p: any) => Boolean(p.creditedTeamId)).length,
         wonProjectsMissingTeamAttribution: uniqueWonProjects.filter((p: any) => !p.creditedTeamId).length,
-        missingAttributionCount: uniqueWonProjects.filter((p: any) => !p.creditedTenantUserId).length
+        missingAttributionCount: uniqueWonProjects.filter((p: any) => !p.creditedTenantUserId).length,
+        // R49 Forecast coverage breakdown
+        eligibleOpenProjectsInPeriod: openProjects.length,
+        qualifyingForecastProjectsInPeriod: validOpenForecastProjects.length,
+        projectsWithValue,
+        projectsMissingValue,
+        projectsWithProbability,
+        projectsMissingProbability,
+        projectsWithExpectedCloseDate,
+        projectsMissingExpectedCloseDate,
+        projectsExpectedInsidePeriod,
+        projectsExpectedOutsidePeriod
       }
     });
   } catch (err: any) {
