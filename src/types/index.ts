@@ -487,7 +487,11 @@ export interface TargetActivityCoverageResponse {
 export interface StageDurationBaseline {
   stageId: string;
   sampleSize: number;
-  isBaselineAvailable: boolean;
+  statisticsAvailable: boolean;
+  comparisonPolicyConfigured: boolean;
+  comparisonMinimumSampleSize: number | null;
+  comparisonAvailable: boolean;
+  comparisonUnavailableReason: string | null;
   averageDays: number | null;
   medianDays: number | null;
   p25Days: number | null;
@@ -512,8 +516,9 @@ export interface CurrentProjectVelocity {
   daysInCurrentStage: number | null;
   baselineMedianDays: number | null;
   baselineP75Days: number | null;
-  isBaselineAvailable: boolean;
-  relativePosition: 'BELOW_MEDIAN' | 'AT_MEDIAN' | 'ABOVE_MEDIAN' | 'ABOVE_P75' | 'INSUFFICIENT_DATA' | 'UNKNOWN_STAGE_ENTRY';
+  statisticsAvailable: boolean;
+  comparisonAvailable: boolean;
+  relativePosition: 'BELOW_MEDIAN' | 'AT_MEDIAN' | 'ABOVE_MEDIAN' | 'ABOVE_P75' | 'INSUFFICIENT_SAMPLE_FOR_COMPARISON' | 'COMPARISON_POLICY_NOT_CONFIGURED' | 'UNKNOWN_STAGE_ENTRY';
   hasNextAction: boolean;
   nextAction: {
     id: string;
@@ -528,7 +533,8 @@ export interface PipelineVelocityResponse {
   evaluatedAt: string;
   scope: string;
   baselineScope: string;
-  minSampleSize: number;
+  comparisonPolicyConfigured: boolean;
+  comparisonMinimumSampleSize: number | null;
   baselines: StageDurationBaseline[];
   currentProjects: CurrentProjectVelocity[];
   coverage: {

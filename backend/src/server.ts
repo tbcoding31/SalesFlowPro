@@ -4342,16 +4342,31 @@ app.get('/api/reports/pipeline-velocity', async (req, res) => {
       }
     }
 
-    // Minimum sample size threshold for authoritative baseline (e.g., minimum 3 completed intervals)
-    const MIN_SAMPLE_SIZE = 3;
+    // 1b. Fetch Database-Authoritative Tenant Analytics Policy for Pipeline Velocity Comparison
+    const [policyRows]: any = await pool.query(
+      `SELECT settingValue FROM tenant_settings WHERE tenantId = ? AND settingKey = 'velocityMinComparisonSampleSize'`,
+      [targetTenant]
+    );
 
-    // Compute Baselines per Stage
+    let comparisonPolicyConfigured = false;
+    let comparisonMinimumSampleSize: number | null = null;
+
+    if (policyRows.length > 0 && policyRows[0].settingValue) {
+      const parsed = parseInt(policyRows[0].settingValue, 10);
+      if (!isNaN(parsed) && parsed > 0 && String(parsed) === String(policyRows[0].settingValue).trim()) {
+        comparisonPolicyConfigured = true;
+        comparisonMinimumSampleSize = parsed;
+      }
+    }
+
+    // Compute Baselines per Stage (Mathematical Statistics vs Product Comparison Eligibility)
     const baselineMap: Record<string, any> = {};
     const baselines = canonicalOpenStages.map((st) => {
       const arr = stageDurations[st] || [];
       const sSorted = [...arr].sort((a, b) => a - b);
       const sampleSize = arr.length;
-      const isBaselineAvailable = sampleSize >= MIN_SAMPLE_SIZE;
+      const statisticsAvailable = sampleSize > 0;
+      const comparisonAvailable = comparisonPolicyConfigured && comparisonMinimumSampleSize !== null && sampleSize >= comparisonMinimumSampleSize;
 
       const avgDays = sampleSize > 0 ? Math.round(arr.reduce((a, b) => a + b, 0) / sampleSize) : null;
       const medianDays = sampleSize > 0 ? calculatePercentile(sSorted, 50) : null;
@@ -4362,7 +4377,15 @@ app.get('/api/reports/pipeline-velocity', async (req, res) => {
       const baseObj = {
         stageId: st,
         sampleSize,
-        isBaselineAvailable,
+        statisticsAvailable,
+        comparisonPolicyConfigured,
+        comparisonMinimumSampleSize,
+        comparisonAvailable,
+        comparisonUnavailableReason: !comparisonPolicyConfigured
+          ? 'VELOCITY_COMPARISON_POLICY_NOT_CONFIGURED'
+          : !comparisonAvailable
+          ? 'INSUFFICIENT_SAMPLE_FOR_COMPARISON'
+          : null,
         averageDays: avgDays,
         medianDays,
         p25Days,
@@ -4507,11 +4530,15 @@ app.get('/api/reports/pipeline-velocity', async (req, res) => {
 
       // Benchmark Comparison
       const base = baselineMap[p.stageId];
-      let relativePosition: 'BELOW_MEDIAN' | 'AT_MEDIAN' | 'ABOVE_MEDIAN' | 'ABOVE_P75' | 'INSUFFICIENT_DATA' | 'UNKNOWN_STAGE_ENTRY' = 'INSUFFICIENT_DATA';
+      let relativePosition: 'BELOW_MEDIAN' | 'AT_MEDIAN' | 'ABOVE_MEDIAN' | 'ABOVE_P75' | 'INSUFFICIENT_SAMPLE_FOR_COMPARISON' | 'COMPARISON_POLICY_NOT_CONFIGURED' | 'UNKNOWN_STAGE_ENTRY' = 'COMPARISON_POLICY_NOT_CONFIGURED';
 
       if (daysInCurrentStage === null) {
         relativePosition = 'UNKNOWN_STAGE_ENTRY';
-      } else if (base && base.isBaselineAvailable && base.medianDays !== null && base.p75Days !== null) {
+      } else if (!comparisonPolicyConfigured) {
+        relativePosition = 'COMPARISON_POLICY_NOT_CONFIGURED';
+      } else if (!base || !base.comparisonAvailable || base.medianDays === null || base.p75Days === null) {
+        relativePosition = 'INSUFFICIENT_SAMPLE_FOR_COMPARISON';
+      } else {
         if (daysInCurrentStage > base.p75Days) {
           relativePosition = 'ABOVE_P75';
         } else if (daysInCurrentStage > base.medianDays) {
@@ -4557,7 +4584,8 @@ app.get('/api/reports/pipeline-velocity', async (req, res) => {
         daysInCurrentStage,
         baselineMedianDays: base ? base.medianDays : null,
         baselineP75Days: base ? base.p75Days : null,
-        isBaselineAvailable: base ? base.isBaselineAvailable : false,
+        statisticsAvailable: base ? base.statisticsAvailable : false,
+        comparisonAvailable: base ? base.comparisonAvailable : false,
         relativePosition,
         hasNextAction,
         nextAction: nextActionSummary
@@ -4569,7 +4597,8 @@ app.get('/api/reports/pipeline-velocity', async (req, res) => {
       evaluatedAt,
       scope: effectiveScope,
       baselineScope: 'ORGANIZATION',
-      minSampleSize: MIN_SAMPLE_SIZE,
+      comparisonPolicyConfigured,
+      comparisonMinimumSampleSize,
       baselines,
       currentProjects: currentProjectVelocityList,
       coverage: {
@@ -4587,6 +4616,116 @@ app.get('/api/reports/pipeline-velocity', async (req, res) => {
 
   } catch (err: any) {
     console.error('Error in /api/reports/pipeline-velocity:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
+// ==========================================
+// R51R2 TENANT ANALYTICS SETTINGS API
+// ==========================================
+
+app.get('/api/tenant/analytics-settings', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && targetTenant !== actorTenant) {
+    return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
+  }
+
+  try {
+    const hasViewPerm = actorRole === 'SUPER_ADMIN' ||
+      actorPermissions.includes('ALL') ||
+      actorPermissions.includes('MANAGE_TENANT') ||
+      actorPermissions.includes('VIEW_REPORTS') ||
+      actorPermissions.includes('MANAGE_USERS');
+
+    if (!hasViewPerm) {
+      return res.status(403).json({ error: 'Forbidden: Insufficient permissions to view tenant analytics settings.' });
+    }
+
+    const [rows]: any = await pool.query(
+      `SELECT settingKey, settingValue FROM tenant_settings WHERE tenantId = ?`,
+      [targetTenant]
+    );
+
+    const settingsMap: Record<string, string> = {};
+    for (const r of rows) {
+      settingsMap[r.settingKey] = r.settingValue;
+    }
+
+    const rawMinSample = settingsMap['velocityMinComparisonSampleSize'];
+    const parsedMinSample = rawMinSample ? parseInt(rawMinSample, 10) : null;
+    const isConfigured = parsedMinSample !== null && !isNaN(parsedMinSample) && parsedMinSample > 0;
+
+    res.json({
+      tenantId: targetTenant,
+      velocityMinComparisonSampleSize: isConfigured ? parsedMinSample : null,
+      comparisonPolicyConfigured: isConfigured
+    });
+  } catch (err: any) {
+    console.error('Error in GET /api/tenant/analytics-settings:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
+app.put('/api/tenant/analytics-settings', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.body.tenantId || 'SYSTEM');
+  if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && targetTenant !== actorTenant) {
+    return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
+  }
+
+  try {
+    const hasManagePerm = actorRole === 'SUPER_ADMIN' ||
+      actorPermissions.includes('ALL') ||
+      actorPermissions.includes('MANAGE_TENANT');
+
+    if (!hasManagePerm) {
+      return res.status(403).json({ error: 'Forbidden: Insufficient permissions to update tenant analytics settings.' });
+    }
+
+    const { velocityMinComparisonSampleSize } = req.body;
+
+    if (velocityMinComparisonSampleSize !== undefined && velocityMinComparisonSampleSize !== null) {
+      const numVal = Number(velocityMinComparisonSampleSize);
+      if (!Number.isInteger(numVal) || numVal <= 0) {
+        return res.status(400).json({
+          error: 'Invalid velocityMinComparisonSampleSize. Must be a positive integer greater than 0.',
+          code: 'INVALID_ANALYTICS_POLICY_VALUE'
+        });
+      }
+
+      // Upsert into tenant_settings
+      const settingId = `TSET-${targetTenant}-velocityMinComparisonSampleSize`;
+      await pool.query(`
+        INSERT INTO tenant_settings (id, tenantId, settingKey, settingValue)
+        VALUES (?, ?, 'velocityMinComparisonSampleSize', ?)
+        ON DUPLICATE KEY UPDATE settingValue = VALUES(settingValue)
+      `, [settingId, targetTenant, String(numVal)]);
+    }
+
+    res.json({
+      success: true,
+      tenantId: targetTenant,
+      velocityMinComparisonSampleSize: Number(velocityMinComparisonSampleSize)
+    });
+  } catch (err: any) {
+    console.error('Error in PUT /api/tenant/analytics-settings:', err);
     res.status(500).json({ error: 'Internal Server Error', message: err.message });
   }
 });

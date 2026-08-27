@@ -431,6 +431,32 @@ export const crmApi = {
       console.error('[crmApi.fetchPipelineVelocity error]', err);
       return null;
     }
+  },
+
+  fetchTenantAnalyticsSettings: async (): Promise<any> => {
+    try {
+      const res = await fetch(`${API_BASE}/tenant/analytics-settings`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch tenant analytics settings`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchTenantAnalyticsSettings error]', err);
+      return null;
+    }
+  },
+
+  updateTenantAnalyticsSettings: async (settings: { velocityMinComparisonSampleSize: number }): Promise<any> => {
+    try {
+      const res = await fetch(`${API_BASE}/tenant/analytics-settings`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(settings)
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to update tenant analytics settings`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.updateTenantAnalyticsSettings error]', err);
+      return null;
+    }
   }
 };
 
