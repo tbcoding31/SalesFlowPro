@@ -282,25 +282,86 @@ export interface Activity {
   metadata?: Record<string, any>;
 }
 
+export type SalesTargetScope = 'USER' | 'TEAM';
+export type SalesTargetType = 'WON_PROJECT_VALUE' | 'WON_PROJECT_COUNT';
+export type SalesTargetStatus = 'ACTIVE' | 'INACTIVE';
+
 export interface SalesTarget {
   id: string;
   tenantId: string;
+  targetScope: SalesTargetScope;
+  tenantUserId?: string | null;
+  teamId?: string | null;
+  targetType: SalesTargetType;
+  periodStart: string;
+  periodEnd: string;
+  targetValue: number;
+  status: SalesTargetStatus;
+  createdById: string;
+  createdAt?: string;
+  updatedAt?: string;
+  // Resolved presentation fields
   userId?: string;
   userName?: string;
-  repId?: string;
-  repName?: string;
-  repAvatar?: string;
-  period?: string;
-  month?: string; // YYYY-MM
-  targetAmount?: number;
-  actualAmount?: number;
-  targetRevenue?: number;
-  achievedRevenue?: number;
-  targetVisits: number;
-  actualVisits?: number;
-  achievedVisits?: number;
-  targetDeals?: number;
-  actualDeals?: number;
+  userEmail?: string;
+  teamName?: string;
+}
+
+export interface UserTargetAttainment {
+  tenantUserId: string;
+  userId: string;
+  name: string;
+  email: string;
+  teamId?: string | null;
+  teamName: string;
+  targetId?: string | null;
+  targetType: SalesTargetType;
+  targetValue: number | null;
+  actualValue: number;
+  actualCount: number;
+  attainmentPercent: number | null;
+  remainingValue: number | null;
+  hasTargetAssigned: boolean;
+}
+
+export interface TeamTargetAttainment {
+  teamId: string;
+  teamName: string;
+  targetId?: string | null;
+  targetType: SalesTargetType;
+  targetValue: number | null;
+  actualValue: number;
+  actualCount: number;
+  attainmentPercent: number | null;
+  remainingValue: number | null;
+  hasTargetAssigned: boolean;
+}
+
+export interface SalesTargetAttainmentResponse {
+  businessDate: string;
+  evaluatedAt: string;
+  scope: string;
+  period: {
+    periodStart: string;
+    periodEnd: string;
+    targetType: SalesTargetType;
+  };
+  summary: {
+    totalReps: number;
+    repsWithTarget: number;
+    totalTargetValue: number;
+    totalActualValue: number;
+    totalActualCount: number;
+    overallAttainmentPercent: number | null;
+  };
+  repAttainment: UserTargetAttainment[];
+  teamAttainment: TeamTargetAttainment[];
+  coverage: {
+    wonProjectsInPeriod: number;
+    wonProjectsWithUserAttribution: number;
+    wonProjectsWithTeamAttribution: number;
+    missingAttributionCount: number;
+  };
 }
 
 export interface MasterDataItem {

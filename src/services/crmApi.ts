@@ -322,6 +322,67 @@ export const crmApi = {
     }
   },
 
+  // R48 Sales Targets and Attainment APIs
+  fetchSalesTargets: async (filters?: { status?: string; periodStart?: string; periodEnd?: string }): Promise<any[]> => {
+    try {
+      const params = new URLSearchParams();
+      if (filters?.status) params.set('status', filters.status);
+      if (filters?.periodStart) params.set('periodStart', filters.periodStart);
+      if (filters?.periodEnd) params.set('periodEnd', filters.periodEnd);
+
+      const url = `${API_BASE}/sales-targets${params.toString() ? '?' + params.toString() : ''}`;
+      const res = await fetch(url, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch sales targets`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchSalesTargets error]', err);
+      return [];
+    }
+  },
+
+  createSalesTarget: async (targetData: any): Promise<any> => {
+    const res = await fetch(`${API_BASE}/sales-targets`, {
+      method: 'POST',
+      headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(targetData)
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(json.error || `HTTP ${res.status}: Failed to create sales target`);
+    }
+    return json;
+  },
+
+  updateSalesTarget: async (id: string, targetData: any): Promise<any> => {
+    const res = await fetch(`${API_BASE}/sales-targets/${id}`, {
+      method: 'PUT',
+      headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(targetData)
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(json.error || `HTTP ${res.status}: Failed to update sales target`);
+    }
+    return json;
+  },
+
+  fetchSalesTargetAttainment: async (filters?: { periodStart?: string; periodEnd?: string; targetType?: string }): Promise<any> => {
+    try {
+      const params = new URLSearchParams();
+      if (filters?.periodStart) params.set('periodStart', filters.periodStart);
+      if (filters?.periodEnd) params.set('periodEnd', filters.periodEnd);
+      if (filters?.targetType) params.set('targetType', filters.targetType);
+
+      const url = `${API_BASE}/sales-targets/attainment${params.toString() ? '?' + params.toString() : ''}`;
+      const res = await fetch(url, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch target attainment`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchSalesTargetAttainment error]', err);
+      return null;
+    }
+  },
+
   fetchPipelineAnalytics: async (filters?: { fromDate?: string; toDate?: string; teamId?: string; repId?: string }): Promise<any> => {
     try {
       const params = new URLSearchParams();

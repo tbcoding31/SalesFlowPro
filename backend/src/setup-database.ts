@@ -83,7 +83,24 @@ async function setupDatabase() {
     `CREATE TABLE IF NOT EXISTS follow_ups (id VARCHAR(50) PRIMARY KEY, tenantId VARCHAR(50), title VARCHAR(255), customerId VARCHAR(50), typeId VARCHAR(50), relatedVisitId VARCHAR(50), relatedProjectId VARCHAR(50), relatedTaskId VARCHAR(50), picId VARCHAR(50), followUpDate DATETIME, reminderDate DATETIME, priorityId VARCHAR(50), notes TEXT, outcome TEXT, status VARCHAR(50), createdAt DATETIME DEFAULT CURRENT_TIMESTAMP, completedAt DATETIME)`,
     `CREATE TABLE IF NOT EXISTS activities (id VARCHAR(50) PRIMARY KEY, tenantId VARCHAR(50), customerId VARCHAR(50), userId VARCHAR(50), typeId VARCHAR(50), subject VARCHAR(255), description TEXT, occurredAt DATETIME, entityType VARCHAR(50), entityId VARCHAR(50), changes JSON, metadata JSON)`,
     `CREATE TABLE IF NOT EXISTS attachments (id VARCHAR(50) PRIMARY KEY, tenantId VARCHAR(50), entityType VARCHAR(50), entityId VARCHAR(50), fileName VARCHAR(255), fileUrl TEXT, fileType VARCHAR(100), fileSize INT, uploadedById VARCHAR(50), uploadedAt DATETIME DEFAULT CURRENT_TIMESTAMP)`,
-    `CREATE TABLE IF NOT EXISTS sales_targets (id VARCHAR(50) PRIMARY KEY, tenantId VARCHAR(50), userId VARCHAR(50), period VARCHAR(50), targetAmount DECIMAL(15,2), actualAmount DECIMAL(15,2), targetRevenue DECIMAL(15,2), achievedRevenue DECIMAL(15,2), targetVisits INT, actualVisits INT, targetDeals INT, actualDeals INT)`,
+    `CREATE TABLE IF NOT EXISTS sales_targets (
+      id VARCHAR(50) PRIMARY KEY,
+      tenantId VARCHAR(50) NOT NULL,
+      targetScope VARCHAR(20) NOT NULL,
+      tenantUserId VARCHAR(50),
+      teamId VARCHAR(50),
+      targetType VARCHAR(50) NOT NULL,
+      periodStart DATE NOT NULL,
+      periodEnd DATE NOT NULL,
+      targetValue DECIMAL(15,2) NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+      createdById VARCHAR(50) NOT NULL,
+      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_sales_targets_tenant_period (tenantId, periodStart, periodEnd, status),
+      INDEX idx_sales_targets_user (tenantId, tenantUserId, status),
+      INDEX idx_sales_targets_team (tenantId, teamId, status)
+    )`,
 
     // SYSTEM MODULES
     `CREATE TABLE IF NOT EXISTS notifications (id VARCHAR(50) PRIMARY KEY, tenantId VARCHAR(50), userId VARCHAR(50), title VARCHAR(255), message TEXT, type VARCHAR(50), isRead BOOLEAN, linkUrl TEXT, createdAt DATETIME DEFAULT CURRENT_TIMESTAMP)`,

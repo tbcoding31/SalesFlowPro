@@ -626,7 +626,7 @@ const sendRes = (res: express.Response, promise: Promise<any>) => {
 };
 
 
-const criticalTables = ['users', 'tenant_users', 'tenant_user_roles', 'roles', 'tenants', 'role_permissions', 'role_assignment_policies'];
+const criticalTables = ['users', 'tenant_users', 'tenant_user_roles', 'roles', 'tenants', 'role_permissions', 'role_assignment_policies', 'sales_targets'];
 const tenantSpecificTables = [
   'users', 'tenant_users', 'roles', 'departments', 'positions',
   'customers', 'customer_contacts', 'visits', 'tasks', 'projects', 'activities', 'follow_ups', 'sales_targets', 'reports', 'audit_logs', 'notifications',
@@ -3040,6 +3040,605 @@ app.get('/api/reports/customers', async (req, res) => {
     });
   } catch (err: any) {
     console.error('Error GET /api/reports/customers:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
+// ==========================================
+// R48 SALES TARGETS & ATTAINMENT GOVERNANCE
+// ==========================================
+
+// Helper: Target validation logic
+function validateSalesTargetInput(data: any): { valid: boolean; code?: string; error?: string } {
+  const { targetScope, tenantUserId, teamId, targetType, periodStart, periodEnd, targetValue, status } = data;
+
+  if (!targetScope || (targetScope !== 'USER' && targetScope !== 'TEAM')) {
+    return { valid: false, code: 'INVALID_TARGET_SCOPE', error: 'targetScope must be either "USER" or "TEAM".' };
+  }
+
+  if (targetScope === 'USER') {
+    if (!tenantUserId || teamId) {
+      return { valid: false, code: 'INVALID_TARGET_OWNER', error: 'USER target must provide tenantUserId and leave teamId null.' };
+    }
+  } else if (targetScope === 'TEAM') {
+    if (!teamId || tenantUserId) {
+      return { valid: false, code: 'INVALID_TARGET_OWNER', error: 'TEAM target must provide teamId and leave tenantUserId null.' };
+    }
+  }
+
+  const validTypes = ['WON_PROJECT_VALUE', 'WON_PROJECT_COUNT'];
+  if (!targetType || !validTypes.includes(targetType)) {
+    return { valid: false, code: 'INVALID_TARGET_TYPE', error: `targetType must be one of: ${validTypes.join(', ')}.` };
+  }
+
+  if (!periodStart || !periodEnd || !/^\d{4}-\d{2}-\d{2}$/.test(periodStart) || !/^\d{4}-\d{2}-\d{2}$/.test(periodEnd)) {
+    return { valid: false, code: 'INVALID_PERIOD_FORMAT', error: 'periodStart and periodEnd must be valid dates in YYYY-MM-DD format.' };
+  }
+
+  if (periodStart > periodEnd) {
+    return { valid: false, code: 'INVALID_PERIOD_RANGE', error: 'periodStart must be before or equal to periodEnd.' };
+  }
+
+  const numVal = Number(targetValue);
+  if (targetValue === null || targetValue === undefined || isNaN(numVal) || numVal <= 0) {
+    return { valid: false, code: 'INVALID_TARGET_VALUE', error: 'targetValue must be a positive number greater than zero.' };
+  }
+
+  if (targetType === 'WON_PROJECT_COUNT' && (!Number.isInteger(numVal) || numVal < 1)) {
+    return { valid: false, code: 'INVALID_COUNT_VALUE', error: 'targetValue for WON_PROJECT_COUNT must be a positive integer.' };
+  }
+
+  if (status && status !== 'ACTIVE' && status !== 'INACTIVE') {
+    return { valid: false, code: 'INVALID_TARGET_STATUS', error: 'status must be either "ACTIVE" or "INACTIVE".' };
+  }
+
+  return { valid: true };
+}
+
+// GET /api/sales-targets: List targets with scope filtering
+app.get('/api/sales-targets', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+
+  try {
+    let effectiveScope = actorDataScope;
+    if (actorRole === 'SUPER_ADMIN' || actorPermissions.includes('ALL') || actorPermissions.includes('MANAGE_TENANT')) {
+      effectiveScope = 'ORGANIZATION';
+    }
+
+    let query = `
+      SELECT 
+        st.id, st.tenantId, st.targetScope, st.tenantUserId, st.teamId,
+        st.targetType, st.periodStart, st.periodEnd, st.targetValue,
+        st.status, st.createdById, st.createdAt, st.updatedAt,
+        u.id as userId, u.name as userName, u.email as userEmail,
+        t.name as teamName
+      FROM sales_targets st
+      LEFT JOIN tenant_users tu ON tu.id = st.tenantUserId
+      LEFT JOIN users u ON u.id = tu.userId
+      LEFT JOIN teams t ON t.id = st.teamId
+      WHERE st.tenantId = ?
+    `;
+    const params: any[] = [targetTenant];
+
+    if (effectiveScope === 'OWN') {
+      query += ` AND (st.targetScope = 'USER' AND tu.userId = ?)`;
+      params.push(actorUserId);
+    } else if (effectiveScope === 'TEAM') {
+      query += ` AND (
+        (st.targetScope = 'TEAM' AND st.teamId IN (
+          SELECT tm.teamId FROM team_members tm
+          JOIN tenant_users tu2 ON tu2.id = tm.tenantUserId
+          WHERE tu2.userId = ? AND tu2.tenantId = ? AND tu2.status = 'ACTIVE'
+        )) OR
+        (st.targetScope = 'USER' AND st.tenantUserId IN (
+          SELECT tm.tenantUserId FROM team_members tm
+          WHERE tm.teamId IN (
+            SELECT tm2.teamId FROM team_members tm2
+            JOIN tenant_users tu3 ON tu3.id = tm2.tenantUserId
+            WHERE tu3.userId = ? AND tu3.tenantId = ? AND tu3.status = 'ACTIVE'
+          )
+        ))
+      )`;
+      params.push(actorUserId, targetTenant, actorUserId, targetTenant);
+    }
+
+    const { status, periodStart, periodEnd } = req.query;
+    if (status && (status === 'ACTIVE' || status === 'INACTIVE')) {
+      query += ` AND st.status = ?`;
+      params.push(status);
+    }
+    if (periodStart) {
+      query += ` AND st.periodEnd >= ?`;
+      params.push(periodStart);
+    }
+    if (periodEnd) {
+      query += ` AND st.periodStart <= ?`;
+      params.push(periodEnd);
+    }
+
+    query += ` ORDER BY st.periodStart DESC, st.createdAt DESC`;
+    const [rows]: any = await pool.query(query, params);
+
+    res.json(rows);
+  } catch (err: any) {
+    console.error('Error GET /api/sales-targets:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
+// POST /api/sales-targets: Create governed sales target
+app.post('/api/sales-targets', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  // Authorization: Requires MANAGE_TENANT, MANAGE_USERS, or SUPER_ADMIN
+  const canManage = actorPermissions.includes('ALL') ||
+    actorPermissions.includes('MANAGE_TENANT') ||
+    actorPermissions.includes('MANAGE_USERS') ||
+    actorRole === 'SUPER_ADMIN' ||
+    actorRole === 'SALES_MANAGER' ||
+    actorRole === 'SUPERVISOR';
+
+  if (!canManage) {
+    return res.status(403).json({ error: 'Forbidden. Managing sales targets requires management permissions.', code: 'FORBIDDEN_MANAGE_TARGETS' });
+  }
+
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.body.tenantId || 'SYSTEM');
+  const data = { ...req.body, tenantId: targetTenant };
+
+  const validation = validateSalesTargetInput(data);
+  if (!validation.valid) {
+    return res.status(400).json({ error: validation.error, code: validation.code });
+  }
+
+  const connection = await pool.getConnection();
+  await connection.beginTransaction();
+
+  try {
+    // 1. Verify owner existence and tenant membership
+    if (data.targetScope === 'USER') {
+      const [tuRows]: any = await connection.query(
+        `SELECT tu.id, tu.status, u.name, u.email FROM tenant_users tu JOIN users u ON u.id = tu.userId WHERE tu.id = ? AND tu.tenantId = ?`,
+        [data.tenantUserId, targetTenant]
+      );
+      if (tuRows.length === 0) {
+        await connection.rollback();
+        return res.status(404).json({ error: 'Target owner tenant user not found in this organization.', code: 'TENANT_USER_NOT_FOUND' });
+      }
+    } else if (data.targetScope === 'TEAM') {
+      const [teamRows]: any = await connection.query(
+        `SELECT id, name FROM teams WHERE id = ? AND tenantId = ?`,
+        [data.teamId, targetTenant]
+      );
+      if (teamRows.length === 0) {
+        await connection.rollback();
+        return res.status(404).json({ error: 'Target team not found in this organization.', code: 'TEAM_NOT_FOUND' });
+      }
+    }
+
+    // 2. Check for overlapping ACTIVE targets for same owner and targetType
+    let overlapQuery = `
+      SELECT id, periodStart, periodEnd FROM sales_targets
+      WHERE tenantId = ? AND targetScope = ? AND targetType = ? AND status = 'ACTIVE'
+        AND NOT (periodEnd < ? OR periodStart > ?)
+    `;
+    const overlapParams: any[] = [targetTenant, data.targetScope, data.targetType, data.periodStart, data.periodEnd];
+
+    if (data.targetScope === 'USER') {
+      overlapQuery += ` AND tenantUserId = ?`;
+      overlapParams.push(data.tenantUserId);
+    } else {
+      overlapQuery += ` AND teamId = ?`;
+      overlapParams.push(data.teamId);
+    }
+
+    const [overlapRows]: any = await connection.query(overlapQuery, overlapParams);
+    if (overlapRows.length > 0) {
+      await connection.rollback();
+      return res.status(409).json({
+        error: `Overlapping active target exists (${overlapRows[0].periodStart} to ${overlapRows[0].periodEnd}). Multiple active targets for the same period are forbidden.`,
+        code: 'OVERLAPPING_TARGET_EXISTS',
+        conflictingTargetId: overlapRows[0].id
+      });
+    }
+
+    // 3. Insert target
+    const targetId = data.id || `TRG-${Date.now()}-${Math.random().toString(36).slice(-4)}`;
+    const status = data.status || 'ACTIVE';
+
+    await connection.query(`
+      INSERT INTO sales_targets (
+        id, tenantId, targetScope, tenantUserId, teamId,
+        targetType, periodStart, periodEnd, targetValue,
+        status, createdById, createdAt, updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+    `, [
+      targetId, targetTenant, data.targetScope, data.tenantUserId || null, data.teamId || null,
+      data.targetType, data.periodStart, data.periodEnd, data.targetValue,
+      status, actorUserId
+    ]);
+
+    // 4. Audit Log
+    await connection.query(`
+      INSERT INTO audit_logs (id, tenantId, userId, action, module, entity, entityId, description, timestamp)
+      VALUES (?, ?, ?, 'CREATE', 'SALES_TARGET', 'sales_targets', ?, ?, NOW())
+    `, [
+      `AUD-${Date.now()}-${Math.random().toString(36).slice(-4)}`,
+      targetTenant, actorUserId, targetId,
+      `Created ${data.targetScope} target (${data.targetType}) of Rp ${data.targetValue} for period ${data.periodStart} to ${data.periodEnd}`
+    ]);
+
+    await connection.commit();
+
+    res.status(201).json({
+      success: true,
+      id: targetId,
+      tenantId: targetTenant,
+      targetScope: data.targetScope,
+      tenantUserId: data.tenantUserId || null,
+      teamId: data.teamId || null,
+      targetType: data.targetType,
+      periodStart: data.periodStart,
+      periodEnd: data.periodEnd,
+      targetValue: data.targetValue,
+      status
+    });
+  } catch (err: any) {
+    await connection.rollback();
+    console.error('Error in POST /api/sales-targets:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  } finally {
+    connection.release();
+  }
+});
+
+// PUT /api/sales-targets/:id: Update target or status
+app.put('/api/sales-targets/:id', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetId = req.params.id;
+  const canManage = actorPermissions.includes('ALL') ||
+    actorPermissions.includes('MANAGE_TENANT') ||
+    actorPermissions.includes('MANAGE_USERS') ||
+    actorRole === 'SUPER_ADMIN' ||
+    actorRole === 'SALES_MANAGER' ||
+    actorRole === 'SUPERVISOR';
+
+  if (!canManage) {
+    return res.status(403).json({ error: 'Forbidden. Modifying sales targets requires management permissions.', code: 'FORBIDDEN_MANAGE_TARGETS' });
+  }
+
+  const connection = await pool.getConnection();
+  await connection.beginTransaction();
+
+  try {
+    const [existingRows]: any = await connection.query('SELECT * FROM sales_targets WHERE id = ? FOR UPDATE', [targetId]);
+    if (existingRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Sales target not found.', code: 'TARGET_NOT_FOUND' });
+    }
+
+    const existing = existingRows[0];
+    if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && existing.tenantId !== actorTenant) {
+      await connection.rollback();
+      return res.status(403).json({ error: 'Cross-tenant mutation forbidden (BOLA).' });
+    }
+
+    const updatedData = {
+      targetScope: req.body.targetScope !== undefined ? req.body.targetScope : existing.targetScope,
+      tenantUserId: req.body.tenantUserId !== undefined ? req.body.tenantUserId : existing.tenantUserId,
+      teamId: req.body.teamId !== undefined ? req.body.teamId : existing.teamId,
+      targetType: req.body.targetType !== undefined ? req.body.targetType : existing.targetType,
+      periodStart: req.body.periodStart !== undefined ? req.body.periodStart : getBusinessDate(existing.periodStart)!,
+      periodEnd: req.body.periodEnd !== undefined ? req.body.periodEnd : getBusinessDate(existing.periodEnd)!,
+      targetValue: req.body.targetValue !== undefined ? req.body.targetValue : existing.targetValue,
+      status: req.body.status !== undefined ? req.body.status : existing.status
+    };
+
+    const validation = validateSalesTargetInput(updatedData);
+    if (!validation.valid) {
+      await connection.rollback();
+      return res.status(400).json({ error: validation.error, code: validation.code });
+    }
+
+    // Check overlap if ACTIVE
+    if (updatedData.status === 'ACTIVE') {
+      let overlapQuery = `
+        SELECT id, periodStart, periodEnd FROM sales_targets
+        WHERE tenantId = ? AND targetScope = ? AND targetType = ? AND status = 'ACTIVE' AND id != ?
+          AND NOT (periodEnd < ? OR periodStart > ?)
+      `;
+      const overlapParams: any[] = [existing.tenantId, updatedData.targetScope, updatedData.targetType, targetId, updatedData.periodStart, updatedData.periodEnd];
+
+      if (updatedData.targetScope === 'USER') {
+        overlapQuery += ` AND tenantUserId = ?`;
+        overlapParams.push(updatedData.tenantUserId);
+      } else {
+        overlapQuery += ` AND teamId = ?`;
+        overlapParams.push(updatedData.teamId);
+      }
+
+      const [overlapRows]: any = await connection.query(overlapQuery, overlapParams);
+      if (overlapRows.length > 0) {
+        await connection.rollback();
+        return res.status(409).json({
+          error: `Overlapping active target exists (${overlapRows[0].periodStart} to ${overlapRows[0].periodEnd}).`,
+          code: 'OVERLAPPING_TARGET_EXISTS'
+        });
+      }
+    }
+
+    await connection.query(`
+      UPDATE sales_targets
+      SET targetScope = ?, tenantUserId = ?, teamId = ?, targetType = ?,
+          periodStart = ?, periodEnd = ?, targetValue = ?, status = ?, updatedAt = NOW()
+      WHERE id = ?
+    `, [
+      updatedData.targetScope, updatedData.tenantUserId || null, updatedData.teamId || null,
+      updatedData.targetType, updatedData.periodStart, updatedData.periodEnd,
+      updatedData.targetValue, updatedData.status, targetId
+    ]);
+
+    // Audit log
+    await connection.query(`
+      INSERT INTO audit_logs (id, tenantId, userId, action, module, entity, entityId, description, timestamp)
+      VALUES (?, ?, ?, 'UPDATE', 'SALES_TARGET', 'sales_targets', ?, ?, NOW())
+    `, [
+      `AUD-${Date.now()}-${Math.random().toString(36).slice(-4)}`,
+      existing.tenantId, actorUserId, targetId,
+      `Updated target ${targetId}: value from Rp ${existing.targetValue} to Rp ${updatedData.targetValue}, status from ${existing.status} to ${updatedData.status}`
+    ]);
+
+    await connection.commit();
+
+    res.json({
+      success: true,
+      id: targetId,
+      ...updatedData
+    });
+  } catch (err: any) {
+    await connection.rollback();
+    console.error('Error in PUT /api/sales-targets/:id:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  } finally {
+    connection.release();
+  }
+});
+
+// GET /api/sales-targets/attainment: Authoritative Target vs Actual Calculation
+app.get('/api/sales-targets/attainment', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  const todayStr = getBusinessDate(new Date())!;
+  const evaluatedAt = new Date().toISOString();
+
+  try {
+    let effectiveScope = actorDataScope;
+    if (actorRole === 'SUPER_ADMIN' || actorPermissions.includes('ALL') || actorPermissions.includes('MANAGE_TENANT')) {
+      effectiveScope = 'ORGANIZATION';
+    }
+
+    // Default period: Current Month (e.g. 2026-08-01 to 2026-08-31)
+    const [curYear, curMonth] = todayStr.split('-');
+    const defaultStart = `${curYear}-${curMonth}-01`;
+    const lastDayOfMonth = new Date(Number(curYear), Number(curMonth), 0).getDate();
+    const defaultEnd = `${curYear}-${curMonth}-${String(lastDayOfMonth).padStart(2, '0')}`;
+
+    const periodStart = req.query.periodStart ? String(req.query.periodStart).trim() : defaultStart;
+    const periodEnd = req.query.periodEnd ? String(req.query.periodEnd).trim() : defaultEnd;
+    const requestedTargetType = req.query.targetType ? String(req.query.targetType).trim() : 'WON_PROJECT_VALUE';
+
+    // 1. Batch Fetch Scoped Representatives (Users + TenantUsers + Teams)
+    let repQuery = `
+      SELECT 
+        u.id as userId, u.name, u.email, tu.id as tenantUserId, tu.status as membershipStatus,
+        tm.teamId, t.name as teamName, r.name as roleName
+      FROM users u
+      JOIN tenant_users tu ON tu.userId = u.id AND tu.tenantId = ?
+      LEFT JOIN team_members tm ON tm.tenantUserId = tu.id
+      LEFT JOIN teams t ON t.id = tm.teamId
+      LEFT JOIN tenant_user_roles tur ON tur.tenantUserId = tu.id
+      LEFT JOIN roles r ON r.id = tur.roleId
+      WHERE 1=1
+    `;
+    const repParams: any[] = [targetTenant];
+
+    if (effectiveScope === 'OWN') {
+      repQuery += ` AND u.id = ?`;
+      repParams.push(actorUserId);
+    } else if (effectiveScope === 'TEAM') {
+      repQuery += ` AND tm.teamId IN (
+        SELECT tm2.teamId FROM team_members tm2
+        JOIN tenant_users tu2 ON tu2.id = tm2.tenantUserId
+        WHERE tu2.userId = ? AND tu2.tenantId = ? AND tu2.status = 'ACTIVE'
+      )`;
+      repParams.push(actorUserId, targetTenant);
+    }
+
+    repQuery += ` ORDER BY u.name ASC`;
+    const [reps]: any = await pool.query(repQuery, repParams);
+    const repUserIds = reps.map((r: any) => r.userId);
+    const repTenantUserIds = reps.map((r: any) => r.tenantUserId);
+    const repTeamIds = Array.from(new Set(reps.map((r: any) => r.teamId).filter(Boolean)));
+
+    // 2. Batch Fetch Active Targets overlapping requested period
+    const [targets]: any = await pool.query(`
+      SELECT * FROM sales_targets
+      WHERE tenantId = ? AND status = 'ACTIVE' AND targetType = ?
+        AND NOT (periodEnd < ? OR periodStart > ?)
+    `, [targetTenant, requestedTargetType, periodStart, periodEnd]);
+
+    // 3. Batch Fetch Projects won in the target period (based on terminal stage history)
+    const [wonHistories]: any = await pool.query(`
+      SELECT 
+        psh.id as historyId, psh.projectId, psh.toStageId, psh.changedAt,
+        p.value, p.picId, p.customerId, p.stageId as currentStageId,
+        tu.id as picTenantUserId, tm.teamId as picTeamId
+      FROM project_stage_histories psh
+      JOIN projects p ON p.id = psh.projectId
+      LEFT JOIN tenant_users tu ON tu.userId = p.picId AND tu.tenantId = p.tenantId
+      LEFT JOIN team_members tm ON tm.tenantUserId = tu.id
+      WHERE p.tenantId = ?
+        AND psh.toStageId = 'WON'
+        AND DATE(psh.changedAt) >= ? AND DATE(psh.changedAt) <= ?
+      ORDER BY psh.changedAt ASC
+    `, [targetTenant, periodStart, periodEnd]);
+
+    // Aggregate Attainment strictly per Project (deduplicating reopened re-wins to latest effective outcome)
+    // A project contributes if its current stage is still 'WON'
+    const validWonProjectsMap: Record<string, { value: number; picUserId: string; picTenantUserId: string; teamId: string }> = {};
+    let totalWonProjectsInPeriod = 0;
+    let totalWonValueInPeriod = 0;
+
+    for (const row of wonHistories) {
+      // Reopened check: if currently not WON, excluded from active attainment
+      if (row.currentStageId === 'WON') {
+        validWonProjectsMap[row.projectId] = {
+          value: Number(row.value) || 0,
+          picUserId: row.picId,
+          picTenantUserId: row.picTenantUserId,
+          teamId: row.picTeamId
+        };
+      }
+    }
+
+    const uniqueWonProjects = Object.values(validWonProjectsMap);
+    totalWonProjectsInPeriod = uniqueWonProjects.length;
+    totalWonValueInPeriod = uniqueWonProjects.reduce((sum, p) => sum + p.value, 0);
+
+    // 4. Map Attainment per Representative
+    const userAttainmentList = reps.map((rep: any) => {
+      const userTarget = targets.find((t: any) => t.targetScope === 'USER' && t.tenantUserId === rep.tenantUserId);
+      const repWonProjects = uniqueWonProjects.filter(p => p.picUserId === rep.userId);
+
+      const actualValue = repWonProjects.reduce((sum, p) => sum + p.value, 0);
+      const actualCount = repWonProjects.length;
+      const targetVal = userTarget ? Number(userTarget.targetValue) : null;
+      const isCountTarget = requestedTargetType === 'WON_PROJECT_COUNT';
+      const actualMetric = isCountTarget ? actualCount : actualValue;
+
+      let attainmentPercent: number | null = null;
+      let remainingValue: number | null = null;
+
+      if (targetVal !== null && targetVal > 0) {
+        attainmentPercent = parseFloat(((actualMetric / targetVal) * 100).toFixed(1));
+        remainingValue = Math.max(0, targetVal - actualMetric);
+      }
+
+      return {
+        tenantUserId: rep.tenantUserId,
+        userId: rep.userId,
+        name: rep.name,
+        email: rep.email,
+        teamId: rep.teamId,
+        teamName: rep.teamName || 'General',
+        targetId: userTarget ? userTarget.id : null,
+        targetType: requestedTargetType,
+        targetValue: targetVal,
+        actualValue,
+        actualCount,
+        attainmentPercent,
+        remainingValue,
+        hasTargetAssigned: Boolean(userTarget)
+      };
+    });
+
+    // 5. Map Attainment per Team
+    const [allTeams]: any = await pool.query(`SELECT id, name FROM teams WHERE tenantId = ?`, [targetTenant]);
+    const teamAttainmentList = allTeams.filter((tm: any) => effectiveScope === 'ORGANIZATION' || repTeamIds.includes(tm.id)).map((tm: any) => {
+      const teamTarget = targets.find((t: any) => t.targetScope === 'TEAM' && t.teamId === tm.id);
+      const teamWonProjects = uniqueWonProjects.filter(p => p.teamId === tm.id);
+
+      const actualValue = teamWonProjects.reduce((sum, p) => sum + p.value, 0);
+      const actualCount = teamWonProjects.length;
+      const targetVal = teamTarget ? Number(teamTarget.targetValue) : null;
+      const isCountTarget = requestedTargetType === 'WON_PROJECT_COUNT';
+      const actualMetric = isCountTarget ? actualCount : actualValue;
+
+      let attainmentPercent: number | null = null;
+      let remainingValue: number | null = null;
+
+      if (targetVal !== null && targetVal > 0) {
+        attainmentPercent = parseFloat(((actualMetric / targetVal) * 100).toFixed(1));
+        remainingValue = Math.max(0, targetVal - actualMetric);
+      }
+
+      return {
+        teamId: tm.id,
+        teamName: tm.name,
+        targetId: teamTarget ? teamTarget.id : null,
+        targetType: requestedTargetType,
+        targetValue: targetVal,
+        actualValue,
+        actualCount,
+        attainmentPercent,
+        remainingValue,
+        hasTargetAssigned: Boolean(teamTarget)
+      };
+    });
+
+    // 6. Organization Aggregates
+    const orgTarget = targets.find((t: any) => t.targetScope === 'TENANT'); // Optional
+    const totalAssignedTargetValue = targets.filter((t: any) => t.targetScope === 'USER').reduce((sum: number, t: any) => sum + Number(t.targetValue), 0);
+    const orgActualMetric = requestedTargetType === 'WON_PROJECT_COUNT' ? totalWonProjectsInPeriod : totalWonValueInPeriod;
+    const orgAttainmentPercent = totalAssignedTargetValue > 0 ? parseFloat(((orgActualMetric / totalAssignedTargetValue) * 100).toFixed(1)) : null;
+
+    res.json({
+      businessDate: todayStr,
+      evaluatedAt,
+      scope: effectiveScope,
+      period: {
+        periodStart,
+        periodEnd,
+        targetType: requestedTargetType
+      },
+      summary: {
+        totalReps: reps.length,
+        repsWithTarget: userAttainmentList.filter((r: any) => r.hasTargetAssigned).length,
+        totalTargetValue: totalAssignedTargetValue,
+        totalActualValue: totalWonValueInPeriod,
+        totalActualCount: totalWonProjectsInPeriod,
+        overallAttainmentPercent: orgAttainmentPercent
+      },
+      repAttainment: userAttainmentList,
+      teamAttainment: teamAttainmentList,
+      coverage: {
+        wonProjectsInPeriod: totalWonProjectsInPeriod,
+        wonProjectsWithUserAttribution: uniqueWonProjects.filter((p: any) => Boolean(p.picUserId)).length,
+        wonProjectsWithTeamAttribution: uniqueWonProjects.filter((p: any) => Boolean(p.teamId)).length,
+        missingAttributionCount: uniqueWonProjects.filter((p: any) => !p.picUserId).length
+      }
+    });
+  } catch (err: any) {
+    console.error('Error in /api/sales-targets/attainment:', err);
     res.status(500).json({ error: 'Internal Server Error', message: err.message });
   }
 });

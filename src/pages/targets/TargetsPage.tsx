@@ -1,257 +1,567 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
-import { SalesTarget, User } from '../../types';
+import { crmApi } from '../../services/crmApi';
+import { SalesTargetAttainmentResponse, SalesTargetType } from '../../types';
 
 export const TargetsPage: React.FC = () => {
-  const { currentTenant } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const { currentUser, hasPermission } = useAuth();
+  const isManagerOrAdmin = hasPermission('MANAGE_TENANT') || hasPermission('MANAGE_USERS') || currentUser?.role === 'SUPER_ADMIN' || currentUser?.role === 'SALES_MANAGER' || currentUser?.role === 'SUPERVISOR';
 
-  const [period, setPeriod] = useState<string>('Q3 2026');
-  const [targets, setTargets] = useState<SalesTarget[]>(DataService.getTargets(tenantId));
-  const [tenantUsers] = useState<User[]>(DataService.getUsers(tenantId));
-  const [showModal, setShowModal] = useState(false);
+  // Date Defaults: Current Month
+  const now = new Date();
+  const curYear = now.getFullYear();
+  const curMonth = String(now.getMonth() + 1).padStart(2, '0');
+  const lastDay = new Date(curYear, now.getMonth() + 1, 0).getDate();
 
-  // Form State
-  const [selectedUserId, setSelectedUserId] = useState(tenantUsers[0]?.id || 'USR-005');
-  const [targetRevenue, setTargetRevenue] = useState(10000000000);
-  const [targetVisits, setTargetVisits] = useState(40);
+  const [periodStart, setPeriodStart] = useState<string>(`${curYear}-${curMonth}-01`);
+  const [periodEnd, setPeriodEnd] = useState<string>(`${curYear}-${curMonth}-${String(lastDay).padStart(2, '0')}`);
+  const [targetType, setTargetType] = useState<SalesTargetType>('WON_PROJECT_VALUE');
+  
+  const [attainmentData, setAttainmentData] = useState<SalesTargetAttainmentResponse | null>(null);
+  const [activeTab, setActiveTab] = useState<'REPS' | 'TEAMS'>('REPS');
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [showModal, setShowModal] = useState<boolean>(false);
 
-  const totalTargetRev = targets.reduce((acc, t) => acc + (t.targetRevenue || t.targetAmount || 0), 0);
-  const totalAchievedRev = targets.reduce((acc, t) => acc + (t.achievedRevenue || t.actualAmount || 0), 0);
-  const overallRate = totalTargetRev > 0 ? Math.round((totalAchievedRev / totalTargetRev) * 100) : 0;
+  // Modal Form State
+  const [modalScope, setModalScope] = useState<'USER' | 'TEAM'>('USER');
+  const [modalTenantUserId, setModalTenantUserId] = useState<string>('');
+  const [modalTeamId, setModalTeamId] = useState<string>('');
+  const [modalTargetValue, setModalTargetValue] = useState<number>(100000000);
+  const [modalError, setModalError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
-  const handleSaveTarget = (e: React.FormEvent) => {
-    e.preventDefault();
-    const usr = tenantUsers.find((u) => u.id === selectedUserId);
-    const newTarget: SalesTarget = {
-      id: `TRG-${Date.now().toString().slice(-4)}`,
-      tenantId,
-      repId: selectedUserId,
-      repName: usr?.name || 'Sales Rep',
-      repAvatar: usr?.avatarUrl,
-      period,
-      targetRevenue,
-      achievedRevenue: 0,
-      targetVisits,
-      achievedVisits: 0,
-    };
-
-    DataService.saveTarget(newTarget);
-    setTargets(DataService.getTargets(tenantId));
-    setShowModal(false);
+  const loadData = async () => {
+    setIsLoading(true);
+    try {
+      const res = await crmApi.fetchSalesTargetAttainment({
+        periodStart,
+        periodEnd,
+        targetType
+      });
+      setAttainmentData(res);
+      if (res && res.repAttainment && res.repAttainment.length > 0 && !modalTenantUserId) {
+        setModalTenantUserId(res.repAttainment[0].tenantUserId);
+      }
+      if (res && res.teamAttainment && res.teamAttainment.length > 0 && !modalTeamId) {
+        setModalTeamId(res.teamAttainment[0].teamId);
+      }
+    } catch (err) {
+      console.error('Error fetching target attainment from DB:', err);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
+  useEffect(() => {
+    loadData();
+  }, [periodStart, periodEnd, targetType]);
+
+  const formatCurrency = (val: number | null | undefined) => {
+    if (val === null || val === undefined) return '-';
+    return new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0
+    }).format(val);
+  };
+
+  const handleCreateTarget = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setModalError(null);
+    setIsSubmitting(true);
+
+    try {
+      await crmApi.createSalesTarget({
+        targetScope: modalScope,
+        tenantUserId: modalScope === 'USER' ? modalTenantUserId : null,
+        teamId: modalScope === 'TEAM' ? modalTeamId : null,
+        targetType,
+        periodStart,
+        periodEnd,
+        targetValue: modalTargetValue,
+        status: 'ACTIVE'
+      });
+      setShowModal(false);
+      loadData();
+    } catch (err: any) {
+      setModalError(err.message || 'Failed to create target');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const summary = attainmentData?.summary;
+  const coverage = attainmentData?.coverage;
+
   return (
-    <div className="space-y-6 font-['Inter',sans-serif]">
+    <div className="space-y-6 font-['Inter',sans-serif] max-w-7xl mx-auto pb-12">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-6 rounded-xl border border-[#E1E1E1] shadow-sm">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
         <div>
           <div className="flex items-center gap-2">
-            <span className="px-2.5 py-0.5 bg-[#4744e5]/10 text-[#4744e5] text-xs font-bold rounded uppercase">
-              Sales Quotas
+            <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-700 text-[10px] font-extrabold rounded-md uppercase tracking-wider border border-indigo-100">
+              Sales Governance
+            </span>
+            <span className="text-xs font-semibold text-slate-500">
+              Scope: {attainmentData?.scope || 'OWN'}
             </span>
           </div>
-          <h1 className="text-2xl font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mt-1">
-            Sales Target Quotas & Performance Benchmarks
+          <h1 className="text-2xl font-black text-slate-900 font-['Hanken_Grotesk'] mt-1">
+            Sales Targets & Attainment Governance
           </h1>
-          <p className="text-xs text-[#464555] mt-0.5">
-            Set quarterly revenue targets, visit frequencies, and monitor achievement progress.
+          <p className="text-xs text-slate-500 mt-0.5">
+            Database-authoritative quota tracking and realized commercial attainment derived from closed projects.
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <select
-            value={period}
-            onChange={(e) => setPeriod(e.target.value)}
-            className="bg-white border border-[#E1E1E1] text-[#1a1c1c] text-xs font-bold rounded-lg px-3 py-2 focus:outline-none"
-          >
-            <option value="Q1 2026">Q1 2026 (Jan - Mar)</option>
-            <option value="Q2 2026">Q2 2026 (Apr - Jun)</option>
-            <option value="Q3 2026">Q3 2026 (Jul - Sep)</option>
-            <option value="Q4 2026">Q4 2026 (Oct - Dec)</option>
-          </select>
+        {/* Action & Filter Controls */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-1.5 bg-slate-50 p-1 rounded-xl border border-slate-200 text-xs">
+            <span className="text-[11px] font-bold text-slate-500 px-2">Type:</span>
+            <button
+              onClick={() => setTargetType('WON_PROJECT_VALUE')}
+              className={`px-2.5 py-1 rounded-lg font-bold text-xs transition-all ${
+                targetType === 'WON_PROJECT_VALUE'
+                  ? 'bg-white text-indigo-700 shadow-xs border border-slate-200'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Won Value
+            </button>
+            <button
+              onClick={() => setTargetType('WON_PROJECT_COUNT')}
+              className={`px-2.5 py-1 rounded-lg font-bold text-xs transition-all ${
+                targetType === 'WON_PROJECT_COUNT'
+                  ? 'bg-white text-indigo-700 shadow-xs border border-slate-200'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Project Count
+            </button>
+          </div>
 
-          <button
-            onClick={() => setShowModal(true)}
-            className="px-4 py-2 bg-[#4744e5] hover:bg-[#2c24ce] text-white text-xs font-bold rounded-lg shadow-sm transition-all flex items-center gap-2 font-['Hanken_Grotesk'] shrink-0"
-          >
-            <span className="material-symbols-outlined text-[18px]">add_chart</span>
-            <span>Set Sales Quota</span>
-          </button>
+          <div className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-xl border border-slate-200 text-xs">
+            <span className="material-symbols-outlined text-[16px] text-slate-400">calendar_month</span>
+            <input
+              type="date"
+              value={periodStart}
+              onChange={(e) => setPeriodStart(e.target.value)}
+              className="bg-transparent border-0 text-xs font-bold text-slate-800 p-0 focus:ring-0"
+            />
+            <span className="text-slate-400 font-bold">to</span>
+            <input
+              type="date"
+              value={periodEnd}
+              onChange={(e) => setPeriodEnd(e.target.value)}
+              className="bg-transparent border-0 text-xs font-bold text-slate-800 p-0 focus:ring-0"
+            />
+          </div>
+
+          {isManagerOrAdmin && (
+            <button
+              onClick={() => setShowModal(true)}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-xs transition-all flex items-center gap-1.5 font-['Hanken_Grotesk'] shrink-0"
+            >
+              <span className="material-symbols-outlined text-[18px]">add_task</span>
+              <span>Assign Target</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Summary KPI Card */}
-      <div className="bg-white p-6 rounded-xl border border-[#E1E1E1] shadow-sm space-y-4">
-        <div className="flex justify-between items-baseline">
-          <div>
-            <span className="text-xs font-bold text-[#464555] font-['Hanken_Grotesk'] uppercase tracking-wider block">
-              Organization Target Achievement ({period})
-            </span>
-            <div className="text-2xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk'] mt-1">
-              Rp {(totalAchievedRev / 1000000000).toFixed(1)}B / Rp {(totalTargetRev / 1000000000).toFixed(1)}B IDR
+      {/* Top KPI Cards */}
+      {summary && (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {/* Target Sum */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Total Target Assigned</span>
+            <div className="mt-2">
+              <div className="text-xl font-black text-slate-900 font-['Hanken_Grotesk'] truncate">
+                {targetType === 'WON_PROJECT_VALUE' ? formatCurrency(summary.totalTargetValue) : `${summary.totalTargetValue} Projects`}
+              </div>
+              <div className="text-[11px] text-indigo-600 font-bold mt-1">
+                {summary.repsWithTarget} of {summary.totalReps} Reps with active quota
+              </div>
+            </div>
+            <div className="mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500 font-medium">
+              Period: {periodStart} to {periodEnd}
             </div>
           </div>
-          <span className="text-3xl font-extrabold text-[#4744e5] font-['Hanken_Grotesk']">
-            {overallRate}%
-          </span>
-        </div>
 
-        {/* Progress bar */}
-        <div className="w-full bg-[#f3f3f3] h-3 rounded-full overflow-hidden border border-[#E1E1E1]">
-          <div
-            className="bg-[#4744e5] h-full rounded-full transition-all duration-500"
-            style={{ width: `${Math.min(overallRate, 100)}%` }}
-          />
+          {/* Actual Won Realized */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Realized Won Outcome</span>
+            <div className="mt-2">
+              <div className="text-xl font-black text-emerald-600 font-['Hanken_Grotesk'] truncate">
+                {targetType === 'WON_PROJECT_VALUE' ? formatCurrency(summary.totalActualValue) : `${summary.totalActualCount} Projects`}
+              </div>
+              <div className="text-[11px] text-emerald-700 font-bold mt-1">
+                {summary.totalActualCount} verified won projects
+              </div>
+            </div>
+            <div className="mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500 font-medium">
+              Attributed: {coverage?.wonProjectsWithUserAttribution || 0} projects
+            </div>
+          </div>
+
+          {/* Overall Attainment */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Attainment Rate</span>
+            <div className="mt-2">
+              <div className="text-2xl font-black text-indigo-600 font-['Hanken_Grotesk']">
+                {summary.overallAttainmentPercent !== null ? `${summary.overallAttainmentPercent}%` : 'No Target'}
+              </div>
+              <div className="text-[11px] text-slate-500 font-medium mt-1">
+                Actual Won / Assigned Quota
+              </div>
+            </div>
+            <div className="mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500 font-medium">
+              Calculated dynamically on read
+            </div>
+          </div>
+
+          {/* Data Coverage Health */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Historical Attribution Health</span>
+            <div className="mt-2">
+              <div className="text-xl font-black text-slate-900 font-['Hanken_Grotesk']">
+                {coverage?.wonProjectsInPeriod || 0} <span className="text-xs font-bold text-slate-500">Won in Period</span>
+              </div>
+              <div className="text-[11px] text-slate-600 font-semibold mt-1">
+                {coverage?.missingAttributionCount === 0 ? '✓ 100% Attribution Complete' : `${coverage?.missingAttributionCount} missing attribution`}
+              </div>
+            </div>
+            <div className="mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500 font-medium">
+              Immutable terminal transition snapshot
+            </div>
+          </div>
         </div>
+      )}
+
+      {/* Tabs */}
+      <div className="flex items-center gap-3 border-b border-slate-200 pb-2">
+        <button
+          onClick={() => setActiveTab('REPS')}
+          className={`px-4 py-2 font-bold text-sm rounded-xl transition-all flex items-center gap-2 ${
+            activeTab === 'REPS'
+              ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <span className="material-symbols-outlined text-[18px]">person</span>
+          <span>Representative Attainment ({attainmentData?.repAttainment?.length || 0})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('TEAMS')}
+          className={`px-4 py-2 font-bold text-sm rounded-xl transition-all flex items-center gap-2 ${
+            activeTab === 'TEAMS'
+              ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <span className="material-symbols-outlined text-[18px]">groups</span>
+          <span>Team Quotas ({attainmentData?.teamAttainment?.length || 0})</span>
+        </button>
       </div>
 
-      {/* Target Breakdown Table */}
-      <div className="bg-white rounded-xl border border-[#E1E1E1] shadow-sm overflow-hidden p-6 space-y-4">
-        <h2 className="text-base font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] border-b border-[#E1E1E1] pb-3">
-          Sales Representative Target Quota Table
-        </h2>
+      {/* Representative Attainment Table */}
+      {activeTab === 'REPS' && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden p-6 space-y-4">
+          <div className="flex justify-between items-center">
+            <h2 className="text-base font-bold text-slate-900 font-['Hanken_Grotesk']">
+              Sales Representatives Quota Attainment Table
+            </h2>
+            <span className="text-xs text-slate-500 font-medium">
+              Period: {periodStart} to {periodEnd}
+            </span>
+          </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-[#1a1c1c]">
-            <thead className="bg-[#f9f9f9] text-[#464555] font-bold uppercase border-b border-[#E1E1E1]">
-              <tr>
-                <th className="px-6 py-3.5">Sales Officer</th>
-                <th className="px-6 py-3.5">Target Revenue (IDR)</th>
-                <th className="px-6 py-3.5">Achieved Revenue (IDR)</th>
-                <th className="px-6 py-3.5">Visits Target vs Actual</th>
-                <th className="px-6 py-3.5">Quota Achievement Rate</th>
-                <th className="px-6 py-3.5 text-right">Commission Tier</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#E1E1E1]">
-              {targets.map((t) => {
-                const trgRev = t.targetRevenue || t.targetAmount || 1;
-                const achRev = t.achievedRevenue || t.actualAmount || 0;
-                const rate = Math.round((achRev / trgRev) * 100);
-                const name = t.repName || t.userName || 'Sales Officer';
-                const achVisits = t.achievedVisits || t.actualVisits || 0;
-                return (
-                  <tr key={t.id} className="hover:bg-[#f9f9f9]">
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2.5">
-                        <img
-                          src={t.repAvatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'}
-                          alt={name}
-                          className="w-7 h-7 rounded-full object-cover border border-[#E1E1E1]"
-                        />
-                        <span className="font-bold text-sm text-[#1a1c1c]">{name}</span>
-                      </div>
-                    </td>
-
-                    <td className="px-6 py-4 font-mono font-bold text-[#1a1c1c]">
-                      Rp {(trgRev / 1000000000).toFixed(1)}B
-                    </td>
-
-                    <td className="px-6 py-4 font-mono font-bold text-[#008f53]">
-                      Rp {(achRev / 1000000000).toFixed(1)}B
-                    </td>
-
-                    <td className="px-6 py-4 font-semibold text-[#464555]">
-                      {achVisits} / {t.targetVisits} Visits
-                    </td>
-
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        <span className="font-extrabold text-[#4744e5] text-sm">{rate}%</span>
-                        <div className="w-20 bg-[#f3f3f3] h-2 rounded-full overflow-hidden border border-[#E1E1E1]">
-                          <div
-                            className="bg-[#4744e5] h-full"
-                            style={{ width: `${Math.min(rate, 100)}%` }}
-                          />
-                        </div>
-                      </div>
-                    </td>
-
-                    <td className="px-6 py-4 text-right">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          rate >= 100
-                            ? 'bg-[#00C875]/10 text-[#008f53]'
-                            : rate >= 75
-                            ? 'bg-[#6161ff]/10 text-[#6161ff]'
-                            : 'bg-[#ba1a1a]/10 text-[#ba1a1a]'
-                        }`}
-                      >
-                        {rate >= 100 ? 'Bonus Tier 1' : rate >= 75 ? 'Standard Tier' : 'Needs Review'}
-                      </span>
-                    </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-slate-900">
+              <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200 text-[10px]">
+                <tr>
+                  <th className="px-6 py-3.5">Representative</th>
+                  <th className="px-6 py-3.5">Team</th>
+                  <th className="px-6 py-3.5">Target Quota</th>
+                  <th className="px-6 py-3.5">Actual Won Outcome</th>
+                  <th className="px-6 py-3.5">Attainment Rate</th>
+                  <th className="px-6 py-3.5 text-right">Remaining Quota</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {isLoading ? (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-8 text-center text-slate-400">Loading quota data from database...</td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+                ) : attainmentData?.repAttainment?.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-8 text-center text-slate-400">No representative targets found in scope.</td>
+                  </tr>
+                ) : (
+                  attainmentData?.repAttainment?.map((r) => {
+                    const hasTarget = r.hasTargetAssigned;
+                    const isCount = targetType === 'WON_PROJECT_COUNT';
+                    const targetDisplay = hasTarget ? (isCount ? `${r.targetValue} Projects` : formatCurrency(r.targetValue)) : 'No target assigned';
+                    const actualDisplay = isCount ? `${r.actualCount} Projects` : formatCurrency(r.actualValue);
+                    const remainingDisplay = hasTarget ? (isCount ? `${r.remainingValue} Projects` : formatCurrency(r.remainingValue)) : '-';
+                    const rate = r.attainmentPercent;
 
-      {/* CREATE TARGET MODAL */}
+                    return (
+                      <tr key={r.userId} className="hover:bg-slate-50/70 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="font-bold text-sm text-slate-900">{r.name}</div>
+                          <div className="text-[11px] text-slate-500">{r.email}</div>
+                        </td>
+
+                        <td className="px-6 py-4">
+                          <span className="px-2.5 py-1 bg-slate-100 text-slate-700 text-[10px] font-bold rounded-md">
+                            {r.teamName}
+                          </span>
+                        </td>
+
+                        <td className="px-6 py-4 font-mono font-bold text-slate-900">
+                          {targetDisplay}
+                        </td>
+
+                        <td className="px-6 py-4 font-mono font-bold text-emerald-600">
+                          {actualDisplay} ({r.actualCount} won)
+                        </td>
+
+                        <td className="px-6 py-4">
+                          {rate !== null ? (
+                            <div className="flex items-center gap-2.5">
+                              <span className="font-black text-indigo-600 text-sm">{rate}%</span>
+                              <div className="w-24 bg-slate-100 h-2 rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full ${rate >= 100 ? 'bg-emerald-500' : 'bg-indigo-600'}`}
+                                  style={{ width: `${Math.min(rate, 100)}%` }}
+                                />
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 font-semibold italic">Unassigned</span>
+                          )}
+                        </td>
+
+                        <td className="px-6 py-4 text-right font-mono font-semibold text-slate-600">
+                          {remainingDisplay}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Team Attainment Table */}
+      {activeTab === 'TEAMS' && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden p-6 space-y-4">
+          <div className="flex justify-between items-center">
+            <h2 className="text-base font-bold text-slate-900 font-['Hanken_Grotesk']">
+              Team Target Quotas & Attainment
+            </h2>
+            <span className="text-xs text-slate-500 font-medium">
+              Period: {periodStart} to {periodEnd}
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-slate-900">
+              <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200 text-[10px]">
+                <tr>
+                  <th className="px-6 py-3.5">Team Name</th>
+                  <th className="px-6 py-3.5">Team Target</th>
+                  <th className="px-6 py-3.5">Team Realized Outcome</th>
+                  <th className="px-6 py-3.5">Attainment Rate</th>
+                  <th className="px-6 py-3.5 text-right">Remaining Quota</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {isLoading ? (
+                  <tr>
+                    <td colSpan={5} className="px-6 py-8 text-center text-slate-400">Loading team quota data...</td>
+                  </tr>
+                ) : attainmentData?.teamAttainment?.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-6 py-8 text-center text-slate-400">No teams found in scope.</td>
+                  </tr>
+                ) : (
+                  attainmentData?.teamAttainment?.map((tm) => {
+                    const hasTarget = tm.hasTargetAssigned;
+                    const isCount = targetType === 'WON_PROJECT_COUNT';
+                    const targetDisplay = hasTarget ? (isCount ? `${tm.targetValue} Projects` : formatCurrency(tm.targetValue)) : 'No target assigned';
+                    const actualDisplay = isCount ? `${tm.actualCount} Projects` : formatCurrency(tm.actualValue);
+                    const remainingDisplay = hasTarget ? (isCount ? `${tm.remainingValue} Projects` : formatCurrency(tm.remainingValue)) : '-';
+                    const rate = tm.attainmentPercent;
+
+                    return (
+                      <tr key={tm.teamId} className="hover:bg-slate-50/70 transition-colors">
+                        <td className="px-6 py-4 font-bold text-sm text-slate-900">
+                          {tm.teamName}
+                        </td>
+
+                        <td className="px-6 py-4 font-mono font-bold text-slate-900">
+                          {targetDisplay}
+                        </td>
+
+                        <td className="px-6 py-4 font-mono font-bold text-emerald-600">
+                          {actualDisplay} ({tm.actualCount} won)
+                        </td>
+
+                        <td className="px-6 py-4">
+                          {rate !== null ? (
+                            <div className="flex items-center gap-2.5">
+                              <span className="font-black text-indigo-600 text-sm">{rate}%</span>
+                              <div className="w-24 bg-slate-100 h-2 rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full ${rate >= 100 ? 'bg-emerald-500' : 'bg-indigo-600'}`}
+                                  style={{ width: `${Math.min(rate, 100)}%` }}
+                                />
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 font-semibold italic">Unassigned</span>
+                          )}
+                        </td>
+
+                        <td className="px-6 py-4 text-right font-mono font-semibold text-slate-600">
+                          {remainingDisplay}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ASSIGN TARGET MODAL */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl border border-[#E1E1E1] shadow-lg max-w-md w-full p-6 space-y-4">
-            <div className="flex justify-between items-center border-b border-[#E1E1E1] pb-3">
-              <h2 className="text-lg font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">
-                Set Sales Officer Quota ({period})
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-md w-full p-6 space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h2 className="text-lg font-black text-slate-900 font-['Hanken_Grotesk']">
+                Assign Sales Target Quota
               </h2>
-              <button onClick={() => setShowModal(false)} className="text-[#767587]">
+              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600">
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
 
-            <form onSubmit={handleSaveTarget} className="space-y-4">
+            {modalError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold rounded-xl">
+                {modalError}
+              </div>
+            )}
+
+            <form onSubmit={handleCreateTarget} className="space-y-4">
               <div>
-                <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Sales Representative</label>
-                <select
-                  value={selectedUserId}
-                  onChange={(e) => setSelectedUserId(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded text-xs bg-white font-bold"
-                >
-                  {tenantUsers.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.name} ({u.roleName})
-                    </option>
-                  ))}
-                </select>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Target Scope</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setModalScope('USER')}
+                    className={`py-2 text-xs font-bold rounded-xl border ${
+                      modalScope === 'USER'
+                        ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
+                        : 'bg-white border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    Sales Representative
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setModalScope('TEAM')}
+                    className={`py-2 text-xs font-bold rounded-xl border ${
+                      modalScope === 'TEAM'
+                        ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
+                        : 'bg-white border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    Team Quota
+                  </button>
+                </div>
               </div>
 
+              {modalScope === 'USER' ? (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Select Sales Representative</label>
+                  <select
+                    value={modalTenantUserId}
+                    onChange={(e) => setModalTenantUserId(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs bg-white font-bold text-slate-800 focus:outline-indigo-500"
+                  >
+                    {attainmentData?.repAttainment?.map((r) => (
+                      <option key={r.tenantUserId} value={r.tenantUserId}>
+                        {r.name} ({r.teamName})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Select Team</label>
+                  <select
+                    value={modalTeamId}
+                    onChange={(e) => setModalTeamId(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs bg-white font-bold text-slate-800 focus:outline-indigo-500"
+                  >
+                    {attainmentData?.teamAttainment?.map((tm) => (
+                      <option key={tm.teamId} value={tm.teamId}>
+                        {tm.teamName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div>
-                <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Quarterly Revenue Target (IDR)</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Target Value {targetType === 'WON_PROJECT_VALUE' ? '(IDR)' : '(Project Count)'}
+                </label>
                 <input
                   type="number"
-                  value={targetRevenue}
-                  onChange={(e) => setTargetRevenue(Number(e.target.value))}
-                  className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded text-xs font-mono"
+                  min="1"
+                  step={targetType === 'WON_PROJECT_COUNT' ? '1' : '1000'}
+                  value={modalTargetValue}
+                  onChange={(e) => setModalTargetValue(Number(e.target.value))}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-indigo-500"
+                  required
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Visits Quota (Count)</label>
-                <input
-                  type="number"
-                  value={targetVisits}
-                  onChange={(e) => setTargetVisits(Number(e.target.value))}
-                  className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded text-xs font-mono"
-                />
+              <div className="grid grid-cols-2 gap-2 text-xs text-slate-500 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                <div>
+                  <span className="font-bold block text-[10px] uppercase">Period Start</span>
+                  <span className="font-mono text-slate-800 font-bold">{periodStart}</span>
+                </div>
+                <div>
+                  <span className="font-bold block text-[10px] uppercase">Period End</span>
+                  <span className="font-mono text-slate-800 font-bold">{periodEnd}</span>
+                </div>
               </div>
 
-              <div className="flex justify-end gap-2 pt-3 border-t border-[#E1E1E1]">
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setShowModal(false)}
-                  className="px-4 py-2 border border-[#E1E1E1] rounded text-xs font-semibold"
+                  className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-[#4744e5] text-white rounded text-xs font-bold hover:bg-[#2c24ce]"
+                  disabled={isSubmitting}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 disabled:opacity-50"
                 >
-                  Save Quota
+                  {isSubmitting ? 'Saving Target...' : 'Save Target Quota'}
                 </button>
               </div>
             </form>
