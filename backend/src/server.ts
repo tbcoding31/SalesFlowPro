@@ -721,11 +721,135 @@ const setupEndpoint = (table: string) => {
       return;
     }
 
-    let query = `SELECT * FROM ${table}`;
+    // Sort key allowlists per table
+    const sortAllowlists: Record<string, Record<string, string>> = {
+      customers: {
+        id: 'id',
+        name: 'name',
+        code: 'code',
+        createdAt: 'createdAt',
+        updatedAt: 'createdAt',
+        status: 'statusId',
+        statusId: 'statusId',
+        industry: 'industry'
+      },
+      tasks: {
+        id: 'id',
+        title: 'title',
+        dueDate: 'dueDate',
+        createdAt: 'createdAt',
+        updatedAt: 'createdAt',
+        status: 'statusId',
+        statusId: 'statusId',
+        priority: 'priorityId',
+        priorityId: 'priorityId'
+      },
+      activities: {
+        id: 'id',
+        subject: 'subject',
+        type: 'typeId',
+        typeId: 'typeId',
+        occurredAt: 'occurredAt',
+        createdAt: 'occurredAt'
+      },
+      audit_logs: {
+        id: 'id',
+        action: 'action',
+        createdAt: 'createdAt',
+        timestamp: 'createdAt'
+      },
+      visits: {
+        id: 'id',
+        title: 'title',
+        visitDate: 'visitDate',
+        status: 'statusId',
+        statusId: 'statusId',
+        createdAt: 'createdAt'
+      },
+      follow_ups: {
+        id: 'id',
+        title: 'title',
+        followUpDate: 'followUpDate',
+        status: 'status',
+        priority: 'priorityId',
+        priorityId: 'priorityId',
+        createdAt: 'createdAt'
+      },
+      projects: {
+        id: 'id',
+        title: 'title',
+        name: 'title',
+        stage: 'stageId',
+        stageId: 'stageId',
+        value: 'value',
+        estimatedValue: 'value',
+        expectedCloseDate: 'expectedCloseDate',
+        createdAt: 'createdAt'
+      }
+    };
+
+    const paginatedTables = ['customers', 'tasks', 'activities', 'audit_logs'];
+    const isPaginated = paginatedTables.includes(table) || req.query.page !== undefined || req.query.pageSize !== undefined;
+
+    // Validate page & pageSize
+    let pageNum = 1;
+    let sizeNum = 25;
+    const MAX_PAGE_SIZE = 100;
+
+    if (req.query.page !== undefined) {
+      const parsedPage = parseInt(req.query.page as string, 10);
+      if (isNaN(parsedPage) || parsedPage < 1) {
+        return res.status(400).json({ error: 'Invalid page parameter. Must be an integer >= 1' });
+      }
+      pageNum = parsedPage;
+    }
+
+    if (req.query.pageSize !== undefined) {
+      const parsedSize = parseInt(req.query.pageSize as string, 10);
+      if (isNaN(parsedSize) || parsedSize < 1) {
+        return res.status(400).json({ error: 'Invalid pageSize parameter. Must be an integer >= 1' });
+      }
+      if (parsedSize > MAX_PAGE_SIZE) {
+        return res.status(400).json({ error: `pageSize exceeds maximum limit of ${MAX_PAGE_SIZE}` });
+      }
+      sizeNum = parsedSize;
+    }
+
+    // Validate and map sort
+    let sortColumn = 'id';
+    let sortOrder = 'DESC';
+    const allowlist = sortAllowlists[table];
+
+    if (req.query.sortBy) {
+      const requestedSortBy = String(req.query.sortBy).trim();
+      if (!allowlist || !allowlist[requestedSortBy]) {
+        return res.status(400).json({ error: `Invalid sort field: ${requestedSortBy}` });
+      }
+      sortColumn = allowlist[requestedSortBy];
+    } else if (table === 'customers') {
+      sortColumn = 'createdAt';
+    } else if (table === 'tasks') {
+      sortColumn = 'dueDate';
+    } else if (table === 'activities') {
+      sortColumn = 'occurredAt';
+    } else if (table === 'audit_logs') {
+      sortColumn = 'createdAt';
+    }
+
+    if (req.query.sortOrder) {
+      const requestedOrder = String(req.query.sortOrder).trim().toUpperCase();
+      if (requestedOrder !== 'ASC' && requestedOrder !== 'DESC') {
+        return res.status(400).json({ error: 'Invalid sortOrder. Must be "ASC" or "DESC"' });
+      }
+      sortOrder = requestedOrder;
+    }
+
+    const whereClauses: string[] = ['1=1'];
     const params: any[] = [];
+
     if (tenantSpecificTables.includes(table)) {
       if (actorTenant !== 'SYSTEM') {
-        query += ' WHERE tenantId = ?';
+        whereClauses.push('tenantId = ?');
         params.push(actorTenant);
 
         const actorUserId = (req as any).userId;
@@ -736,12 +860,10 @@ const setupEndpoint = (table: string) => {
         // Check if table has resource ownership (picId / userId)
         if (perms.ownerCol && !actorPermissions.includes('ALL') && !actorPermissions.includes('MANAGE_TENANT')) {
           if (actorDataScope === 'OWN') {
-            query += ` AND ${perms.ownerCol} = ?`;
+            whereClauses.push(`${perms.ownerCol} = ?`);
             params.push(actorUserId);
           } else if (actorDataScope === 'TEAM') {
-            // Dynamic TEAM scope resolution:
-            // Find all active tenant users in the same team as the actor
-            query += ` AND ${perms.ownerCol} IN (
+            whereClauses.push(`${perms.ownerCol} IN (
               SELECT tu.userId FROM tenant_users tu
               JOIN team_members tm ON tm.tenantUserId = tu.id
               WHERE tm.teamId IN (
@@ -749,22 +871,112 @@ const setupEndpoint = (table: string) => {
                 JOIN tenant_users tu2 ON tu2.id = tm2.tenantUserId
                 WHERE tu2.userId = ? AND tu2.tenantId = ? AND tu2.status = 'ACTIVE'
               ) AND tu.tenantId = ? AND tu.status = 'ACTIVE'
-            )`;
+            )`);
             params.push(actorUserId, actorTenant, actorTenant);
           } else if (actorDataScope === 'DEPARTMENT') {
-            // Fail-safe for DEPARTMENT scope (HOLD state): deny operational records
-            query += ` AND 1 = 0 /* DEPARTMENT_SCOPE_NOT_ACTIVE */`;
+            whereClauses.push('1 = 0 /* DEPARTMENT_SCOPE_NOT_ACTIVE */');
           }
         }
       } else {
         const { tenantId } = req.query;
         if (tenantId && tenantId !== 'ALL' && tenantId !== 'SYSTEM') {
-          query += ' WHERE tenantId = ?';
+          whereClauses.push('tenantId = ?');
           params.push(tenantId);
         }
       }
     }
-    sendRes(res, pool.query(query, params).then(([rows]) => rows));
+
+    // Specific Domain Filters
+    if (req.query.search) {
+      const searchStr = `%${String(req.query.search).trim()}%`;
+      if (table === 'customers') {
+        whereClauses.push('(name LIKE ? OR code LIKE ? OR email LIKE ? OR phone LIKE ?)');
+        params.push(searchStr, searchStr, searchStr, searchStr);
+      } else if (table === 'tasks') {
+        whereClauses.push('(title LIKE ? OR description LIKE ?)');
+        params.push(searchStr, searchStr);
+      } else if (table === 'activities') {
+        whereClauses.push('(subject LIKE ? OR description LIKE ?)');
+        params.push(searchStr, searchStr);
+      } else if (table === 'audit_logs') {
+        whereClauses.push('(action LIKE ? OR details LIKE ?)');
+        params.push(searchStr, searchStr);
+      } else {
+        whereClauses.push('(title LIKE ?)');
+        params.push(searchStr);
+      }
+    }
+
+    if (req.query.status && req.query.status !== 'ALL') {
+      const statusCol = table === 'follow_ups' ? 'status' : 'statusId';
+      whereClauses.push(`${statusCol} = ?`);
+      params.push(req.query.status);
+    }
+
+    if (req.query.priority && req.query.priority !== 'ALL') {
+      whereClauses.push('priorityId = ?');
+      params.push(req.query.priority);
+    }
+
+    if (req.query.customerId && req.query.customerId !== 'ALL') {
+      whereClauses.push('customerId = ?');
+      params.push(req.query.customerId);
+    }
+
+    if (req.query.picId && req.query.picId !== 'ALL') {
+      whereClauses.push('picId = ?');
+      params.push(req.query.picId);
+    }
+
+    if (req.query.userId && req.query.userId !== 'ALL') {
+      whereClauses.push('userId = ?');
+      params.push(req.query.userId);
+    }
+
+    if (req.query.typeId && req.query.typeId !== 'ALL') {
+      whereClauses.push('typeId = ?');
+      params.push(req.query.typeId);
+    }
+
+    const whereSql = whereClauses.join(' AND ');
+
+    if (!isPaginated) {
+      let query = `SELECT * FROM ${table} WHERE ${whereSql} ORDER BY ${sortColumn} ${sortOrder}, id ${sortOrder}`;
+      sendRes(res, pool.query(query, params).then(([rows]) => rows));
+      return;
+    }
+
+    // Execute Paginated Flow
+    (async () => {
+      try {
+        const [countRows]: any = await pool.query(`SELECT COUNT(*) as total FROM ${table} WHERE ${whereSql}`, params);
+        const totalItems = countRows[0]?.total || 0;
+        const totalPages = Math.ceil(totalItems / sizeNum);
+        const offset = (pageNum - 1) * sizeNum;
+
+        let rows: any[] = [];
+        if (totalItems > 0 && offset < totalItems) {
+          const dataQuery = `SELECT * FROM ${table} WHERE ${whereSql} ORDER BY ${sortColumn} ${sortOrder}, id ${sortOrder} LIMIT ? OFFSET ?`;
+          const [dataRows]: any = await pool.query(dataQuery, [...params, sizeNum, offset]);
+          rows = dataRows;
+        }
+
+        res.json({
+          data: rows,
+          pagination: {
+            page: pageNum,
+            pageSize: sizeNum,
+            totalItems,
+            totalPages,
+            hasNextPage: pageNum < totalPages,
+            hasPreviousPage: pageNum > 1
+          }
+        });
+      } catch (err: any) {
+        console.error(`[Pagination error on ${table}]`, err.message);
+        res.status(500).json({ error: 'Internal Server Error' });
+      }
+    })();
   });
 
   // GET single record by ID with dataScope and tenant protection

@@ -15,15 +15,37 @@ export const ActivitiesPage: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  const loadData = async () => {
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [totalItems, setTotalItems] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+
+  // Filters
+  const [dateRange, setDateRange] = useState<string>('ALL');
+  const [activityType, setActivityType] = useState<string>('ALL');
+  const [selectedCustomer, setSelectedCustomer] = useState<string>('ALL');
+  const [selectedUser, setSelectedUser] = useState<string>('ALL');
+  const [selectedPic, setSelectedPic] = useState<string>('ALL');
+
+  const loadData = async (page = currentPage) => {
     setIsLoading(true);
     try {
-      const [aList, cList, uList] = await Promise.all([
-        crmApi.fetchCollection<Activity>('activities', tenantId),
+      const [aRes, cList, uList] = await Promise.all([
+        crmApi.fetchActivities({
+          page,
+          pageSize,
+          customerId: selectedCustomer !== 'ALL' ? selectedCustomer : undefined,
+          userId: selectedUser !== 'ALL' ? selectedUser : undefined,
+          typeId: activityType !== 'ALL' ? activityType : undefined,
+          tenantId
+        }),
         crmApi.fetchCollection<Customer>('customers', tenantId),
         usersApi.fetchUsers(tenantId)
       ]);
-      setActivities(aList);
+      setActivities(aRes.data || []);
+      setTotalItems(aRes.pagination?.totalItems || 0);
+      setTotalPages(aRes.pagination?.totalPages || 0);
       setCustomers(cList);
       setUsers(uList);
     } catch (err) {
@@ -34,15 +56,8 @@ export const ActivitiesPage: React.FC = () => {
   };
 
   React.useEffect(() => {
-    loadData();
-  }, [tenantId]);
-
-  // Filters
-  const [dateRange, setDateRange] = useState<string>('ALL');
-  const [activityType, setActivityType] = useState<string>('ALL');
-  const [selectedCustomer, setSelectedCustomer] = useState<string>('ALL');
-  const [selectedUser, setSelectedUser] = useState<string>('ALL');
-  const [selectedPic, setSelectedPic] = useState<string>('ALL');
+    loadData(currentPage);
+  }, [tenantId, currentPage, pageSize, selectedCustomer, selectedUser, activityType]);
   
   const activityTypesList = [
     'Customer Created',
@@ -255,6 +270,57 @@ export const ActivitiesPage: React.FC = () => {
             );
           })
         )}
+      </div>
+
+      {/* Footer Pagination */}
+      <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-[#767587]">
+        <div>
+          Showing {totalItems === 0 ? 0 : (currentPage - 1) * pageSize + 1}-{Math.min(currentPage * pageSize, totalItems)} of {totalItems}
+        </div>
+
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+            disabled={currentPage === 1 || totalPages === 0}
+            className="w-8 h-8 flex items-center justify-center text-[#767587] hover:bg-[#f3f3f3] rounded disabled:opacity-30 cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-[18px]">chevron_left</span>
+          </button>
+
+          {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1).map((p) => (
+            <button
+              key={p}
+              onClick={() => setCurrentPage(p)}
+              className={`w-8 h-8 rounded text-xs font-bold flex items-center justify-center cursor-pointer ${
+                currentPage === p ? 'bg-[#4744e5] text-white shadow-2xs' : 'text-[#1a1c1c] hover:bg-[#f3f3f3]'
+              }`}
+            >
+              {p}
+            </button>
+          ))}
+
+          {totalPages > 5 && (
+            <>
+              <span className="px-1 text-[#767587]">...</span>
+              <button
+                onClick={() => setCurrentPage(totalPages)}
+                className={`w-8 h-8 rounded text-xs font-bold flex items-center justify-center cursor-pointer ${
+                  currentPage === totalPages ? 'bg-[#4744e5] text-white shadow-2xs' : 'text-[#1a1c1c] hover:bg-[#f3f3f3]'
+                }`}
+              >
+                {totalPages}
+              </button>
+            </>
+          )}
+
+          <button
+            onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
+            disabled={currentPage === totalPages || totalPages === 0}
+            className="w-8 h-8 flex items-center justify-center text-[#767587] hover:bg-[#f3f3f3] rounded disabled:opacity-30 cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-[18px]">chevron_right</span>
+          </button>
+        </div>
       </div>
 
     </div>

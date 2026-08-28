@@ -1,3 +1,5 @@
+import { PaginatedResponse, Customer, Task, Activity } from '../types';
+
 const API_BASE = '/api';
 
 const getAuthHeaders = () => {
@@ -9,8 +11,23 @@ const getAuthHeaders = () => {
   return headers;
 };
 
+export interface QueryPaginationParams {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc' | 'ASC' | 'DESC';
+  status?: string;
+  priority?: string;
+  picId?: string;
+  customerId?: string;
+  userId?: string;
+  typeId?: string;
+  tenantId?: string;
+}
+
 export const crmApi = {
-  // Generic collection fetcher
+  // Generic collection fetcher (bounded / full)
   fetchCollection: async <T>(table: string, tenantId?: string): Promise<T[]> => {
     try {
       const params = new URLSearchParams();
@@ -20,11 +37,85 @@ export const crmApi = {
       const res = await fetch(url, { headers: getAuthHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch ${table}`);
       const data = await res.json();
-      return Array.isArray(data) ? data : [];
+      return Array.isArray(data) ? data : (data.data && Array.isArray(data.data) ? data.data : []);
     } catch (err) {
       console.error(`[crmApi.fetchCollection ${table} error]`, err);
       return [];
     }
+  },
+
+  // Resource-specific Server-Side Paginated Fetchers
+  fetchCustomers: async (params?: QueryPaginationParams): Promise<PaginatedResponse<Customer>> => {
+    const q = new URLSearchParams();
+    if (params) {
+      if (params.page) q.set('page', String(params.page));
+      if (params.pageSize) q.set('pageSize', String(params.pageSize));
+      if (params.search) q.set('search', params.search.trim());
+      if (params.sortBy) q.set('sortBy', params.sortBy);
+      if (params.sortOrder) q.set('sortOrder', params.sortOrder);
+      if (params.status && params.status !== 'ALL') q.set('status', params.status);
+      if (params.picId && params.picId !== 'ALL') q.set('picId', params.picId);
+      if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
+    }
+    const url = `${API_BASE}/customers${q.toString() ? '?' + q.toString() : ''}`;
+    const res = await fetch(url, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch customers`);
+    return await res.json();
+  },
+
+  fetchTasks: async (params?: QueryPaginationParams): Promise<PaginatedResponse<Task>> => {
+    const q = new URLSearchParams();
+    if (params) {
+      if (params.page) q.set('page', String(params.page));
+      if (params.pageSize) q.set('pageSize', String(params.pageSize));
+      if (params.search) q.set('search', params.search.trim());
+      if (params.sortBy) q.set('sortBy', params.sortBy);
+      if (params.sortOrder) q.set('sortOrder', params.sortOrder);
+      if (params.status && params.status !== 'ALL') q.set('status', params.status);
+      if (params.priority && params.priority !== 'ALL') q.set('priority', params.priority);
+      if (params.customerId && params.customerId !== 'ALL') q.set('customerId', params.customerId);
+      if (params.picId && params.picId !== 'ALL') q.set('picId', params.picId);
+      if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
+    }
+    const url = `${API_BASE}/tasks${q.toString() ? '?' + q.toString() : ''}`;
+    const res = await fetch(url, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch tasks`);
+    return await res.json();
+  },
+
+  fetchActivities: async (params?: QueryPaginationParams): Promise<PaginatedResponse<Activity>> => {
+    const q = new URLSearchParams();
+    if (params) {
+      if (params.page) q.set('page', String(params.page));
+      if (params.pageSize) q.set('pageSize', String(params.pageSize));
+      if (params.search) q.set('search', params.search.trim());
+      if (params.sortBy) q.set('sortBy', params.sortBy);
+      if (params.sortOrder) q.set('sortOrder', params.sortOrder);
+      if (params.customerId && params.customerId !== 'ALL') q.set('customerId', params.customerId);
+      if (params.userId && params.userId !== 'ALL') q.set('userId', params.userId);
+      if (params.typeId && params.typeId !== 'ALL') q.set('typeId', params.typeId);
+      if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
+    }
+    const url = `${API_BASE}/activities${q.toString() ? '?' + q.toString() : ''}`;
+    const res = await fetch(url, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch activities`);
+    return await res.json();
+  },
+
+  fetchAuditLogs: async (params?: QueryPaginationParams): Promise<PaginatedResponse<any>> => {
+    const q = new URLSearchParams();
+    if (params) {
+      if (params.page) q.set('page', String(params.page));
+      if (params.pageSize) q.set('pageSize', String(params.pageSize));
+      if (params.search) q.set('search', params.search.trim());
+      if (params.sortBy) q.set('sortBy', params.sortBy);
+      if (params.sortOrder) q.set('sortOrder', params.sortOrder);
+      if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
+    }
+    const url = `${API_BASE}/audit_logs${q.toString() ? '?' + q.toString() : ''}`;
+    const res = await fetch(url, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch audit logs`);
+    return await res.json();
   },
 
   // Generic single record fetcher

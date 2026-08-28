@@ -38,16 +38,40 @@ export const CustomersListPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [tenantUsers, setTenantUsers] = useState<User[]>([]);
 
-  const loadData = async () => {
+  // Filters
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('All');
+  const [typeFilter, setTypeFilter] = useState('Any');
+  const [picFilter, setPicFilter] = useState('All');
+  const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
+
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [totalItems, setTotalItems] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+
+  const loadData = async (page = currentPage) => {
     setIsLoading(true);
     try {
-      const [customersList, usersList] = await Promise.all([
-        crmApi.fetchCollection<Customer>('customers', tenantId),
+      const [pagedRes, usersList] = await Promise.all([
+        crmApi.fetchCustomers({
+          page,
+          pageSize,
+          search: searchQuery || undefined,
+          status: statusFilter !== 'All' ? statusFilter : undefined,
+          picId: picFilter !== 'All' ? (picFilter === 'Me' ? currentUser?.id : picFilter) : undefined,
+          tenantId
+        }),
         usersApi.fetchUsers(tenantId)
       ]);
       setTenantUsers(usersList);
 
-      const mapped: ExtendedCustomerItem[] = customersList.map((c, idx) => {
+      const customersList = pagedRes.data || [];
+      setTotalItems(pagedRes.pagination?.totalItems || 0);
+      setTotalPages(pagedRes.pagination?.totalPages || 0);
+
+      const mapped: ExtendedCustomerItem[] = customersList.map((c: any, idx: number) => {
         const pic = usersList.find(u => u.id === c.picId);
         return {
           id: c.id,
@@ -56,7 +80,7 @@ export const CustomersListPage: React.FC = () => {
           industry: c.industry || 'General',
           avatarBg: idx % 3 === 0 ? 'bg-[#6161ff]' : idx % 3 === 1 ? 'bg-[#f97316]' : 'bg-[#94a3b8]',
           avatarText: (c.name || 'CU').substring(0, 2).toUpperCase(),
-          status: c.status === 'ACTIVE' || c.status === 'CUSTOMER' ? 'Active' as const : c.status === 'PROSPECT' ? 'Pending' as const : 'Inactive' as const,
+          status: c.status === 'ACTIVE' || c.status === 'CUSTOMER' || c.statusId === 'ACTIVE' ? 'Active' as const : c.status === 'PROSPECT' || c.statusId === 'PROSPECT' ? 'Pending' as const : 'Inactive' as const,
           contactPersonName: (c.contacts && c.contacts.length > 0) ? c.contacts[0].name : (c.contactPerson || 'Contact Person'),
           contactPersonEmail: c.email || 'info@company.com',
           picName: pic?.name || c.assignedPicName || 'Unassigned',
@@ -68,7 +92,7 @@ export const CustomersListPage: React.FC = () => {
           tasksCount: 0,
           oppsCount: 0,
           updatedAt: c.updatedAt || 'Recently',
-          type: c.type,
+          type: c.type || c.typeId,
         };
       });
       setItems(mapped);
@@ -80,23 +104,11 @@ export const CustomersListPage: React.FC = () => {
   };
 
   useEffect(() => {
-    loadData();
-  }, [tenantId]);
-
-  // Filters
-  const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('All');
-  const [typeFilter, setTypeFilter] = useState('Any');
-  const [picFilter, setPicFilter] = useState('Me');
-  const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
+    loadData(currentPage);
+  }, [tenantId, currentPage, pageSize, searchQuery, statusFilter, picFilter]);
 
   // Selection
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-
-  // Pagination
-  const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
-  const totalCount = 248; // To match header in image
 
   // Add Modal State
   const [showAddModal, setShowAddModal] = useState(false);
@@ -445,7 +457,7 @@ export const CustomersListPage: React.FC = () => {
         {/* Table Subheader / Tab */}
         <div className="px-5 py-3.5 border-b border-[#E1E1E1] bg-white flex items-center justify-between">
           <h2 className="text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">
-            All Customers ({totalCount})
+            All Customers ({totalItems})
           </h2>
         </div>
 
@@ -659,58 +671,49 @@ export const CustomersListPage: React.FC = () => {
 
         {/* Footer Pagination */}
         <div className="p-4 bg-white border-t border-[#E1E1E1] flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-[#767587]">
-          <div>Showing 1-10 of {totalCount}</div>
+          <div>
+            Showing {totalItems === 0 ? 0 : (currentPage - 1) * pageSize + 1}-{Math.min(currentPage * pageSize, totalItems)} of {totalItems}
+          </div>
 
           <div className="flex items-center gap-1">
             <button
               onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
-              disabled={currentPage === 1}
+              disabled={currentPage === 1 || totalPages === 0}
               className="w-8 h-8 flex items-center justify-center text-[#767587] hover:bg-[#f3f3f3] rounded disabled:opacity-30 cursor-pointer"
             >
               <span className="material-symbols-outlined text-[18px]">chevron_left</span>
             </button>
 
-            <button
-              onClick={() => setCurrentPage(1)}
-              className={`w-8 h-8 rounded text-xs font-bold flex items-center justify-center cursor-pointer ${
-                currentPage === 1 ? 'bg-[#4744e5] text-white shadow-2xs' : 'text-[#1a1c1c] hover:bg-[#f3f3f3]'
-              }`}
-            >
-              1
-            </button>
+            {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1).map((p) => (
+              <button
+                key={p}
+                onClick={() => setCurrentPage(p)}
+                className={`w-8 h-8 rounded text-xs font-bold flex items-center justify-center cursor-pointer ${
+                  currentPage === p ? 'bg-[#4744e5] text-white shadow-2xs' : 'text-[#1a1c1c] hover:bg-[#f3f3f3]'
+                }`}
+              >
+                {p}
+              </button>
+            ))}
+
+            {totalPages > 5 && (
+              <>
+                <span className="px-1 text-[#767587]">...</span>
+                <button
+                  onClick={() => setCurrentPage(totalPages)}
+                  className={`w-8 h-8 rounded text-xs font-bold flex items-center justify-center cursor-pointer ${
+                    currentPage === totalPages ? 'bg-[#4744e5] text-white shadow-2xs' : 'text-[#1a1c1c] hover:bg-[#f3f3f3]'
+                  }`}
+                >
+                  {totalPages}
+                </button>
+              </>
+            )}
 
             <button
-              onClick={() => setCurrentPage(2)}
-              className={`w-8 h-8 rounded text-xs font-bold flex items-center justify-center cursor-pointer ${
-                currentPage === 2 ? 'bg-[#4744e5] text-white shadow-2xs' : 'text-[#1a1c1c] hover:bg-[#f3f3f3]'
-              }`}
-            >
-              2
-            </button>
-
-            <button
-              onClick={() => setCurrentPage(3)}
-              className={`w-8 h-8 rounded text-xs font-bold flex items-center justify-center cursor-pointer ${
-                currentPage === 3 ? 'bg-[#4744e5] text-white shadow-2xs' : 'text-[#1a1c1c] hover:bg-[#f3f3f3]'
-              }`}
-            >
-              3
-            </button>
-
-            <span className="px-1 text-[#767587]">...</span>
-
-            <button
-              onClick={() => setCurrentPage(25)}
-              className={`w-8 h-8 rounded text-xs font-bold flex items-center justify-center cursor-pointer ${
-                currentPage === 25 ? 'bg-[#4744e5] text-white shadow-2xs' : 'text-[#1a1c1c] hover:bg-[#f3f3f3]'
-              }`}
-            >
-              25
-            </button>
-
-            <button
-              onClick={() => setCurrentPage((p) => Math.min(p + 1, 25))}
-              className="w-8 h-8 flex items-center justify-center text-[#767587] hover:bg-[#f3f3f3] rounded cursor-pointer"
+              onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
+              disabled={currentPage === totalPages || totalPages === 0}
+              className="w-8 h-8 flex items-center justify-center text-[#767587] hover:bg-[#f3f3f3] rounded disabled:opacity-30 cursor-pointer"
             >
               <span className="material-symbols-outlined text-[18px]">chevron_right</span>
             </button>

@@ -17,15 +17,41 @@ export const TasksPage: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  const loadData = async () => {
+  // Filters
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [priorityFilter, setPriorityFilter] = useState('ALL');
+  const [customerFilter, setCustomerFilter] = useState('ALL');
+  const [dueDateFilter, setDueDateFilter] = useState('');
+  
+  // Quick Filters (Tabs)
+  const [quickFilter, setQuickFilter] = useState<'ALL' | 'OVERDUE' | 'DUE_TODAY' | 'UPCOMING' | 'COMPLETED'>('ALL');
+
+  // Pagination & Server Filter State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [totalItems, setTotalItems] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+
+  const loadData = async (page = currentPage) => {
     setIsLoading(true);
     try {
-      const [tList, cList, pList] = await Promise.all([
-        crmApi.fetchCollection<Task>('tasks', tenantId),
+      const [tRes, cList, pList] = await Promise.all([
+        crmApi.fetchTasks({
+          page,
+          pageSize,
+          search: searchQuery || undefined,
+          status: statusFilter !== 'ALL' ? statusFilter : undefined,
+          priority: priorityFilter !== 'ALL' ? priorityFilter : undefined,
+          customerId: customerFilter !== 'ALL' ? customerFilter : undefined,
+          tenantId
+        }),
         crmApi.fetchCollection<Customer>('customers', tenantId),
         crmApi.fetchCollection<Project>('projects', tenantId)
       ]);
-      setTasks(tList);
+      setTasks(tRes.data || []);
+      setTotalItems(tRes.pagination?.totalItems || 0);
+      setTotalPages(tRes.pagination?.totalPages || 0);
       setCustomers(cList);
       setProjects(pList);
     } catch (err) {
@@ -36,8 +62,8 @@ export const TasksPage: React.FC = () => {
   };
 
   React.useEffect(() => {
-    loadData();
-  }, [tenantId]);
+    loadData(currentPage);
+  }, [tenantId, currentPage, pageSize, searchQuery, statusFilter, priorityFilter, customerFilter]);
 
   const [taskStatuses, setTaskStatuses] = useState<MasterDataItem[]>([]);
   const [taskPriorities, setTaskPriorities] = useState<MasterDataItem[]>([]);
@@ -57,16 +83,6 @@ export const TasksPage: React.FC = () => {
   const handleProjectChange = (oppId: string) => {
     setSearchParams({ category: activeCategory, project: oppId });
   };
-
-  // Filters
-  const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('ALL');
-  const [priorityFilter, setPriorityFilter] = useState('ALL');
-  const [customerFilter, setCustomerFilter] = useState('ALL');
-  const [dueDateFilter, setDueDateFilter] = useState('');
-  
-  // Quick Filters (Tabs)
-  const [quickFilter, setQuickFilter] = useState<'ALL' | 'OVERDUE' | 'DUE_TODAY' | 'UPCOMING' | 'COMPLETED'>('ALL');
 
   const [showAddModal, setShowAddModal] = useState(false);
 
@@ -572,6 +588,57 @@ export const TasksPage: React.FC = () => {
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Footer Pagination */}
+        <div className="p-4 bg-white border-t border-[#E1E1E1] flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-[#767587]">
+          <div>
+            Showing {totalItems === 0 ? 0 : (currentPage - 1) * pageSize + 1}-{Math.min(currentPage * pageSize, totalItems)} of {totalItems}
+          </div>
+
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+              disabled={currentPage === 1 || totalPages === 0}
+              className="w-8 h-8 flex items-center justify-center text-[#767587] hover:bg-[#f3f3f3] rounded disabled:opacity-30 cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[18px]">chevron_left</span>
+            </button>
+
+            {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1).map((p) => (
+              <button
+                key={p}
+                onClick={() => setCurrentPage(p)}
+                className={`w-8 h-8 rounded text-xs font-bold flex items-center justify-center cursor-pointer ${
+                  currentPage === p ? 'bg-[#4744e5] text-white shadow-2xs' : 'text-[#1a1c1c] hover:bg-[#f3f3f3]'
+                }`}
+              >
+                {p}
+              </button>
+            ))}
+
+            {totalPages > 5 && (
+              <>
+                <span className="px-1 text-[#767587]">...</span>
+                <button
+                  onClick={() => setCurrentPage(totalPages)}
+                  className={`w-8 h-8 rounded text-xs font-bold flex items-center justify-center cursor-pointer ${
+                    currentPage === totalPages ? 'bg-[#4744e5] text-white shadow-2xs' : 'text-[#1a1c1c] hover:bg-[#f3f3f3]'
+                  }`}
+                >
+                  {totalPages}
+                </button>
+              </>
+            )}
+
+            <button
+              onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
+              disabled={currentPage === totalPages || totalPages === 0}
+              className="w-8 h-8 flex items-center justify-center text-[#767587] hover:bg-[#f3f3f3] rounded disabled:opacity-30 cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[18px]">chevron_right</span>
+            </button>
+          </div>
         </div>
       </div>
 
