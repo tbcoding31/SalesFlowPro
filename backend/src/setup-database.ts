@@ -119,15 +119,13 @@ async function setupDatabase() {
     `CREATE TABLE IF NOT EXISTS notification_preferences (id VARCHAR(50) PRIMARY KEY, userId VARCHAR(50), type VARCHAR(50), emailEnabled BOOLEAN, pushEnabled BOOLEAN, inAppEnabled BOOLEAN)`,
     `CREATE TABLE IF NOT EXISTS audit_logs (id VARCHAR(50) PRIMARY KEY, tenantId VARCHAR(50), userId VARCHAR(50), action VARCHAR(50), module VARCHAR(100), entity VARCHAR(100), entityId VARCHAR(50), description TEXT, ipAddress VARCHAR(100), timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)`,
 
-    // R52 STALLED PROJECT INTERVENTION POLICIES (LINEAGE HEADER)
+    // R52 STALLED PROJECT INTERVENTION POLICIES (LINEAGE HEADER - PURE LINEAGE ONLY)
     `CREATE TABLE IF NOT EXISTS project_intervention_policies (
       id VARCHAR(50) PRIMARY KEY,
       tenantId VARCHAR(50) NOT NULL,
       code VARCHAR(100) NOT NULL,
       name VARCHAR(255) NOT NULL,
       description TEXT,
-      severity VARCHAR(20) NOT NULL,
-      matchMode VARCHAR(20) NOT NULL,
       status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
       activeRevisionId VARCHAR(50) DEFAULT NULL,
       createdById VARCHAR(50) NOT NULL,
@@ -189,7 +187,7 @@ async function setupDatabase() {
       endFacts JSON,
       startReason VARCHAR(100) NOT NULL,
       endReason VARCHAR(100),
-      startProvenance VARCHAR(50) NOT NULL DEFAULT 'TRANSITION_DETECTED',
+      startProvenance VARCHAR(50) NOT NULL,
       startedByEventType VARCHAR(100) NOT NULL,
       endedByEventType VARCHAR(100),
       startedByEntityId VARCHAR(50),
@@ -238,7 +236,10 @@ async function setupDatabase() {
       `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'project_intervention_policy_revisions' AND COLUMN_NAME = 'migrationProvenance'`
     );
     if (revCols.length === 0) {
-      await pool.query(`ALTER TABLE project_intervention_policy_revisions ADD COLUMN migrationProvenance VARCHAR(50) NOT NULL DEFAULT 'RUNTIME_MUTATION'`);
+      await pool.query(`ALTER TABLE project_intervention_policy_revisions ADD COLUMN migrationProvenance VARCHAR(50) NOT NULL`);
+    } else {
+      await pool.query(`UPDATE project_intervention_policy_revisions SET migrationProvenance = 'RUNTIME_MUTATION' WHERE migrationProvenance IS NULL`);
+      await pool.query(`ALTER TABLE project_intervention_policy_revisions MODIFY COLUMN migrationProvenance VARCHAR(50) NOT NULL`);
     }
   } catch (e: any) {}
 
@@ -290,7 +291,7 @@ async function setupDatabase() {
     // Ignore
   }
 
-  // R55 IDEMPOTENT ATOMIC MIGRATION FOR EXISTING POLICIES
+  // R55 IDEMPOTENT ATOMIC MIGRATION FOR EXISTING POLICIES & SAFE COLUMN CLEANUP
   try {
     const [unmigratedPolicies]: any = await pool.query(`
       SELECT p.* FROM project_intervention_policies p
@@ -320,8 +321,8 @@ async function setupDatabase() {
             revId,
             pol.tenantId,
             pol.id,
-            pol.severity,
-            pol.matchMode,
+            pol.severity || 'WARNING',
+            pol.matchMode || 'ALL',
             pol.createdById || 'SYSTEM',
             pol.createdAt || new Date()
           ]);
@@ -368,8 +369,8 @@ async function setupDatabase() {
           const epCondsSorted = [...epConds].sort();
 
           const isExactMatch = (
-            ep.severitySnapshot === pol.severity &&
-            ep.matchModeSnapshot === pol.matchMode &&
+            ep.severitySnapshot === (pol.severity || 'WARNING') &&
+            ep.matchModeSnapshot === (pol.matchMode || 'ALL') &&
             epCondsSorted.length === revConditionsSorted.length &&
             epCondsSorted.every((val, idx) => val === revConditionsSorted[idx])
           );
@@ -387,8 +388,8 @@ async function setupDatabase() {
             await conn.query(
               `UPDATE project_intervention_episodes 
                SET policyRevisionId = NULL, 
-                   policyRevisionNumberSnapshot = NULL,
-                   policyRevisionLinkProvenance = 'LEGACY_UNVERSIONED'
+                    policyRevisionNumberSnapshot = NULL,
+                    policyRevisionLinkProvenance = 'LEGACY_UNVERSIONED'
                WHERE id = ?`,
               [ep.id]
             );
@@ -403,6 +404,30 @@ async function setupDatabase() {
         conn.release();
       }
     }
+
+    // R55R3: Safe Drop of legacy header semantic columns after all active policies have activeRevisionId
+    const [policyCols]: any = await pool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'project_intervention_policies'`
+    );
+    const existingColNames = new Set(policyCols.map((c: any) => c.COLUMN_NAME));
+    if (existingColNames.has('severity')) {
+      try {
+        await pool.query(`ALTER TABLE project_intervention_policies DROP COLUMN severity`);
+      } catch (e: any) {}
+    }
+    if (existingColNames.has('matchMode')) {
+      try {
+        await pool.query(`ALTER TABLE project_intervention_policies DROP COLUMN matchMode`);
+      } catch (e: any) {}
+    }
+
+    // R55R3: Ensure startProvenance, policyRevisionLinkProvenance, and migrationProvenance have NO schema defaults
+    try {
+      await pool.query(`ALTER TABLE project_intervention_episodes MODIFY COLUMN startProvenance VARCHAR(50) NOT NULL`);
+      await pool.query(`ALTER TABLE project_intervention_episodes MODIFY COLUMN policyRevisionLinkProvenance VARCHAR(50) NOT NULL`);
+      await pool.query(`ALTER TABLE project_intervention_policy_revisions MODIFY COLUMN migrationProvenance VARCHAR(50) NOT NULL`);
+    } catch (e: any) {}
+
   } catch (migErr: any) {
     console.error('[R55 Migration Error]', migErr);
   }

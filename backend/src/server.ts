@@ -5074,13 +5074,13 @@ app.post('/api/tenant/project-intervention-policies', async (req, res) => {
     await conn.beginTransaction();
 
     try {
-      // Insert policy header with activeRevisionId
+      // Insert policy lineage header (Pure Lineage - No duplicate semantic fields)
       await conn.query(`
-        INSERT INTO project_intervention_policies (id, tenantId, code, name, description, severity, matchMode, status, activeRevisionId, createdById)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [policyId, targetTenant, code.trim(), name.trim(), description || null, severity, matchMode, policyStatus, revisionId, actorUserId || 'SYSTEM']);
+        INSERT INTO project_intervention_policies (id, tenantId, code, name, description, status, activeRevisionId, createdById)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `, [policyId, targetTenant, code.trim(), name.trim(), description || null, policyStatus, revisionId, actorUserId || 'SYSTEM']);
 
-      // Insert Revision 1
+      // Insert Revision 1 (Authoritative Semantic Authority)
       await conn.query(`
         INSERT INTO project_intervention_policy_revisions (
           id, tenantId, policyId, revisionNumber, severity, matchMode, createdById, changeReason, migrationProvenance
@@ -5320,16 +5320,11 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
         }
       }
 
-      // Update Policy Header Metadata & Active Revision Pointer
-      const finalSeverity = severity || existingPolicy.currentSeverity || existingPolicy.severity;
-      const finalMatchMode = matchMode || existingPolicy.currentMatchMode || existingPolicy.matchMode;
-
+      // Update Policy Header Lineage Metadata & Active Revision Pointer (Pure Lineage - No duplicate semantics)
       await conn.query(`
         UPDATE project_intervention_policies
         SET name = COALESCE(?, name),
             description = COALESCE(?, description),
-            severity = ?,
-            matchMode = ?,
             status = COALESCE(?, status),
             activeRevisionId = ?,
             updatedAt = CURRENT_TIMESTAMP
@@ -5337,12 +5332,13 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
       `, [
         name ? name.trim() : null,
         description !== undefined ? description : null,
-        finalSeverity,
-        finalMatchMode,
         status || null,
         newActiveRevisionId,
         policyId
       ]);
+
+      const finalSeverity = severity || existingPolicy.currentSeverity || 'WARNING';
+      const finalMatchMode = matchMode || existingPolicy.currentMatchMode || 'ALL';
 
       // Record Audit Log
       await conn.query(`
