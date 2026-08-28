@@ -27,6 +27,10 @@ async function setupDatabase() {
   });
 
   const tableQueries = [
+    `CREATE INDEX idx_activities_tenant_time ON activities (tenantId, occurredAt)`,
+    `CREATE INDEX idx_audit_logs_tenant_time ON audit_logs (tenantId, timestamp)`,
+    `CREATE INDEX idx_tasks_tenant_due_date ON tasks (tenantId, dueDate)`,
+    `CREATE INDEX idx_customers_tenant ON customers (tenantId)`,
     // TENANTS & SYSTEM
     `CREATE TABLE IF NOT EXISTS tenants (id VARCHAR(50) PRIMARY KEY, name VARCHAR(255), code VARCHAR(50), status VARCHAR(20), createdAt DATETIME DEFAULT CURRENT_TIMESTAMP)`,
     `CREATE TABLE IF NOT EXISTS tenant_settings (id VARCHAR(50) PRIMARY KEY, tenantId VARCHAR(50), settingKey VARCHAR(100), settingValue TEXT)`,
