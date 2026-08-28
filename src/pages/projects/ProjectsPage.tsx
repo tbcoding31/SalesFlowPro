@@ -133,9 +133,37 @@ export const ProjectsPage: React.FC = () => {
   };
 
   const executeMove = async (opp: Project, targetStage: ProjectStage) => {
-    const updatedOpp = { ...opp, stage: targetStage, updatedAt: new Date().toISOString() };
-    await crmApi.updateRecord('projects', opp.id, updatedOpp);
-    loadData();
+    let reasonInput: string | undefined = undefined;
+    const isReopen = (opp.stage === 'WON' || opp.stage === 'LOST') && (targetStage !== 'WON' && targetStage !== 'LOST');
+    
+    if (targetStage === 'LOST') {
+      const promptRes = prompt('Please enter a business reason for marking this project as LOST:');
+      if (!promptRes || !promptRes.trim()) {
+        alert('A business loss reason is required to mark the project as LOST.');
+        return;
+      }
+      reasonInput = promptRes.trim();
+    } else if (isReopen) {
+      const promptRes = prompt('Please enter a business reason for reopening this project:');
+      if (!promptRes || !promptRes.trim()) {
+        alert('An explicit business reason is required to reopen this project.');
+        return;
+      }
+      reasonInput = promptRes.trim();
+    }
+
+    const res = await crmApi.transitionProjectStage(opp.id, targetStage, {
+      lossReason: targetStage === 'LOST' ? reasonInput : undefined,
+      reopenReason: isReopen ? reasonInput : undefined,
+      isReopen,
+      expectedFromStage: opp.stage
+    });
+
+    if (res.success) {
+      loadData();
+    } else {
+      alert(`Stage transition blocked: ${res.error}`);
+    }
   };
 
   const handleCreateFollowUp = async () => {

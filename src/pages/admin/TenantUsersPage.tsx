@@ -23,10 +23,11 @@ export const TenantUsersPage: React.FC = () => {
       if (Array.isArray(data)) setRoleOptions(data);
     }).catch(e => console.error(e));
 
-    fetch('/api/tenants', {
+    fetch('/api/tenants?pageSize=500', {
       headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('sfp_auth_token') || '') }
     }).then(r => r.json()).then(data => {
       if (Array.isArray(data)) setTenants(data);
+      else if (data && Array.isArray(data.items)) setTenants(data.items);
     }).catch(e => console.error(e));
   }, []);
   const [showAddModal, setShowAddModal] = useState(false);

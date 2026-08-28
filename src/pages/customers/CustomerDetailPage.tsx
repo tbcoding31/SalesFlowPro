@@ -1310,16 +1310,21 @@ export const CustomerDetailPage: React.FC = () => {
     e.preventDefault();
     if (!changingStageOpp) return;
     const oldStage = changingStageOpp.stage;
-    const updated: Partial<Project> = {
-      ...changingStageOpp,
-      stage: newStageInput,
-      probability: newStageProbInput,
-      updatedAt: new Date().toISOString().split('T')[0],
-    };
+    const isReopen = (oldStage === 'WON' || oldStage === 'LOST') && (newStageInput !== 'WON' && newStageInput !== 'LOST');
 
-    crmApi.updateRecord('projects', changingStageOpp.id, updated).then(() => {
-      refreshOpps();
-      setChangingStageOpp(null);
+    crmApi.transitionProjectStage(changingStageOpp.id, newStageInput, {
+      notes: stageChangeNotesInput || undefined,
+      lossReason: newStageInput === 'LOST' ? (stageChangeNotesInput || 'Lost via Customer 360') : undefined,
+      reopenReason: isReopen ? (stageChangeNotesInput || 'Reopened via Customer 360') : undefined,
+      isReopen,
+      expectedFromStage: oldStage
+    }).then((res) => {
+      if (res.success) {
+        refreshOpps();
+        setChangingStageOpp(null);
+      } else {
+        alert(`Stage transition failed: ${res.error}`);
+      }
     });
   };
 
