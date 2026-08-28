@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
-import { DataService } from '../../services/dataService';
 import { usersApi } from '../../services/usersApi';
 import { Tenant, User } from '../../types';
 
@@ -10,9 +9,9 @@ export const TenantDetailPage: React.FC = () => {
   const initialTab = searchParams.get('tab') === 'users' ? 'users' : 'overview';
 
   // --- TOP-LEVEL REACT HOOKS (NEVER CONDITIONAL) ---
-  const [tenant, setTenant] = useState<Tenant | undefined>(() => id ? DataService.getTenantById(id) : undefined);
-  const [tenantUsers, setTenantUsers] = useState<User[]>(() => id ? DataService.getUsers(id) : []);
-  const [isLoading, setIsLoading] = useState<boolean>(!tenant);
+  const [tenant, setTenant] = useState<Tenant | undefined>(undefined);
+  const [tenantUsers, setTenantUsers] = useState<User[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<'overview' | 'users'>(initialTab);
@@ -56,7 +55,6 @@ export const TenantDetailPage: React.FC = () => {
               createdAt: typeof tenantData.createdAt === 'string' ? tenantData.createdAt : (tenantData.createdAt ? new Date(tenantData.createdAt).toISOString() : new Date().toISOString()),
             };
             setTenant(normalizedTenant);
-            DataService.cacheTenant(normalizedTenant); // update local cache without sync mutation
           }
         } else if (tenantRes.status === 404) {
           if (isMounted) {
@@ -116,7 +114,7 @@ export const TenantDetailPage: React.FC = () => {
     );
   }
 
-  const auditLogs = DataService.getAuditLogs?.(tenant.id) || [];
+  const auditLogs: any[] = [];
   const filteredUsers = tenantUsers.filter((u) => {
     const matchesSearch =
       (u.name || '').toLowerCase().includes(userSearch.toLowerCase()) ||
@@ -160,7 +158,6 @@ export const TenantDetailPage: React.FC = () => {
       // Update local state ONLY on success
       const updated = { ...tenant, status: newStatus as any };
       setTenant(updated);
-      DataService.cacheTenant(updated); // Sync to local cache
     } catch (err: any) {
       alert("Error updating tenant status: " + err.message);
     } finally {
@@ -174,7 +171,6 @@ export const TenantDetailPage: React.FC = () => {
       isTrialExpired: !tenant.isTrialExpired,
       trialEndDate: !tenant.isTrialExpired ? '2026-08-01' : '2026-11-12'
     };
-    DataService.cacheTenant(updated);
     setTenant({ ...updated });
   };
 
@@ -708,7 +704,6 @@ export const TenantDetailPage: React.FC = () => {
                 
                 const updated = { ...tenant, ...payload } as any;
                 setTenant(updated);
-                DataService.cacheTenant(updated);
                 setIsEditModalOpen(false);
               } catch (err: any) {
                 alert('Error updating tenant: ' + err.message);

@@ -1,9 +1,10 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
 import { masterDataApi } from '../../services/masterDataApi';
 import { User, Customer, Visit, Project, TaskPriority, TaskStatus, Task, MasterDataItem } from '../../types';
+import { crmApi } from '../../services/crmApi';
+import { usersApi } from '../../services/usersApi';
 
 export const EditTaskPage: React.FC = () => {
   const navigate = useNavigate();
@@ -25,14 +26,14 @@ export const EditTaskPage: React.FC = () => {
   const [priority, setPriority] = useState<TaskPriority>('');
   const [status, setStatus] = useState<TaskStatus>('');
 
-  const [customers] = useState<Customer[]>(DataService.getCustomers(tenantId));
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [taskTypes, setTaskTypes] = useState<MasterDataItem[]>([]);
   const [taskPriorities, setTaskPriorities] = useState<MasterDataItem[]>([]);
   const [visits, setVisits] = useState<Visit[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   
-  const [users] = useState<User[]>(DataService.getUsers(tenantId));
-  const [allTasks] = useState(DataService.getTasks(tenantId));
+  const [users, setUsers] = useState<User[]>([]);
+  const [allTasks, setAllTasks] = useState<any[]>([]);
 
   const [isPicDropdownOpen, setIsPicDropdownOpen] = useState(false);
   const [picSearch, setPicSearch] = useState('');
@@ -50,37 +51,44 @@ export const EditTaskPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    crmApi.fetchCollection<Customer>('customers', tenantId).then(setCustomers);
+    usersApi.fetchUsers(tenantId).then(setUsers);
+    crmApi.fetchCollection('tasks', tenantId).then(setAllTasks);
+
     masterDataApi.fetchMasterData('task_types', tenantId).then(setTaskTypes);
     masterDataApi.fetchMasterData('task_priorities', tenantId).then(setTaskPriorities);
   }, [tenantId]);
 
   useEffect(() => {
     if (id) {
-      const foundTask = allTasks.find(t => t.id === id);
-      if (foundTask) {
-        setTask(foundTask);
-        setTitle(foundTask.title);
-        setTaskType(foundTask.taskType || '');
-        setDescription(foundTask.description || '');
-        setCustomerId(foundTask.customerId || '');
-        setPicId(foundTask.picId);
-        setDueDate(foundTask.dueDate);
-        setPriority(foundTask.priority);
-        setStatus(foundTask.status);
-        // Will set related visits and projects after customer is set
-        setTimeout(() => {
+      crmApi.fetchRecordById<Task>('tasks', id).then(foundTask => {
+        if (foundTask) {
+          setTask(foundTask);
+          setTitle(foundTask.title || '');
+          setTaskType(foundTask.taskType || '');
+          setDescription(foundTask.description || '');
+          setCustomerId(foundTask.customerId || '');
+          setPicId(foundTask.picId || '');
+          setDueDate(foundTask.dueDate || '');
+          setPriority(foundTask.priority || 'MEDIUM');
+          setStatus(foundTask.status || 'TODO');
           setRelatedVisitId(foundTask.relatedVisitId || '');
           setRelatedProjectId(foundTask.relatedProjectId || '');
-        }, 100);
-      }
+        }
+      });
     }
-  }, [id, allTasks]);
+  }, [id, tenantId]);
 
   // Filter visits and projects based on customer selection
   useEffect(() => {
     if (customerId) {
-      setVisits(DataService.getVisits(tenantId, customerId));
-      setProjects(DataService.getProjects(tenantId, customerId));
+      Promise.all([
+        crmApi.fetchCollection<Visit>('visits', tenantId),
+        crmApi.fetchCollection<Project>('projects', tenantId)
+      ]).then(([vList, pList]) => {
+        setVisits(vList.filter(v => v.customerId === customerId));
+        setProjects(pList.filter(p => p.customerId === customerId));
+      });
     } else {
       setVisits([]);
       setProjects([]);
@@ -159,23 +167,13 @@ export const EditTaskPage: React.FC = () => {
       relatedProjectId: relatedProjectId || undefined,
     };
 
-    DataService.saveTask(updatedTask as any);
-    
-    DataService.addActivity({
-      tenantId,
-      customerId,
-      customerName: selectedCustomer?.name,
-      userId: currentUser?.id || 'SYSTEM',
-      userName: currentUser?.name || 'System User',
-      type: 'TASK',
-      subject: 'Task Updated',
-      description: `Updated task "${title}"`,
-      occurredAt: new Date().toISOString(),
-      entityType: 'TASK',
-      entityId: task.id
+    crmApi.updateRecord('tasks', task.id, updatedTask as any).then(res => {
+      if (res.success) {
+        navigate(`/tasks/${task.id}`);
+      } else {
+        setError(res.error || 'Failed to update task');
+      }
     });
-
-    navigate(`/tasks/${task.id}`);
   };
 
   return (

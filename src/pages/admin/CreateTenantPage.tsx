@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { DataService } from '../../services/dataService';
 import { Tenant, User, TenantType } from '../../types';
 
 export const CreateTenantPage: React.FC = () => {
@@ -99,9 +98,6 @@ export const CreateTenantPage: React.FC = () => {
         if (!res.ok) {
           throw new Error(`Failed to onboard tenant: HTTP ${res.status}`);
         }
-
-        // Simpan ke local cache untuk optimisme UI (non-mutating)
-        DataService.cacheTenant(newTenant);
 
         setIsLoading(false);
         navigate(`/admin/tenants/${newTenant.id}`);

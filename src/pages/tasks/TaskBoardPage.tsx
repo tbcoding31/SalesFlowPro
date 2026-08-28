@@ -1,7 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
 import { Task, Customer, TaskStatus, Project } from '../../types';
 import { crmApi } from '../../services/crmApi';
 

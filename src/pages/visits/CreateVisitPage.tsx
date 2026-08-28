@@ -1,9 +1,10 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
 import { masterDataApi } from '../../services/masterDataApi';
 import { Customer, User, VisitStatus, MasterDataItem } from '../../types';
+import { crmApi } from '../../services/crmApi';
+import { usersApi } from '../../services/usersApi';
 
 interface UserWorkloadInfo {
   user: User;
@@ -17,9 +18,13 @@ export const CreateVisitPage: React.FC = () => {
   const { currentUser } = useAuth();
   const tenantId = currentUser?.tenantId || 'TEN-00001';
 
-  // Load Customers and Users
-  const customers = useMemo(() => DataService.getCustomers(tenantId), [tenantId]);
-  const rawUsers = useMemo(() => DataService.getUsers(tenantId), [tenantId]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [rawUsers, setRawUsers] = useState<User[]>([]);
+
+  useEffect(() => {
+    crmApi.fetchCollection<Customer>('customers', tenantId).then(setCustomers);
+    usersApi.fetchUsers(tenantId).then(setRawUsers);
+  }, [tenantId]);
 
   // Compute stats/workload for PIC dropdown results
   const usersWithWorkload = useMemo<UserWorkloadInfo[]>(() => {
@@ -176,13 +181,16 @@ export const CreateVisitPage: React.FC = () => {
       createdAt: new Date().toISOString().split('T')[0],
     };
 
-    DataService.saveVisit(newVisit);
-
-    setToastMessage(status === 'PLANNED' ? 'Visit draft saved successfully!' : 'Customer visit scheduled successfully!');
-
-    setTimeout(() => {
-      navigate('/visits');
-    }, 1200);
+    crmApi.createRecord('visits', newVisit).then((res) => {
+      if (res.success) {
+        setToastMessage(status === 'PLANNED' ? 'Visit draft saved successfully!' : 'Customer visit scheduled successfully!');
+        setTimeout(() => {
+          navigate('/visits');
+        }, 1200);
+      } else {
+        alert(`Failed to save visit: ${res.error}`);
+      }
+    });
   };
 
   return (

@@ -1,8 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
 import { Visit, VisitStatus } from '../../types';
+import { crmApi } from '../../services/crmApi';
 
 export const VisitDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -10,33 +10,42 @@ export const VisitDetailPage: React.FC = () => {
   const { currentUser } = useAuth();
   const tenantId = currentUser?.tenantId || 'TEN-00001';
 
-  // Fetch visit data or fallback to first visit
-  const [visitList, setVisitList] = useState<Visit[]>(() => DataService.getVisits(tenantId));
-  const visit = useMemo(() => {
-    return visitList.find((v) => v.id === id);
-  }, [visitList, id]);
+  const [visit, setVisit] = useState<Visit | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-  if (!visit) {
-    return (
-      <div className="bg-white p-8 rounded-xl border border-[#E1E1E1] text-center max-w-lg mx-auto my-12">
-        <h2 className="text-xl font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">Visit Not Found</h2>
-        <p className="text-xs text-[#767587] mt-1">The requested visit could not be found.</p>
-        <Link to="/visits" className="inline-block mt-4 px-4 py-2 bg-[#4744e5] text-white text-xs font-bold rounded-lg">
-          Return to Visits
-        </Link>
-      </div>
-    );
-  }
+  const loadData = async () => {
+    if (!id) return;
+    setIsLoading(true);
+    try {
+      const v = await crmApi.fetchRecordById<Visit>('visits', id);
+      if (v) {
+        setVisit(v);
+        setCurrentStatus(v.status);
+        setNotes(v.notes || '');
+        setNewDate(v.visitDate);
+        setNewStartTime(v.startTime);
+        setNewEndTime(v.endTime);
+      }
+    } catch (err) {
+      console.error('Failed to load visit details:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+  }, [id, tenantId]);
 
   // Modals & Action States
-  const [currentStatus, setCurrentStatus] = useState<VisitStatus>(visit.status);
-  const [notes, setNotes] = useState<string>(visit.notes || '');
+  const [currentStatus, setCurrentStatus] = useState<VisitStatus>('PLANNED');
+  const [notes, setNotes] = useState<string>('');
   
   // Reschedule state
   const [isRescheduleOpen, setIsRescheduleOpen] = useState(false);
-  const [newDate, setNewDate] = useState(visit.visitDate);
-  const [newStartTime, setNewStartTime] = useState(visit.startTime);
-  const [newEndTime, setNewEndTime] = useState(visit.endTime);
+  const [newDate, setNewDate] = useState('');
+  const [newStartTime, setNewStartTime] = useState('09:00');
+  const [newEndTime, setNewEndTime] = useState('10:00');
 
   // Cancel State
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
@@ -44,9 +53,7 @@ export const VisitDetailPage: React.FC = () => {
 
   // Activity History State
   const [activityHistory, setActivityHistory] = useState([
-    { id: '1', date: '2026-08-01 09:30', user: visit.picName, action: 'Scheduled initial visit' },
-    { id: '2', date: '2026-08-02 11:15', user: 'Sarah Jenkins', action: 'Confirmed meeting room availability at Cyber 2 Tower' },
-    { id: '3', date: '2026-08-05 14:00', user: visit.picName, action: 'Attached Q2 performance audit slide deck' },
+    { id: '1', date: '2026-08-01 09:30', user: 'PIC', action: 'Scheduled initial visit' },
   ]);
 
   // Toast
@@ -58,11 +65,12 @@ export const VisitDetailPage: React.FC = () => {
   };
 
   // Status Handlers
-  const handleStartVisit = () => {
+  const handleStartVisit = async () => {
+    if (!visit) return;
     setCurrentStatus('IN_PROGRESS');
     const updated = { ...visit, status: 'IN_PROGRESS' as VisitStatus };
-    DataService.saveVisit(updated);
-    setVisitList(DataService.getVisits(tenantId));
+    await crmApi.updateRecord('visits', visit.id, updated);
+    loadData();
     setActivityHistory([
       ...activityHistory,
       { id: Date.now().toString(), date: new Date().toLocaleString(), user: currentUser?.name || 'User', action: 'Marked visit as In Progress (Started)' },
@@ -70,7 +78,8 @@ export const VisitDetailPage: React.FC = () => {
     showToast('Visit started! Status updated to In Progress.');
   };
 
-  const handleRescheduleSubmit = () => {
+  const handleRescheduleSubmit = async () => {
+    if (!visit) return;
     setCurrentStatus('RESCHEDULED');
     const updated = {
       ...visit,
@@ -79,8 +88,8 @@ export const VisitDetailPage: React.FC = () => {
       startTime: newStartTime,
       endTime: newEndTime,
     };
-    DataService.saveVisit(updated);
-    setVisitList(DataService.getVisits(tenantId));
+    await crmApi.updateRecord('visits', visit.id, updated);
+    loadData();
     setIsRescheduleOpen(false);
     setActivityHistory([
       ...activityHistory,
@@ -89,11 +98,12 @@ export const VisitDetailPage: React.FC = () => {
     showToast('Visit rescheduled successfully!');
   };
 
-  const handleCancelSubmit = () => {
+  const handleCancelSubmit = async () => {
+    if (!visit) return;
     setCurrentStatus('CANCELLED');
     const updated = { ...visit, status: 'CANCELLED' as VisitStatus, notes: `[Cancelled: ${cancelReason}] ${visit.notes || ''}` };
-    DataService.saveVisit(updated);
-    setVisitList(DataService.getVisits(tenantId));
+    await crmApi.updateRecord('visits', visit.id, updated);
+    loadData();
     setIsCancelModalOpen(false);
     setActivityHistory([
       ...activityHistory,
@@ -101,6 +111,26 @@ export const VisitDetailPage: React.FC = () => {
     ]);
     showToast('Visit has been cancelled.');
   };
+
+  if (!visit && !isLoading) {
+    return (
+      <div className="bg-white p-8 rounded-xl border border-[#E1E1E1] text-center max-w-lg mx-auto my-12">
+        <h2 className="text-xl font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">Visit Not Found</h2>
+        <p className="text-xs text-[#767587] mt-1">The requested visit could not be found.</p>
+        <Link to="/visits" className="inline-block mt-4 px-4 py-2 bg-[#4744e5] text-white text-xs font-bold rounded-lg">
+          Return to Visits
+        </Link>
+      </div>
+    );
+  }
+
+  if (!visit) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <span className="material-symbols-outlined text-4xl text-[#4744e5] animate-spin">progress_activity</span>
+      </div>
+    );
+  }
 
   // Timeline Step Status Mapping
   const timelineSteps = [
@@ -396,9 +426,9 @@ export const VisitDetailPage: React.FC = () => {
                 <span>Visit Notes</span>
               </h3>
               <button
-                onClick={() => {
+                onClick={async () => {
                   const updated = { ...visit, notes };
-                  DataService.saveVisit(updated);
+                  await crmApi.updateRecord('visits', visit.id, updated);
                   showToast('Visit notes updated!');
                 }}
                 className="text-xs font-bold text-[#4744e5] hover:underline cursor-pointer"

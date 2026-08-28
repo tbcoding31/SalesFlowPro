@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
 import { masterDataApi } from '../../services/masterDataApi';
-import { Customer, CustomerType, CustomerStatus, User, MasterDataItem } from '../../types';
+import { Customer, CustomerType, CustomerStatus, User, MasterDataItem, Task } from '../../types';
 import { usersApi } from '../../services/usersApi';
+import { crmApi } from '../../services/crmApi';
 
 export const EditCustomerPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -14,11 +14,10 @@ export const EditCustomerPage: React.FC = () => {
 
   const [assignableUsers, setAssignableUsers] = useState<User[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>([]);
-  const tasks = DataService.getTasks(tenantId);
-
-  const [customer, setCustomer] = useState<Customer | undefined>(() => {
-    return DataService.getCustomerById(id || 'CUS-001');
-  });
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [customer, setCustomer] = useState<Customer | undefined>(undefined);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Form States
   const [companyName, setCompanyName] = useState('');
@@ -29,14 +28,19 @@ export const EditCustomerPage: React.FC = () => {
   const [masterStatuses, setMasterStatuses] = useState<MasterDataItem[]>([]);
 
   useEffect(() => {
-    // 1. Fetch assignable users for new assignment selection
+    if (id) {
+      crmApi.fetchRecordById<Customer>('customers', id).then(data => {
+        if (data) setCustomer(data);
+      });
+    }
+
+    crmApi.fetchCollection<Task>('tasks', tenantId).then(setTasks);
     usersApi.fetchUsers(tenantId, true).then(setAssignableUsers);
-    // 2. Fetch full tenant user roster for current/historical owner resolution
     usersApi.fetchUsers(tenantId).then(setAllUsers);
 
     masterDataApi.fetchMasterData('customer_types', tenantId).then(setMasterTypes);
     masterDataApi.fetchMasterData('customer_statuses', tenantId).then(setMasterStatuses);
-  }, [tenantId]);
+  }, [id, tenantId]);
 
   const [contactPerson, setContactPerson] = useState('');
   const [phone, setPhone] = useState('');
@@ -88,8 +92,8 @@ export const EditCustomerPage: React.FC = () => {
     }
   }, [customer, currentUser]);
 
-  const handleSave = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
 
     const selectedUser = allUsers.find((u) => u.id === assignedPicId) || currentUser;
 
@@ -126,7 +130,7 @@ export const EditCustomerPage: React.FC = () => {
       contacts: [
         {
           id: customer?.contacts?.[0]?.id || `CON-${Date.now()}`,
-          customerId: customer?.id || 'CUS-001',
+          customerId: customer?.id || id || 'CUS-001',
           name: contactPerson,
           position: 'Primary Contact',
           email: email,
@@ -136,12 +140,24 @@ export const EditCustomerPage: React.FC = () => {
       ],
     };
 
-    DataService.saveCustomer(updatedCustomer);
-    navigate(`/customers/${updatedCustomer.id}`);
+    setIsSubmitting(true);
+    setErrorMsg(null);
+    try {
+      const res = await crmApi.updateRecord('customers', updatedCustomer.id, updatedCustomer);
+      if (res.success) {
+        navigate(`/customers/${updatedCustomer.id}`);
+      } else {
+        setErrorMsg(res.error || 'Failed to update customer');
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Error updating customer');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const selectedPicUser = allUsers.find((u) => u.id === assignedPicId) || currentUser;
-  const picTasksCount = tasks.filter((t) => t.picId === assignedPicId && t.status !== 'COMPLETED').length || 8;
+  const picTasksCount = 0;
 
   return (
     <div className="max-w-6xl mx-auto pb-24 space-y-6 font-['Inter',sans-serif]">
@@ -160,7 +176,7 @@ export const EditCustomerPage: React.FC = () => {
       </div>
 
       {/* 2-Column Grid Layout matching Image 2 */}
-      <form onSubmit={handleSave} className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <form onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* LEFT COLUMN (2/3 width) */}
         <div className="lg:col-span-2 space-y-6">
           {/* 1. Basic Information */}

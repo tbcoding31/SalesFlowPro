@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
 import { masterDataApi } from '../../services/masterDataApi';
-import { Customer, CustomerType, CustomerStatus, User, MasterDataItem } from '../../types';
+import { Customer, CustomerType, CustomerStatus, User, MasterDataItem, Task } from '../../types';
 import { usersApi } from '../../services/usersApi';
+import { crmApi } from '../../services/crmApi';
 
 export const CreateCustomerPage: React.FC = () => {
   const navigate = useNavigate();
@@ -12,7 +12,9 @@ export const CreateCustomerPage: React.FC = () => {
   const tenantId = currentTenant?.id || 'TEN-00001';
 
   const [tenantUsers, setTenantUsers] = useState<User[]>([]);
-  const tasks = DataService.getTasks(tenantId);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Form Fields
   const [companyName, setCompanyName] = useState('');
@@ -29,6 +31,8 @@ export const CreateCustomerPage: React.FC = () => {
         setAssignedPicId(prev => prev || users[0].id);
       }
     });
+
+    crmApi.fetchCollection<Task>('tasks', tenantId).then(setTasks);
 
     masterDataApi.fetchMasterData('customer_types', tenantId).then(data => {
       setMasterTypes(data);
@@ -81,7 +85,7 @@ export const CreateCustomerPage: React.FC = () => {
 
   const selectedPicWorkload = getPicWorkload(assignedPicId);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!isValidEmail(email)) {
@@ -139,8 +143,20 @@ export const CreateCustomerPage: React.FC = () => {
       ],
     };
 
-    DataService.saveCustomer(newCustomer);
-    navigate('/customers');
+    setIsSubmitting(true);
+    setErrorMsg(null);
+    try {
+      const res = await crmApi.createRecord('customers', newCustomer);
+      if (res.success) {
+        navigate('/customers');
+      } else {
+        setErrorMsg(res.error || 'Failed to save customer');
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Network error saving customer');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (

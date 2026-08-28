@@ -1,7 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
 import { Visit, Customer, User, VisitStatus } from '../../types';
 import { crmApi } from '../../services/crmApi';
 import { usersApi } from '../../services/usersApi';
@@ -108,7 +107,7 @@ export const VisitsPage: React.FC = () => {
 
   // Refresh helper
   const reloadVisits = () => {
-    setVisits(DataService.getVisits(tenantId));
+    loadData();
   };
 
   // Mini calendar days calculation
@@ -296,15 +295,15 @@ export const VisitsPage: React.FC = () => {
     const cust = customers.find((c) => c.id === formCustomerId);
     const assignedUser = users.find((u) => u.id === formPicId);
 
-    const newVisit: Visit = {
+    const newVisit: Partial<Visit> = {
       id: `VIS-${Date.now().toString().slice(-4)}`,
       tenantId,
       customerId: formCustomerId,
-      customerName: cust?.name || 'Client',
+      customerName: cust?.name || 'Unknown Client',
       customerCode: cust?.code || 'CUS-000',
       picId: formPicId,
-      picName: assignedUser?.name || currentUser?.name || 'Budi Santoso',
-      picAvatar: assignedUser?.avatarUrl || currentUser?.avatarUrl,
+      picName: assignedUser?.name || 'Ahmad Ricky',
+      picAvatar: assignedUser?.avatarUrl,
       title: formTitle,
       purpose: formPurpose,
       visitDate: formVisitDate,
@@ -316,9 +315,10 @@ export const VisitsPage: React.FC = () => {
       createdAt: new Date().toISOString().split('T')[0],
     };
 
-    DataService.saveVisit(newVisit);
-    reloadVisits();
-    setShowScheduleModal(false);
+    crmApi.createRecord('visits', newVisit).then(() => {
+      reloadVisits();
+      setShowScheduleModal(false);
+    });
   };
 
   // Handler: Open Edit Visit Modal
@@ -344,7 +344,7 @@ export const VisitsPage: React.FC = () => {
     const cust = customers.find((c) => c.id === formCustomerId);
     const assignedUser = users.find((u) => u.id === formPicId);
 
-    const updatedVisit: Visit = {
+    const updatedVisit: Partial<Visit> = {
       ...editingVisit,
       customerId: formCustomerId,
       customerName: cust?.name || editingVisit.customerName,
@@ -362,9 +362,10 @@ export const VisitsPage: React.FC = () => {
       notes: formNotes,
     };
 
-    DataService.saveVisit(updatedVisit);
-    reloadVisits();
-    setEditingVisit(null);
+    crmApi.updateRecord('visits', editingVisit.id, updatedVisit).then(() => {
+      reloadVisits();
+      setEditingVisit(null);
+    });
   };
 
   // Handler: Open Reschedule Modal
@@ -381,7 +382,7 @@ export const VisitsPage: React.FC = () => {
     e.preventDefault();
     if (!reschedulingVisit) return;
 
-    const updatedVisit: Visit = {
+    const updatedVisit: Partial<Visit> = {
       ...reschedulingVisit,
       visitDate: rescheduleDate,
       startTime: rescheduleStartTime,
@@ -392,9 +393,10 @@ export const VisitsPage: React.FC = () => {
         : `[Rescheduled to ${rescheduleDate}]: ${rescheduleReason}`,
     };
 
-    DataService.saveVisit(updatedVisit);
-    reloadVisits();
-    setReschedulingVisit(null);
+    crmApi.updateRecord('visits', reschedulingVisit.id, updatedVisit).then(() => {
+      reloadVisits();
+      setReschedulingVisit(null);
+    });
   };
 
   // Handler: Open Cancel Modal
@@ -408,7 +410,7 @@ export const VisitsPage: React.FC = () => {
     e.preventDefault();
     if (!cancellingVisit) return;
 
-    const updatedVisit: Visit = {
+    const updatedVisit: Partial<Visit> = {
       ...cancellingVisit,
       status: 'CANCELLED',
       notes: cancellingVisit.notes
@@ -416,9 +418,10 @@ export const VisitsPage: React.FC = () => {
         : `[Cancelled]: ${cancelReason}`,
     };
 
-    DataService.saveVisit(updatedVisit);
-    reloadVisits();
-    setCancellingVisit(null);
+    crmApi.updateRecord('visits', cancellingVisit.id, updatedVisit).then(() => {
+      reloadVisits();
+      setCancellingVisit(null);
+    });
   };
 
   // Helper: Status Badge Styling

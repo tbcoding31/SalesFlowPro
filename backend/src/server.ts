@@ -10329,6 +10329,60 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+app.get('/api/auth/me', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ error: 'Unauthorized: No token provided' });
+    }
+
+    const token = authHeader.replace('Bearer ', '').trim();
+    const [sessions]: any = await pool.query('SELECT * FROM auth_sessions WHERE token = ?', [token]);
+    if (sessions.length === 0) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid or expired session' });
+    }
+
+    const session = sessions[0];
+    if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
+      return res.status(401).json({ error: 'Unauthorized: Session has expired' });
+    }
+
+    const [userRows]: any = await pool.query('SELECT * FROM users WHERE id = ?', [session.userId]);
+    if (userRows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const user = userRows[0];
+    const userContext = await resolveUserAccessContext(pool, user.id);
+
+    if (userContext.userGlobalStatus === 'SUSPENDED') {
+      return res.status(403).json({ error: 'User identity is suspended', code: 'USER_SUSPENDED' });
+    }
+
+    if (userContext.tenantId && userContext.tenantId !== 'SYSTEM') {
+      if (userContext.tenantUserStatus === 'SUSPENDED') {
+        return res.status(403).json({ error: 'Tenant membership is suspended', code: 'MEMBERSHIP_SUSPENDED' });
+      }
+
+      const [tenantRows]: any = await pool.query('SELECT status FROM tenants WHERE id = ?', [userContext.tenantId]);
+      if (tenantRows.length > 0 && tenantRows[0].status === 'SUSPENDED') {
+        return res.status(403).json({ error: 'Tenant is suspended', code: 'TENANT_SUSPENDED' });
+      }
+    }
+
+    user.role = userContext.roleId;
+    user.roleName = userContext.roleName;
+    user.tenantId = userContext.tenantId;
+    user.permissions = userContext.permissions;
+    user.dataScope = userContext.dataScope;
+
+    res.json({ success: true, user });
+  } catch (err: any) {
+    console.error('Session verify error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 app.post('/api/auth/logout', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;

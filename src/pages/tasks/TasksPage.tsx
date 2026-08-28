@@ -1,7 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
 import { masterDataApi } from '../../services/masterDataApi';
 import { Task, Customer, Project, MasterDataItem } from '../../types';
 import { crmApi } from '../../services/crmApi';
@@ -152,35 +151,35 @@ export const TasksPage: React.FC = () => {
     });
   }, [tasks, searchQuery, statusFilter, priorityFilter, customerFilter, dueDateFilter, quickFilter, today, currentUser?.id, activeCategory, activeProject]);
 
-  const toggleTaskComplete = (taskId: string) => {
+  const toggleTaskComplete = async (taskId: string) => {
     const task = tasks.find((t) => t.id === taskId);
     if (task) {
-      const updated: Task = {
-        ...task,
-        status: task.status === 'COMPLETED' ? 'TODO' : 'COMPLETED',
-        completedAt: task.status === 'COMPLETED' ? undefined : new Date().toISOString().split('T')[0],
-      };
-      DataService.saveTask(updated);
-      setTasks(DataService.getTasks(tenantId));
+      const isCurrentlyCompleted = task.status === 'COMPLETED';
+      const newStatus = isCurrentlyCompleted ? 'TODO' : 'COMPLETED';
+      const res = await crmApi.updateRecord('tasks', taskId, {
+        status: newStatus,
+        statusId: newStatus,
+        completedAt: isCurrentlyCompleted ? null : new Date().toISOString()
+      });
+      if (res.success) {
+        loadData();
+      }
     }
   };
   
-  const deleteTask = (taskId: string) => {
+  const deleteTask = async (taskId: string) => {
     if (window.confirm('Are you sure you want to delete this task?')) {
-      const stored = localStorage.getItem(`tasks_${tenantId}`);
-      if (stored) {
-        const allTasks: Task[] = JSON.parse(stored);
-        const newTasks = allTasks.filter(t => t.id !== taskId);
-        localStorage.setItem(`tasks_${tenantId}`, JSON.stringify(newTasks));
-        setTasks(newTasks);
+      const res = await crmApi.deleteRecord('tasks', taskId);
+      if (res.success) {
+        loadData();
       }
     }
   };
 
-  const handleCreateTask = (e: React.FormEvent) => {
+  const handleCreateTask = async (e: React.FormEvent) => {
     e.preventDefault();
     const cust = customers.find((c) => c.id === selectedCustomerId);
-    const newTask: Task = {
+    const newTask: Partial<Task> = {
       id: `TSK-${Date.now().toString().slice(-4)}`,
       tenantId,
       title,
@@ -196,10 +195,12 @@ export const TasksPage: React.FC = () => {
       createdAt: new Date().toISOString().split('T')[0],
     };
 
-    DataService.saveTask(newTask);
-    setTasks(DataService.getTasks(tenantId));
-    setShowAddModal(false);
-    setTitle('');
+    const res = await crmApi.createRecord('tasks', newTask);
+    if (res.success) {
+      loadData();
+      setShowAddModal(false);
+      setTitle('');
+    }
   };
 
   return (

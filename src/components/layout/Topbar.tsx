@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
 import { Link } from 'react-router-dom';
 
 interface TopbarProps {
@@ -9,13 +8,11 @@ interface TopbarProps {
 }
 
 export const Topbar: React.FC<TopbarProps> = ({ onToggleSidebar, isSidebarOpen = false }) => {
-  const { currentUser, currentTenant, switchUser, switchTenant } = useAuth();
+  const { currentUser } = useAuth();
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
 
-  const allUsers = DataService.getUsers();
-  const allTenants = DataService.getTenants();
-  const unreadNotifications = DataService.getNotifications(currentUser?.id).filter((n) => !n.isRead);
+  const unreadNotifications: any[] = [];
 
   return (
     <header className="fixed top-0 right-0 left-0 lg:left-64 h-16 bg-white border-b border-[#E1E1E1] px-4 lg:px-8 flex items-center justify-between z-20 transition-all duration-300">
@@ -48,42 +45,6 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleSidebar, isSidebarOpen =
 
       {/* Right Controls: Demo Role & Tenant Switcher + Notifications + Profile */}
       <div className="flex items-center gap-4">
-        {/* Interactive Demo Switcher Box */}
-        <div className="hidden lg:flex items-center gap-2 bg-[#eff4ff] border border-[#c7c4d8] rounded-lg px-2.5 py-1 text-xs">
-          <span className="material-symbols-outlined text-[#4744e5] text-[16px]">tune</span>
-          <span className="font-semibold text-[#4744e5] text-[11px]">Demo Scope:</span>
-
-          {/* User Role Switcher */}
-          <select
-            value={currentUser?.id}
-            onChange={(e) => switchUser(e.target.value)}
-            className="bg-white border border-[#E1E1E1] rounded text-[11px] font-medium px-2 py-0.5 text-[#1a1c1c] focus:outline-none focus:border-[#4744e5]"
-            title="Switch User Role Context"
-          >
-            {allUsers.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name} ({u.roleName})
-              </option>
-            ))}
-          </select>
-
-          {/* Tenant Switcher */}
-          {currentUser?.role !== 'SUPER_ADMIN' && currentUser?.tenantId && (
-            <select
-              value={currentTenant?.id}
-              onChange={(e) => switchTenant(e.target.value)}
-              className="bg-white border border-[#E1E1E1] rounded text-[11px] font-medium px-2 py-0.5 text-[#1a1c1c] focus:outline-none focus:border-[#4744e5]"
-              title="Switch Active Tenant"
-            >
-              {allTenants.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-
         {/* Notifications Icon Button */}
         <div className="relative">
           <button
@@ -114,7 +75,6 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleSidebar, isSidebarOpen =
                     <div
                       key={n.id}
                       className="p-3 hover:bg-[#f9f9f9] transition-colors cursor-pointer text-xs"
-                      onClick={() => DataService.markNotificationAsRead(n.id)}
                     >
                       <p className="font-semibold text-[#1a1c1c]">{n.title}</p>
                       <p className="text-[#464555] mt-0.5 text-[11px] line-clamp-2">{n.message}</p>

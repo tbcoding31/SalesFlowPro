@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
 import { usersApi } from '../../services/usersApi';
 import { crmApi } from '../../services/crmApi';
 import { Customer, Visit, Task, FollowUp, Project, Activity, User, CustomerContact, TaskPriority, TaskStatus, FollowUpType, FollowUpPriority, FollowUpStatus, ProjectStage } from '../../types';
@@ -436,7 +435,7 @@ export const CustomerDetailPage: React.FC = () => {
   const rawActivities: ActivityTimelineItem[] = [];
   const addedActivityKeys = new Set<string>();
 
-  // 1. Convert raw stored activities from DataService
+  // 1. Convert raw stored activities from Database API
   activities.forEach((a) => {
     let cat: ActivityTimelineItem['category'] = 'SYSTEM';
     let icon = 'history';
@@ -1015,21 +1014,10 @@ export const CustomerDetailPage: React.FC = () => {
       createdAt: new Date().toISOString().split('T')[0],
     };
 
-    DataService.saveFollowUp(newFollowUp);
-    DataService.addActivity({
-      tenantId,
-      customerId: customer.id,
-      customerName: customer.name,
-      userId: currentUser?.id || 'USR-005',
-      userName: currentUser?.name || 'Budi Santoso',
-      type: followUpTypeInput === 'CALL' ? 'CALL' : followUpTypeInput === 'EMAIL' ? 'EMAIL' : 'NOTE',
-      subject: `Follow-up Scheduled: ${newFollowUp.title}`,
-      description: `Follow-up (${followUpTypeInput}) scheduled for ${followUpDateInput} by ${picUser.name}.`,
-      occurredAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+    crmApi.createRecord('follow_ups', newFollowUp).then(() => {
+      refreshFollowups();
+      setShowFollowUpModal(false);
     });
-
-    refreshFollowups();
-    setShowFollowUpModal(false);
   };
 
   const openEditFollowUpModal = (f: FollowUp) => {
@@ -1046,7 +1034,7 @@ export const CustomerDetailPage: React.FC = () => {
     setFollowUpNotesInput(f.notes || '');
   };
 
-  const handleConfirmEditFollowUp = (e: React.FormEvent) => {
+  const handleSaveEditFollowUp = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingFollowUp) return;
     const picUser = tenantUsers.find((u) => u.id === followUpPicIdInput) || {
@@ -1055,7 +1043,7 @@ export const CustomerDetailPage: React.FC = () => {
       avatarUrl: editingFollowUp.picAvatar,
     };
 
-    const updated: FollowUp = {
+    const updated: Partial<FollowUp> = {
       ...editingFollowUp,
       title: followUpTitleInput,
       type: followUpTypeInput,
@@ -1072,21 +1060,10 @@ export const CustomerDetailPage: React.FC = () => {
       completedAt: followUpStatusInput === 'COMPLETED' ? (editingFollowUp.completedAt || todayISO) : undefined,
     };
 
-    DataService.saveFollowUp(updated);
-    DataService.addActivity({
-      tenantId,
-      customerId: customer.id,
-      customerName: customer.name,
-      userId: currentUser?.id || 'USR-005',
-      userName: currentUser?.name || 'Budi Santoso',
-      type: 'NOTE',
-      subject: `Follow-up Updated: ${updated.title}`,
-      description: `Follow-up details updated. Status: ${followUpStatusInput}, PIC: ${picUser.name}.`,
-      occurredAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+    crmApi.updateRecord('follow_ups', editingFollowUp.id, updated).then(() => {
+      refreshFollowups();
+      setEditingFollowUp(null);
     });
-
-    refreshFollowups();
-    setEditingFollowUp(null);
   };
 
   const openCompleteFollowUpModal = (f: FollowUp) => {
@@ -1098,28 +1075,17 @@ export const CustomerDetailPage: React.FC = () => {
     e.preventDefault();
     if (!completingFollowUp) return;
 
-    const updated: FollowUp = {
+    const updated: Partial<FollowUp> = {
       ...completingFollowUp,
       status: 'COMPLETED',
       completedAt: new Date().toISOString().split('T')[0],
       outcome: completeOutcomeInput,
     };
 
-    DataService.saveFollowUp(updated);
-    DataService.addActivity({
-      tenantId,
-      customerId: customer.id,
-      customerName: customer.name,
-      userId: currentUser?.id || 'USR-005',
-      userName: currentUser?.name || 'Budi Santoso',
-      type: 'NOTE',
-      subject: `Follow-up Completed: ${completingFollowUp.title || completingFollowUp.type}`,
-      description: `Outcome: ${completeOutcomeInput || 'Completed successfully'}`,
-      occurredAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+    crmApi.updateRecord('follow_ups', completingFollowUp.id, updated).then(() => {
+      refreshFollowups();
+      setCompletingFollowUp(null);
     });
-
-    refreshFollowups();
-    setCompletingFollowUp(null);
   };
 
   const openRescheduleFollowUpModal = (f: FollowUp) => {
@@ -1133,7 +1099,7 @@ export const CustomerDetailPage: React.FC = () => {
     e.preventDefault();
     if (!reschedulingFollowUp) return;
 
-    const updated: FollowUp = {
+    const updated: Partial<FollowUp> = {
       ...reschedulingFollowUp,
       rescheduledFromDate: reschedulingFollowUp.followUpDate,
       followUpDate: rescheduleDateInput,
@@ -1142,21 +1108,10 @@ export const CustomerDetailPage: React.FC = () => {
       status: 'PENDING',
     };
 
-    DataService.saveFollowUp(updated);
-    DataService.addActivity({
-      tenantId,
-      customerId: customer.id,
-      customerName: customer.name,
-      userId: currentUser?.id || 'USR-005',
-      userName: currentUser?.name || 'Budi Santoso',
-      type: 'NOTE',
-      subject: `Follow-up Rescheduled: ${reschedulingFollowUp.title || reschedulingFollowUp.type}`,
-      description: `Rescheduled from ${reschedulingFollowUp.followUpDate} to ${rescheduleDateInput}. Reason: ${rescheduleReasonInput || 'No reason provided'}`,
-      occurredAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+    crmApi.updateRecord('follow_ups', reschedulingFollowUp.id, updated).then(() => {
+      refreshFollowups();
+      setReschedulingFollowUp(null);
     });
-
-    refreshFollowups();
-    setReschedulingFollowUp(null);
   };
 
   // Project Stage Meta Helper
@@ -1297,9 +1252,10 @@ export const CustomerDetailPage: React.FC = () => {
       updatedAt: new Date().toISOString().split('T')[0],
     };
 
-    DataService.saveProject(newOpp);
-    refreshOpps();
-    setShowOppModal(false);
+    crmApi.createRecord('projects', newOpp).then(() => {
+      refreshOpps();
+      setShowOppModal(false);
+    });
   };
 
   const openViewOppModal = (opp: Project) => {
@@ -1322,7 +1278,7 @@ export const CustomerDetailPage: React.FC = () => {
     e.preventDefault();
     if (!editingOpp) return;
     const picUser = tenantUsers.find((u) => u.id === oppPicIdInput);
-    const updated: Project = {
+    const updated: Partial<Project> = {
       ...editingOpp,
       name: oppNameInput,
       estimatedValue: oppValueInput,
@@ -1337,9 +1293,10 @@ export const CustomerDetailPage: React.FC = () => {
       updatedAt: new Date().toISOString().split('T')[0],
     };
 
-    DataService.saveProject(updated);
-    refreshOpps();
-    setEditingOpp(null);
+    crmApi.updateRecord('projects', editingOpp.id, updated).then(() => {
+      refreshOpps();
+      setEditingOpp(null);
+    });
   };
 
   const openChangeStageModal = (opp: Project) => {
@@ -1353,28 +1310,17 @@ export const CustomerDetailPage: React.FC = () => {
     e.preventDefault();
     if (!changingStageOpp) return;
     const oldStage = changingStageOpp.stage;
-    const updated: Project = {
+    const updated: Partial<Project> = {
       ...changingStageOpp,
       stage: newStageInput,
       probability: newStageProbInput,
       updatedAt: new Date().toISOString().split('T')[0],
     };
 
-    DataService.saveProject(updated);
-    DataService.addActivity({
-      tenantId,
-      customerId: customer.id,
-      customerName: customer.name,
-      userId: currentUser?.id || 'USR-005',
-      userName: currentUser?.name || 'Budi Santoso',
-      type: 'PROJECT',
-      subject: `Stage Changed: ${updated.name}`,
-      description: `Stage moved from ${oldStage} to ${newStageInput}.${stageChangeNotesInput ? ` Notes: ${stageChangeNotesInput}` : ''}`,
-      occurredAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+    crmApi.updateRecord('projects', changingStageOpp.id, updated).then(() => {
+      refreshOpps();
+      setChangingStageOpp(null);
     });
-
-    refreshOpps();
-    setChangingStageOpp(null);
   };
 
   const openReassignOppModal = (opp: Project) => {
@@ -1389,8 +1335,7 @@ export const CustomerDetailPage: React.FC = () => {
     const newPic = tenantUsers.find((u) => u.id === newOppPicIdInput);
     if (!newPic) return;
 
-    const oldPicName = reassigningOpp.picName;
-    const updated: Project = {
+    const updated: Partial<Project> = {
       ...reassigningOpp,
       picId: newPic.id,
       picName: newPic.name,
@@ -1398,21 +1343,10 @@ export const CustomerDetailPage: React.FC = () => {
       updatedAt: new Date().toISOString().split('T')[0],
     };
 
-    DataService.saveProject(updated);
-    DataService.addActivity({
-      tenantId,
-      customerId: customer.id,
-      customerName: customer.name,
-      userId: currentUser?.id || 'USR-005',
-      userName: currentUser?.name || 'Budi Santoso',
-      type: 'PROJECT',
-      subject: `Project PIC Reassigned: ${updated.name}`,
-      description: `Reassigned from ${oldPicName} to ${newPic.name}.${reassignReasonInput ? ` Reason: ${reassignReasonInput}` : ''}`,
-      occurredAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+    crmApi.updateRecord('projects', reassigningOpp.id, updated).then(() => {
+      refreshOpps();
+      setReassigningOpp(null);
     });
-
-    refreshOpps();
-    setReassigningOpp(null);
   };
 
   // Computed Metrics
@@ -1429,7 +1363,7 @@ export const CustomerDetailPage: React.FC = () => {
   // Handlers
   const handleSaveCustomer = (e: React.FormEvent) => {
     e.preventDefault();
-    const updated: Customer = {
+    const updated: Partial<Customer> = {
       ...customer,
       name: editName,
       code: editCode,
@@ -1440,9 +1374,10 @@ export const CustomerDetailPage: React.FC = () => {
       region: editRegion,
       address: editAddress,
     };
-    DataService.saveCustomer(updated);
-    setCustomer(updated);
-    setShowEditCustomerModal(false);
+    crmApi.updateRecord('customers', customer.id, updated).then(() => {
+      loadAllCustomerData();
+      setShowEditCustomerModal(false);
+    });
   };
 
   const handleChangePic = (e: React.FormEvent) => {
@@ -1450,7 +1385,7 @@ export const CustomerDetailPage: React.FC = () => {
     const selectedUser = tenantUsers.find((u) => u.id === selectedPicId);
     if (!selectedUser) return;
 
-    const updated: Customer = {
+    const updated: Partial<Customer> = {
       ...customer,
       assignedPicId: selectedUser.id,
       assignedPicName: selectedUser.name,
@@ -1459,21 +1394,10 @@ export const CustomerDetailPage: React.FC = () => {
       teamName: selectedUser.teamName || customer.teamName,
     };
 
-    DataService.saveCustomer(updated);
-    DataService.addActivity({
-      tenantId,
-      customerId: customer.id,
-      customerName: customer.name,
-      userId: currentUser?.id || 'USR-001',
-      userName: currentUser?.name || 'Admin',
-      type: 'SYSTEM',
-      subject: 'Primary PIC Reassigned',
-      description: `Primary PIC reassigned to ${selectedUser.name} (${selectedUser.roleName}).`,
-      occurredAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+    crmApi.updateRecord('customers', customer.id, updated).then(() => {
+      loadAllCustomerData();
+      setShowChangePicModal(false);
     });
-
-    setCustomer(updated);
-    setShowChangePicModal(false);
   };
 
   const handleCreateVisit = (e: React.FormEvent) => {
@@ -1497,10 +1421,11 @@ export const CustomerDetailPage: React.FC = () => {
       createdAt: new Date().toISOString().split('T')[0],
     };
 
-    DataService.saveVisit(newVisit);
-    refreshVisits();
-    setShowVisitModal(false);
-    setVisitTitle('');
+    crmApi.createRecord('visits', newVisit).then(() => {
+      refreshVisits();
+      setShowVisitModal(false);
+      setVisitTitle('');
+    });
   };
 
   const openEditVisitModal = (v: Visit) => {
@@ -1516,7 +1441,7 @@ export const CustomerDetailPage: React.FC = () => {
   const handleSaveEditVisit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingVisit) return;
-    const updated: Visit = {
+    const updated: Partial<Visit> = {
       ...editingVisit,
       title: editVisitTitle,
       purpose: editVisitPurpose,
@@ -1525,9 +1450,10 @@ export const CustomerDetailPage: React.FC = () => {
       result: editVisitResult,
       nextAction: editVisitNextAction,
     };
-    DataService.saveVisit(updated);
-    refreshVisits();
-    setEditingVisit(null);
+    crmApi.updateRecord('visits', editingVisit.id, updated).then(() => {
+      refreshVisits();
+      setEditingVisit(null);
+    });
   };
 
   const openRescheduleVisitModal = (v: Visit) => {
@@ -1541,7 +1467,7 @@ export const CustomerDetailPage: React.FC = () => {
   const handleConfirmReschedule = (e: React.FormEvent) => {
     e.preventDefault();
     if (!reschedulingVisit) return;
-    const updated: Visit = {
+    const updated: Partial<Visit> = {
       ...reschedulingVisit,
       visitDate: rescheduleDate,
       startTime: rescheduleStartTime,
@@ -1549,20 +1475,10 @@ export const CustomerDetailPage: React.FC = () => {
       status: 'RESCHEDULED',
       notes: rescheduleReason ? `Rescheduled: ${rescheduleReason}` : reschedulingVisit.notes,
     };
-    DataService.saveVisit(updated);
-    DataService.addActivity({
-      tenantId,
-      customerId: customer.id,
-      customerName: customer.name,
-      userId: currentUser?.id || 'USR-005',
-      userName: currentUser?.name || 'Budi Santoso',
-      type: 'VISIT',
-      subject: `Visit Rescheduled: ${updated.title}`,
-      description: `Visit rescheduled to ${rescheduleDate} (${rescheduleStartTime}). Reason: ${rescheduleReason || 'Schedule adjustment'}`,
-      occurredAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+    crmApi.updateRecord('visits', reschedulingVisit.id, updated).then(() => {
+      refreshVisits();
+      setReschedulingVisit(null);
     });
-    refreshVisits();
-    setReschedulingVisit(null);
   };
 
   const openCancelVisitModal = (v: Visit) => {
@@ -1573,31 +1489,21 @@ export const CustomerDetailPage: React.FC = () => {
   const handleConfirmCancel = (e: React.FormEvent) => {
     e.preventDefault();
     if (!cancellingVisit) return;
-    const updated: Visit = {
+    const updated: Partial<Visit> = {
       ...cancellingVisit,
       status: 'CANCELLED',
       notes: cancelReason ? `Cancelled: ${cancelReason}` : cancellingVisit.notes,
     };
-    DataService.saveVisit(updated);
-    DataService.addActivity({
-      tenantId,
-      customerId: customer.id,
-      customerName: customer.name,
-      userId: currentUser?.id || 'USR-005',
-      userName: currentUser?.name || 'Budi Santoso',
-      type: 'VISIT',
-      subject: `Visit Cancelled: ${updated.title}`,
-      description: `Visit cancelled. Reason: ${cancelReason || 'Client request'}`,
-      occurredAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+    crmApi.updateRecord('visits', cancellingVisit.id, updated).then(() => {
+      refreshVisits();
+      setCancellingVisit(null);
     });
-    refreshVisits();
-    setCancellingVisit(null);
   };
 
   const handleCreateTask = (e: React.FormEvent) => {
     e.preventDefault();
     const assignedUser = tenantUsers.find((u) => u.id === (taskPicId || currentUser?.id || 'USR-005'));
-    const newTask: Task = {
+    const newTask: Partial<Task> = {
       id: `TSK-${Math.floor(1000 + Math.random() * 9000)}`,
       tenantId,
       title: taskTitle,
@@ -1616,49 +1522,28 @@ export const CustomerDetailPage: React.FC = () => {
       relatedProjectId: taskRelatedOppId || undefined,
     };
 
-    DataService.saveTask(newTask);
-    DataService.addActivity({
-      tenantId,
-      customerId: customer.id,
-      customerName: customer.name,
-      userId: currentUser?.id || 'USR-005',
-      userName: currentUser?.name || 'Budi Santoso',
-      type: 'TASK',
-      subject: `New Task Created: ${newTask.title}`,
-      description: `Task assigned to ${newTask.picName}. Due date: ${newTask.dueDate}. Priority: ${newTask.priority}`,
-      occurredAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+    crmApi.createRecord('tasks', newTask).then(() => {
+      refreshTasks();
+      setShowTaskModal(false);
+      setTaskTitle('');
+      setTaskDescription('');
+      setTaskPicId('');
+      setTaskRelatedVisitId('');
+      setTaskRelatedOppId('');
     });
-
-    refreshTasks();
-    setShowTaskModal(false);
-    setTaskTitle('');
-    setTaskDescription('');
-    setTaskPicId('');
-    setTaskRelatedVisitId('');
-    setTaskRelatedOppId('');
   };
 
   const handleToggleCompleteTask = (t: Task) => {
     const isCompleted = t.status === 'COMPLETED';
     const updatedStatus: TaskStatus = isCompleted ? 'TODO' : 'COMPLETED';
-    const updated: Task = {
+    const updated: Partial<Task> = {
       ...t,
       status: updatedStatus,
       completedAt: isCompleted ? undefined : new Date().toISOString().split('T')[0],
     };
-    DataService.saveTask(updated);
-    DataService.addActivity({
-      tenantId,
-      customerId: customer.id,
-      customerName: customer.name,
-      userId: currentUser?.id || 'USR-005',
-      userName: currentUser?.name || 'Budi Santoso',
-      type: 'TASK',
-      subject: `Task ${isCompleted ? 'Reopened' : 'Completed'}: ${t.title}`,
-      description: `Task status updated to ${updatedStatus}.`,
-      occurredAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+    crmApi.updateRecord('tasks', t.id, updated).then(() => {
+      refreshTasks();
     });
-    refreshTasks();
   };
 
   const openEditTaskModal = (t: Task) => {
@@ -1677,7 +1562,7 @@ export const CustomerDetailPage: React.FC = () => {
     e.preventDefault();
     if (!editingTask) return;
     const assignedUser = tenantUsers.find((u) => u.id === editTaskPicId);
-    const updated: Task = {
+    const updated: Partial<Task> = {
       ...editingTask,
       title: editTaskTitle,
       description: editTaskDescription,
@@ -1691,9 +1576,10 @@ export const CustomerDetailPage: React.FC = () => {
       relatedProjectId: editTaskRelatedOppId || undefined,
       completedAt: editTaskStatus === 'COMPLETED' ? (editingTask.completedAt || new Date().toISOString().split('T')[0]) : undefined,
     };
-    DataService.saveTask(updated);
-    refreshTasks();
-    setEditingTask(null);
+    crmApi.updateRecord('tasks', editingTask.id, updated).then(() => {
+      refreshTasks();
+      setEditingTask(null);
+    });
   };
 
   const openReassignTaskModal = (t: Task) => {
@@ -1709,28 +1595,17 @@ export const CustomerDetailPage: React.FC = () => {
     const newPic = tenantUsers.find((u) => u.id === reassignTaskPicId);
     if (!newPic) return;
 
-    const updated: Task = {
+    const updated: Partial<Task> = {
       ...reassigningTask,
       picId: newPic.id,
       picName: newPic.name,
       picAvatar: newPic.avatarUrl,
     };
 
-    DataService.saveTask(updated);
-    DataService.addActivity({
-      tenantId,
-      customerId: customer.id,
-      customerName: customer.name,
-      userId: currentUser?.id || 'USR-005',
-      userName: currentUser?.name || 'Budi Santoso',
-      type: 'TASK',
-      subject: `Task Ownership Reassigned: ${reassigningTask.title}`,
-      description: `Task PIC reassigned from ${reassigningTask.picName} to ${newPic.name} (${newPic.teamName || 'Sales Team'}).`,
-      occurredAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+    crmApi.updateRecord('tasks', reassigningTask.id, updated).then(() => {
+      refreshTasks();
+      setReassigningTask(null);
     });
-
-    refreshTasks();
-    setReassigningTask(null);
   };
 
 
@@ -4925,7 +4800,7 @@ export const CustomerDetailPage: React.FC = () => {
 
       {/* MODAL: REASSIGN TASK PIC */}
       {reassigningTask && (() => {
-        const allTenantTasks = DataService.getTasks(tenantId);
+        const allTenantTasks = tasks;
         const currentPicUser = tenantUsers.find((u) => u.id === reassigningTask.picId) || {
           id: reassigningTask.picId,
           name: reassigningTask.picName,
@@ -5501,7 +5376,7 @@ export const CustomerDetailPage: React.FC = () => {
               </button>
             </div>
 
-            <form onSubmit={handleConfirmEditFollowUp} className="space-y-3.5 text-xs">
+            <form onSubmit={handleSaveEditFollowUp} className="space-y-3.5 text-xs">
               <div>
                 <label className="block font-bold text-[#1a1c1c] mb-1">Follow-up Subject *</label>
                 <input

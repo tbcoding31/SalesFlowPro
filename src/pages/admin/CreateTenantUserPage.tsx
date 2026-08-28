@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
-import { DataService } from '../../services/dataService';
 import { Tenant, User, UserRole, UserStatus } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { usersApi } from '../../services/usersApi';
@@ -10,32 +9,31 @@ export const CreateTenantUserPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const { currentTenant: authTenant, currentUser } = useAuth();
 
-
   const [roleOptions, setRoleOptions] = useState<{id: string, name: string, scope: string}[]>([]);
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const paramTenantId = searchParams.get('tenantId');
+  const [selectedTenantId, setSelectedTenantId] = useState<string>(paramTenantId || authTenant?.id || 'TEN-00001');
+
   useEffect(() => {
     fetch('/api/roles/assignable', {
       headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('sfp_auth_token') || '') }
     }).then(r => r.json()).then(data => {
       if (Array.isArray(data)) setRoleOptions(data);
     }).catch(e => console.error(e));
+
+    fetch('/api/tenants', {
+      headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('sfp_auth_token') || '') }
+    }).then(r => r.json()).then(data => {
+      if (Array.isArray(data)) setTenants(data);
+    }).catch(e => console.error(e));
   }, []);
 
-  // Selected Tenant context
-  const tenants: Tenant[] = DataService.getTenants();
-  const paramTenantId = searchParams.get('tenantId');
-
-  const defaultTenant =
-    tenants.find((t) => t.id === paramTenantId) ||
-    authTenant ||
-    tenants[0] || {
-      id: 'TEN-00001',
-      code: 'TEN-00001',
-      name: 'PT ABC Indonesia',
-      email: 'contact@abc.co.id',
-    };
-
-  const [selectedTenantId, setSelectedTenantId] = useState<string>(defaultTenant.id);
-  const activeTenant = tenants.find((t) => t.id === selectedTenantId) || defaultTenant;
+  const activeTenant = tenants.find((t) => t.id === selectedTenantId) || authTenant || {
+    id: selectedTenantId,
+    code: selectedTenantId,
+    name: 'Selected Tenant',
+    email: 'contact@tenant.co.id',
+  };
 
   const [teamsList, setTeamsList] = useState<{id: string, name: string}[]>([]);
   const [selectedTeamId, setSelectedTeamId] = useState<string>('');

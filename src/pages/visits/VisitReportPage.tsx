@@ -1,8 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
 import { Visit, VisitStatus } from '../../types';
+import { crmApi } from '../../services/crmApi';
 
 export const VisitReportPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -10,29 +10,19 @@ export const VisitReportPage: React.FC = () => {
   const { currentUser } = useAuth();
   const tenantId = currentUser?.tenantId || 'TEN-00001';
 
-  // Fetch visit data or fallback
-  const visitList = useMemo(() => DataService.getVisits(tenantId), [tenantId]);
-  const visit = useMemo(() => {
-    return visitList.find((v) => v.id === id) || visitList[0] || {
-      id: 'VIS-007',
-      tenantId: tenantId,
-      customerId: 'CUS-001',
-      customerName: 'PT Maju Jaya',
-      customerCode: 'CUS-0001',
-      picId: 'USR-005',
-      picName: 'Ahmad',
-      picAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
-      title: 'Quarterly Executive Review',
-      purpose: 'Quarterly Review',
-      visitDate: '2026-08-10',
-      startTime: '09:00',
-      endTime: '10:30',
-      location: 'Cyber 2 Tower, Jakarta',
-      status: 'COMPLETED',
-      notes: '',
-      createdAt: '2026-08-01',
-    };
-  }, [visitList, id, tenantId]);
+  const [visit, setVisit] = useState<Visit | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    if (id) {
+      crmApi.fetchRecordById<Visit>('visits', id).then(v => {
+        if (v) setVisit(v);
+        setIsLoading(false);
+      });
+    } else {
+      setIsLoading(false);
+    }
+  }, [id, tenantId]);
 
   // Form State
   const [visitResult, setVisitResult] = useState<string>('Successful');
@@ -53,20 +43,20 @@ export const VisitReportPage: React.FC = () => {
   };
 
   const handleSaveDraft = () => {
-    // In a real app, save to backend
     showToast('Draft saved successfully.');
   };
 
   const handleCreateFollowUpTask = () => {
-    // In a real app, navigate to create task or open modal
     showToast('Follow-up task creation triggered.');
   };
 
-  const handleCompleteVisit = () => {
+  const handleCompleteVisit = async () => {
     if (!discussionSummary) {
       alert('Please provide a discussion summary before completing the visit.');
       return;
     }
+
+    if (!visit) return;
 
     const updatedVisit = {
       ...visit,
@@ -75,9 +65,29 @@ export const VisitReportPage: React.FC = () => {
       nextAction: nextAction,
     };
     
-    DataService.saveVisit(updatedVisit);
+    await crmApi.updateRecord('visits', visit.id, updatedVisit);
     setIsSubmitted(true);
   };
+
+  if (!visit && !isLoading) {
+    return (
+      <div className="bg-white p-8 rounded-xl border border-[#E1E1E1] text-center max-w-lg mx-auto my-12">
+        <h2 className="text-xl font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">Visit Not Found</h2>
+        <p className="text-xs text-[#767587] mt-1">The requested visit report could not be found.</p>
+        <Link to="/visits" className="inline-block mt-4 px-4 py-2 bg-[#4744e5] text-white text-xs font-bold rounded-lg">
+          Return to Visits
+        </Link>
+      </div>
+    );
+  }
+
+  if (!visit) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <span className="material-symbols-outlined text-4xl text-[#4744e5] animate-spin">progress_activity</span>
+      </div>
+    );
+  }
 
   // If submitted, show success state
   if (isSubmitted) {

@@ -3,7 +3,6 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Layout } from './components/layout/Layout';
 import { Agentation } from 'agentation';
-import { SyncService } from './services/syncService';
 
 // Auth Pages
 import { LoginPage } from './pages/auth/LoginPage';
@@ -59,34 +58,11 @@ import { SystemSettingsPage } from './pages/settings/SystemSettingsPage';
 
 // Dynamic Dashboard Resolver component based on user role
 const DashboardResolver: React.FC = () => {
-  const { currentUser, currentTenant, isLoading, hasPermission } = useAuth();
+  const { currentUser, isLoading, hasPermission } = useAuth();
   const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN' || hasPermission('MANAGE_TENANT');
   const isManagerOrSupervisor = hasPermission('VIEW_TEAM_TASKS');
 
-  const [isDataSynced, setIsDataSynced] = React.useState(false);
-
-  React.useEffect(() => {
-    // Super Admin loads data directly from API in SuperAdminDashboard
-    if (isSuperAdmin) {
-      setIsDataSynced(true);
-      return;
-    }
-
-    // Sync with backend on startup for tenant users
-    const tenantId = currentTenant?.id || currentUser?.tenantId || 'TEN-00001';
-    SyncService.syncAll(tenantId).then(() => {
-      setIsDataSynced(true);
-    }).catch(() => {
-      setIsDataSynced(true); // Proceed even if offline
-    });
-
-    // Listen for sync events
-    const handleSync = () => setIsDataSynced(true);
-    window.addEventListener('sfp_data_synced', handleSync);
-    return () => window.removeEventListener('sfp_data_synced', handleSync);
-  }, [currentTenant?.id, currentUser?.tenantId, isSuperAdmin]);
-
-  if (isLoading || (!isDataSynced && !isSuperAdmin)) {
+  if (isLoading) {
     return (
       <div className="min-h-[400px] flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">

@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
 import { masterDataApi } from '../../services/masterDataApi';
 import { Customer, CustomerType, User, MasterDataItem } from '../../types';
 import { crmApi } from '../../services/crmApi';
@@ -271,7 +270,9 @@ export const CustomersListPage: React.FC = () => {
       addresses: [],
     };
 
-    DataService.saveCustomer(newCustomerObj);
+    crmApi.createRecord('customers', newCustomerObj).then(() => {
+      loadData();
+    });
 
     const newExtended: ExtendedCustomerItem = {
       id: newCustomerObj.id,

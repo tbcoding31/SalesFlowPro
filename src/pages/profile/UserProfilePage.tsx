@@ -1,9 +1,30 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
+import { crmApi } from '../../services/crmApi';
+import { Task, Visit, Project, Activity } from '../../types';
 
 export const UserProfilePage: React.FC = () => {
   const { currentUser } = useAuth();
+  const tenantId = currentUser?.tenantId || 'TEN-00001';
+
+  const [myTasks, setMyTasks] = useState<Task[]>([]);
+  const [myVisits, setMyVisits] = useState<Visit[]>([]);
+  const [myProjects, setMyProjects] = useState<Project[]>([]);
+  const [myActivities, setMyActivities] = useState<Activity[]>([]);
+
+  useEffect(() => {
+    Promise.all([
+      crmApi.fetchCollection<Task>('tasks', tenantId),
+      crmApi.fetchCollection<Visit>('visits', tenantId),
+      crmApi.fetchCollection<Project>('projects', tenantId),
+      crmApi.fetchCollection<Activity>('activities', tenantId)
+    ]).then(([tList, vList, pList, aList]) => {
+      setMyTasks(tList.filter(t => t.picId === currentUser?.id && t.status !== 'COMPLETED'));
+      setMyVisits(vList.filter(v => v.picId === currentUser?.id));
+      setMyProjects(pList.filter(p => p.picId === currentUser?.id && p.stage !== 'WON' && p.stage !== 'LOST'));
+      setMyActivities(aList.filter(a => a.userId === currentUser?.id));
+    });
+  }, [tenantId, currentUser?.id]);
   
   // Use current user data if available, otherwise fallback to the requested mock data
   const user = {
@@ -13,36 +34,30 @@ export const UserProfilePage: React.FC = () => {
           currentUser?.role === 'SALES_MANAGER' ? 'Sales Manager' :
           currentUser?.role === 'SUPERVISOR' ? 'Supervisor' :
           'Sales Representative',
-    department: 'Sales Department',
+    department: currentUser?.department || 'Sales Department',
     email: currentUser?.email || 'ahmadricky90909@gmail.com',
-    phone: '+62 812 3456 7890',
+    phone: currentUser?.phone || '+62 812 3456 7890',
     avatar: currentUser?.avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser?.name || 'Ahmad Ricky')}&background=4f46e5&color=fff`
   };
-
-  const tenantId = currentUser?.tenantId || 'TEN-00001';
-  const myTasks = DataService.getTasks(tenantId).filter(t => t.picId === currentUser?.id && t.status !== 'COMPLETED');
-  const myVisits = DataService.getVisits(tenantId).filter(v => v.picId === currentUser?.id);
-  const myProjects = DataService.getProjects(tenantId).filter(p => p.picId === currentUser?.id && p.stage !== 'WON' && p.stage !== 'LOST');
-  const myAuditLogs = (DataService.getAuditLogs?.(tenantId) || []).filter(l => l.userId === currentUser?.id);
   
   const stats = [
     { label: 'Active Tasks', value: myTasks.length.toString(), icon: 'assignment', color: 'text-amber-600', bg: 'bg-amber-50' },
     { label: 'Visits This Month', value: myVisits.length.toString(), icon: 'map', color: 'text-emerald-600', bg: 'bg-emerald-50' },
     { label: 'Open Projects', value: myProjects.length.toString(), icon: 'monitoring', color: 'text-indigo-600', bg: 'bg-indigo-50' },
-    { label: 'System Logs', value: myAuditLogs.length.toString(), icon: 'history', color: 'text-purple-600', bg: 'bg-purple-50' }
+    { label: 'System Logs', value: myActivities.length.toString(), icon: 'history', color: 'text-purple-600', bg: 'bg-purple-50' }
   ];
 
-  const activities = myAuditLogs.slice(0, 4).map(log => ({
-    id: log.id,
-    action: `${log.action} ${log.entity}`,
-    time: (log.timestamp || (log as any).createdAt)?.substring(0, 10) || 'Recent',
+  const activities = myActivities.slice(0, 4).map(act => ({
+    id: act.id,
+    action: `${act.type} ${act.subject}`,
+    time: act.occurredAt?.substring(0, 10) || 'Recent',
     icon: 'history',
     color: 'text-emerald-600',
     bg: 'bg-emerald-50'
   }));
 
   if (activities.length === 0) {
-    activities.push({ id: 1, action: 'Logged in to system', time: 'Today', icon: 'login', color: 'text-slate-600', bg: 'bg-slate-50' } as any);
+    activities.push({ id: '1', action: 'Logged in to system', time: 'Today', icon: 'login', color: 'text-slate-600', bg: 'bg-slate-50' } as any);
   }
 
   return (

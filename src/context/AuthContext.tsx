@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User, Tenant, UserRole } from '../types';
-import { DataService } from '../services/dataService';
 
 export interface LoginResult {
   success: boolean;
@@ -36,32 +35,52 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    // Bootstrap auth session from localStorage
-    const savedUserId = localStorage.getItem(AUTH_USER_KEY);
+    // Bootstrap auth session from server via token
     const savedToken = localStorage.getItem(AUTH_TOKEN_KEY);
-    const savedUserStr = localStorage.getItem('sfp_currentUser');
 
-    if (savedToken && savedUserId && savedUserStr) {
-      try {
-        const user = JSON.parse(savedUserStr);
-        setCurrentUser(user);
-        setToken(savedToken);
-        if (user.role === 'SUPER_ADMIN' || !user.tenantId || user.tenantId === 'SYSTEM') {
-          setCurrentTenant(null);
+    // Clean up any legacy business snapshot keys on boot
+    const legacyBusinessKeys = [
+      'sfp_tenants_v1', 'sfp_users_v1', 'sfp_customers_v1', 'sfp_projects_v1',
+      'sfp_visits_v1', 'sfp_tasks_v1', 'sfp_followups_v1', 'sfp_activities_v1',
+      'sfp_targets_v1', 'sfp_master_data_v1', 'sfp_notifications_v1', 'sfp_audit_logs_v1',
+      'sfp_role_permissions_v1', 'sfp_currentUser'
+    ];
+    legacyBusinessKeys.forEach(k => localStorage.removeItem(k));
+
+    if (savedToken) {
+      fetch('/api/auth/me', {
+        headers: { 'Authorization': `Bearer ${savedToken}` }
+      })
+      .then(res => {
+        if (res.ok) return res.json();
+        throw new Error('Session invalid or expired');
+      })
+      .then(data => {
+        if (data.user) {
+          setCurrentUser(data.user);
+          setToken(savedToken);
+          if (data.user.role === 'SUPER_ADMIN' || !data.user.tenantId || data.user.tenantId === 'SYSTEM') {
+            setCurrentTenant(null);
+          } else {
+            setCurrentTenant({ id: data.user.tenantId, name: 'Active Tenant', status: 'ACTIVE' } as any);
+          }
         } else {
-          setCurrentTenant({ id: user.tenantId, name: 'Active Tenant', status: 'ACTIVE' } as any);
+          throw new Error('User not returned');
         }
-        // Restore session from localStorage. NOTE: This uses stateful database-backed session tokens,
-        // NOT JSON Web Tokens (JWT). The token is a cryptographically random 256-bit session identifier
-        // verified on every request against the auth_sessions table. The server is the source of truth.
-      } catch (e) {
-        // Corrupted localStorage state
+      })
+      .catch(() => {
         localStorage.removeItem(AUTH_USER_KEY);
         localStorage.removeItem(AUTH_TOKEN_KEY);
-        localStorage.removeItem('sfp_currentUser');
-      }
+        setCurrentUser(null);
+        setCurrentTenant(null);
+        setToken(null);
+      })
+      .finally(() => {
+        setIsLoading(false);
+      });
+    } else {
+      setIsLoading(false);
     }
-    setIsLoading(false);
 
     // -- Multi-Tab Session Synchronization (BroadcastChannel) --
     // When Tab A logs out or has session invalidated, broadcast to all other tabs
@@ -72,14 +91,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (sessionChannel) {
       sessionChannel.onmessage = (event) => {
         if (event.data?.type === 'SESSION_TERMINATED') {
-          // Another tab logged out — clear this tab's state too
           localStorage.removeItem(AUTH_USER_KEY);
           localStorage.removeItem(AUTH_TOKEN_KEY);
-          localStorage.removeItem('sfp_currentUser');
-          // Clear sensitive cached data
-          const sensitiveKeys = ['sfp_users_v1', 'sfp_customers_v1', 'sfp_projects_v1',
-            'sfp_activities_v1', 'sfp_targets_v1', 'sfp_audit_logs_v1', 'sfp_notifications_v1'];
-          sensitiveKeys.forEach(k => localStorage.removeItem(k));
           setCurrentUser(null);
           setCurrentTenant(null);
           setToken(null);
@@ -116,16 +129,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Handle 401 Unauthorized (Invalid/Expired Session)
       if (response.status === 401 && url.startsWith('/api/') && !url.includes('/auth/login') && !isHandlingUnauthorized) {
         isHandlingUnauthorized = true;
-        // Broadcast session termination to all other tabs
         sessionChannel?.postMessage({ type: 'SESSION_TERMINATED', reason: 'unauthorized' });
-        // Clear valid authentication state only
         localStorage.removeItem(AUTH_USER_KEY);
         localStorage.removeItem(AUTH_TOKEN_KEY);
-        localStorage.removeItem('sfp_currentUser');
         setCurrentUser(null);
         setCurrentTenant(null);
         setToken(null);
-        // Redirect to login
         window.location.href = '/login';
         return response;
       }
@@ -137,16 +146,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const body = await clone.json();
           if (body?.code === 'TENANT_SUSPENDED') {
             isHandlingSuspension = true;
-            // Broadcast session termination to all other tabs
             sessionChannel?.postMessage({ type: 'SESSION_TERMINATED', reason: 'suspended' });
-            // Log out user visually and clear session
             localStorage.removeItem(AUTH_USER_KEY);
             localStorage.removeItem(AUTH_TOKEN_KEY);
-            localStorage.removeItem('sfp_currentUser');
             setCurrentUser(null);
             setCurrentTenant(null);
             setToken(null);
-            // Show modal via DOM directly to ensure it survives React unmounts
             const modal = document.createElement('div');
             modal.innerHTML = `
               <div style="position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:999999;">
@@ -207,29 +212,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setToken(newToken);
       localStorage.setItem(AUTH_USER_KEY, user.id);
       localStorage.setItem(AUTH_TOKEN_KEY, newToken);
-      localStorage.setItem('sfp_currentUser', JSON.stringify({
-        ...user
-      }));
-      
-      // HYDRATION: Fetch all DB data and store to localStorage before navigating
-      try {
-        const syncRes = await fetch(`/api/sync/all?tenantId=${user.tenantId || 'SYSTEM'}`);
-        if (syncRes.ok) {
-          const syncData = await syncRes.json();
-          localStorage.setItem('sfp_tenants_v1', JSON.stringify(syncData.tenants || []));
-          localStorage.setItem('sfp_users_v1', JSON.stringify(syncData.users || []));
-          localStorage.setItem('sfp_customers_v1', JSON.stringify(syncData.customers || []));
-          localStorage.setItem('sfp_projects_v1', JSON.stringify(syncData.projects || []));
-          localStorage.setItem('sfp_visits_v1', JSON.stringify(syncData.visits || []));
-          localStorage.setItem('sfp_tasks_v1', JSON.stringify(syncData.tasks || []));
-          localStorage.setItem('sfp_activities_v1', JSON.stringify(syncData.activities || []));
-          localStorage.setItem('sfp_targets_v1', JSON.stringify(syncData.salesTargets || []));
-          localStorage.setItem('sfp_audit_logs_v1', JSON.stringify(syncData.auditLogs || []));
-          localStorage.setItem('sfp_notifications_v1', JSON.stringify(syncData.notifications || []));
-        }
-      } catch (err) {
-        console.error('Failed to sync data during login:', err);
-      }
 
       if (user.role === 'SUPER_ADMIN' || !user.tenantId || user.tenantId === 'SYSTEM') {
         setCurrentTenant(null);
@@ -252,20 +234,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = () => {
-    if (currentUser) {
-      DataService.addAuditLog({
-        tenantId: currentUser.tenantId || 'SYSTEM',
-        userId: currentUser.id,
-        userName: currentUser.name,
-        action: 'LOGOUT',
-        module: 'Authentication',
-        entity: 'Session',
-        entityId: currentUser.id,
-        description: `User ${currentUser.name} logged out`,
-        ipAddress: '127.0.0.1'
-      });
-    }
-    // Broadcast to all other tabs that session has ended
+    // Notify server asynchronously
+    fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+
     if (typeof BroadcastChannel !== 'undefined') {
       const ch = new BroadcastChannel('sfp_session_channel');
       ch.postMessage({ type: 'SESSION_TERMINATED', reason: 'logout' });
@@ -276,47 +247,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setToken(null);
     localStorage.removeItem(AUTH_USER_KEY);
     localStorage.removeItem(AUTH_TOKEN_KEY);
-    localStorage.removeItem('sfp_currentUser');
-    // Clear sensitive cached data on logout
-    ['sfp_users_v1', 'sfp_customers_v1', 'sfp_projects_v1',
-     'sfp_activities_v1', 'sfp_targets_v1', 'sfp_audit_logs_v1', 'sfp_notifications_v1'
-    ].forEach(k => localStorage.removeItem(k));
   };
 
   const switchUser = (userId: string) => {
-    const user = DataService.getUserById(userId);
-    if (user) {
-      setCurrentUser(user);
-      localStorage.setItem(AUTH_USER_KEY, user.id);
-      if (user.role === 'SUPER_ADMIN' || !user.tenantId || user.tenantId === 'SYSTEM') {
-        setCurrentTenant(null);
-      } else {
-        const tenant = DataService.getTenantById(user.tenantId);
-        setCurrentTenant(tenant || DataService.getTenants()[0]);
-      }
-    }
+    // Demo-only helper: do not mutate persistent business authority
+    console.log('Demo switchUser:', userId);
   };
 
   const switchTenant = (tenantId: string) => {
-    const tenant = DataService.getTenantById(tenantId);
-    if (tenant) {
-      setCurrentTenant(tenant);
+    if (tenantId === 'SYSTEM') {
+      setCurrentTenant(null);
+    } else {
+      setCurrentTenant({ id: tenantId, name: 'Selected Tenant', status: 'ACTIVE' } as any);
     }
   };
 
-  const refreshTenant = () => {
-    if (currentTenant) {
-      const refreshed = DataService.getTenantById(currentTenant.id);
-      if (refreshed) setCurrentTenant(refreshed);
-    }
-  };
-
-  const refreshUser = () => {
-    if (currentUser) {
-      const refreshed = DataService.getUserById(currentUser.id);
-      if (refreshed) setCurrentUser(refreshed);
-    }
-  };
+  const refreshTenant = () => {};
+  const refreshUser = () => {};
 
   const hasPermission = (permissionCode: string): boolean => {
     if (!currentUser || !currentUser.permissions) return false;

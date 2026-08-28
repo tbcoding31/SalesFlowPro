@@ -1,7 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
 import { FollowUp, Customer, User, FollowUpStatus } from '../../types';
 import { crmApi } from '../../services/crmApi';
 import { usersApi } from '../../services/usersApi';
@@ -96,14 +95,15 @@ export const FollowupsPage: React.FC = () => {
     }).sort((a, b) => new Date(a.followUpDate).getTime() - new Date(b.followUpDate).getTime());
   }, [enrichedFollowUps, activeTab, searchQuery, customerFilter, picFilter, statusFilter, dateStart, dateEnd]);
 
-  const toggleComplete = (f: FollowUp) => {
+  const toggleComplete = async (f: FollowUp) => {
+    const isCompleted = f.status === 'COMPLETED';
     const updated = { 
       ...f, 
-      status: (f.status === 'COMPLETED' ? 'PENDING' : 'COMPLETED') as FollowUpStatus,
-      completedAt: f.status === 'COMPLETED' ? undefined : new Date().toISOString()
+      status: (isCompleted ? 'PENDING' : 'COMPLETED') as FollowUpStatus,
+      completedAt: isCompleted ? undefined : new Date().toISOString()
     };
-    DataService.saveFollowUp(updated);
-    setFollowups(DataService.getFollowUps(tenantId));
+    await crmApi.updateRecord('follow_ups', f.id, updated);
+    loadData();
   };
 
   const getStatusBadge = (status: string) => {

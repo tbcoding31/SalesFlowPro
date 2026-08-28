@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { DataService } from '../../services/dataService';
 import { usersApi } from '../../services/usersApi';
 import { User, Tenant, UserRole } from '../../types';
 import { useAuth } from '../../context/AuthContext';
@@ -12,14 +11,22 @@ export const TenantUsersPage: React.FC = () => {
     currentUser?.tenantId === 'SYSTEM' ? 'ALL' : (currentTenant?.id || 'TEN-00001')
   );
   const [users, setUsers] = useState<User[]>([]);
+  const [tenants, setTenants] = useState<Tenant[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('ALL');
   const [roleOptions, setRoleOptions] = useState<{id: string, name: string}[]>([]);
+
   useEffect(() => {
     fetch('/api/roles/assignable', {
       headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('sfp_auth_token') || '') }
     }).then(r => r.json()).then(data => {
       if (Array.isArray(data)) setRoleOptions(data);
+    }).catch(e => console.error(e));
+
+    fetch('/api/tenants', {
+      headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('sfp_auth_token') || '') }
+    }).then(r => r.json()).then(data => {
+      if (Array.isArray(data)) setTenants(data);
     }).catch(e => console.error(e));
   }, []);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -35,8 +42,6 @@ export const TenantUsersPage: React.FC = () => {
   const [targetTenantId, setTargetTenantId] = useState(
     selectedTenantId === 'ALL' ? 'TEN-00001' : selectedTenantId
   );
-
-  const tenants: Tenant[] = DataService.getTenants();
 
   const loadUsers = async (tenantId: string) => {
     setIsLoading(true);

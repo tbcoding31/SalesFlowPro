@@ -1,7 +1,6 @@
 import React, { useState, useMemo, DragEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
 import { masterDataApi } from '../../services/masterDataApi';
 import { Project, ProjectStage, ActivityType, Customer, FollowUpType, MasterDataItem } from '../../types';
 import { crmApi } from '../../services/crmApi';
@@ -120,11 +119,6 @@ export const ProjectsPage: React.FC = () => {
     const opp = projects.find(o => o.id === oppId);
     if (!opp || opp.stage === targetStage) return;
 
-    // If moving OUT of QUALIFICATION, delete associated followups
-    if (opp.stage === 'QUALIFICATION' && targetStage !== 'QUALIFICATION') {
-      DataService.deleteFollowUpsByProjectId(opp.id);
-    }
-
     if (targetStage === 'QUALIFICATION') {
       setPendingFollowUpOpp(opp);
       setFollowUpTitle(`Follow up: ${opp.name}`);
@@ -138,36 +132,17 @@ export const ProjectsPage: React.FC = () => {
     executeMove(opp, targetStage);
   };
 
-  const executeMove = (opp: Project, targetStage: ProjectStage) => {
-    const oldStageLabel = stages.find(s => s.key === opp.stage)?.label || opp.stage;
-    const newStageLabel = stages.find(s => s.key === targetStage)?.label || targetStage;
-
+  const executeMove = async (opp: Project, targetStage: ProjectStage) => {
     const updatedOpp = { ...opp, stage: targetStage, updatedAt: new Date().toISOString() };
-    DataService.saveProject(updatedOpp);
-    
-    const activity = {
-      tenantId: opp.tenantId,
-      customerId: opp.customerId,
-      customerName: opp.customerName,
-      userId: currentUser?.id || 'SYS-001',
-      userName: currentUser?.name || 'System',
-      type: 'PROJECT' as ActivityType,
-      subject: `Project Stage Updated: ${targetStage}`,
-      description: `Project "${opp.name}" was moved from ${oldStageLabel} to ${newStageLabel}.`,
-      occurredAt: new Date().toISOString(),
-      entityType: 'PROJECT',
-      entityId: opp.id
-    };
-    DataService.addActivity(activity);
-
-    setProjects(DataService.getProjects(tenantId));
+    await crmApi.updateRecord('projects', opp.id, updatedOpp);
+    loadData();
   };
 
-  const handleCreateFollowUp = () => {
+  const handleCreateFollowUp = async () => {
     if (!pendingFollowUpOpp) return;
     
     // Create FollowUp entity
-    DataService.saveFollowUp({
+    await crmApi.createRecord('follow_ups', {
       id: `FU-${Date.now()}`,
       tenantId,
       title: followUpTitle,
@@ -178,14 +153,14 @@ export const ProjectsPage: React.FC = () => {
       picName: currentUser?.name || 'System',
       type: followUpType,
       status: 'SCHEDULED',
+      priority: 'MEDIUM',
       followUpDate: followUpDate,
-      notes: followUpNotes,
       relatedProjectId: pendingFollowUpOpp.id,
-      createdAt: new Date().toISOString()
+      notes: followUpNotes,
+      createdAt: new Date().toISOString().split('T')[0],
     });
-    
-    executeMove(pendingFollowUpOpp, 'QUALIFICATION');
 
+    executeMove(pendingFollowUpOpp, 'QUALIFICATION');
     setShowFollowUpModal(false);
     setPendingFollowUpOpp(null);
   };

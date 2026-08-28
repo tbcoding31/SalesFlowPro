@@ -1,16 +1,37 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
 import { Task, Customer } from '../../types';
+import { crmApi } from '../../services/crmApi';
 
 export const TeamTasksPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant, currentUser } = useAuth();
   const tenantId = currentTenant?.id || 'TEN-00001';
 
-  const [tasks, setTasks] = useState<Task[]>(DataService.getTasks(tenantId));
-  const [customers] = useState<Customer[]>(DataService.getCustomers(tenantId));
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const loadData = async () => {
+    setIsLoading(true);
+    try {
+      const [tList, cList] = await Promise.all([
+        crmApi.fetchCollection<Task>('tasks', tenantId),
+        crmApi.fetchCollection<Customer>('customers', tenantId)
+      ]);
+      setTasks(tList);
+      setCustomers(cList);
+    } catch (err) {
+      console.error('Error loading team tasks:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+  }, [tenantId]);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');

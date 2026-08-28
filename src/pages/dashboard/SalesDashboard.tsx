@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
 import { Customer, Visit, Task, Project, Activity } from '../../types';
 import { crmApi } from '../../services/crmApi';
 

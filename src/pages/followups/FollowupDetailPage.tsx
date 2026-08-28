@@ -1,8 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { DataService } from '../../services/dataService';
-import { FollowUp, FollowUpStatus } from '../../types';
+import { FollowUp, FollowUpStatus, Customer, Task, Visit, Project } from '../../types';
+import { crmApi } from '../../services/crmApi';
 
 export const FollowupDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -10,37 +10,67 @@ export const FollowupDetailPage: React.FC = () => {
   const { currentTenant } = useAuth();
   const tenantId = currentTenant?.id || 'TEN-00001';
 
-  const [followups, setFollowups] = useState(DataService.getFollowUps(tenantId));
-  const followup = followups.find(f => f.id === id);
+  const [followup, setFollowup] = useState<FollowUp | null>(null);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [visits, setVisits] = useState<Visit[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const [customers] = useState(DataService.getCustomers(tenantId));
-  const [tasks] = useState(DataService.getTasks(tenantId));
-  const [visits] = useState(DataService.getVisits(tenantId));
-  const [projects] = useState(DataService.getProjects(tenantId));
+  const loadData = async () => {
+    if (!id) return;
+    setIsLoading(true);
+    try {
+      const [f, cList, tList, vList, pList] = await Promise.all([
+        crmApi.fetchRecordById<FollowUp>('follow_ups', id),
+        crmApi.fetchCollection<Customer>('customers', tenantId),
+        crmApi.fetchCollection<Task>('tasks', tenantId),
+        crmApi.fetchCollection<Visit>('visits', tenantId),
+        crmApi.fetchCollection<Project>('projects', tenantId),
+      ]);
+      if (f) setFollowup(f);
+      setCustomers(cList);
+      setTasks(tList);
+      setVisits(vList);
+      setProjects(pList);
+    } catch (err) {
+      console.error('Error loading followup detail:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-  if (!followup) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full">
-        <h2 className="text-xl font-bold text-slate-800">Follow-up not found</h2>
-        <button onClick={() => navigate('/followups')} className="mt-4 text-[#4744e5] hover:underline">
-          Back to Follow-ups
-        </button>
-      </div>
-    );
-  }
+  useEffect(() => {
+    loadData();
+  }, [id, tenantId]);
 
-  const customer = customers.find(c => c.id === followup.customerId);
-  const relatedTask = tasks.find(t => t.id === followup.relatedTaskId);
-  const relatedVisit = visits.find(v => v.id === followup.relatedVisitId);
-  const relatedProject = projects.find(o => o.id === followup.relatedProjectId);
+  const handleComplete = async () => {
+    if (!followup) return;
+    const isCompleted = followup.status === 'COMPLETED';
+    const updated = { 
+      ...followup, 
+      status: (isCompleted ? 'PENDING' : 'COMPLETED') as FollowUpStatus,
+      completedAt: isCompleted ? undefined : new Date().toISOString()
+    };
+    await crmApi.updateRecord('follow_ups', followup.id, updated);
+    loadData();
+  };
+
+  const customer = useMemo(() => followup ? customers.find(c => c.id === followup.customerId) : undefined, [customers, followup]);
+  const relatedTask = useMemo(() => followup ? tasks.find(t => t.id === followup.relatedTaskId) : undefined, [tasks, followup]);
+  const relatedVisit = useMemo(() => followup ? visits.find(v => v.id === followup.relatedVisitId) : undefined, [visits, followup]);
+  const relatedProject = useMemo(() => followup ? projects.find(o => o.id === followup.relatedProjectId) : undefined, [projects, followup]);
 
   const today = new Date().toISOString().split('T')[0];
-  let derivedStatus = followup.status as string;
-  if (followup.status !== 'COMPLETED' && followup.status !== 'CANCELLED') {
-    if (followup.followUpDate < today) derivedStatus = 'OVERDUE';
-    else if (followup.followUpDate === today) derivedStatus = 'DUE_TODAY';
-    else derivedStatus = 'SCHEDULED';
-  }
+  const derivedStatus = useMemo(() => {
+    if (!followup) return 'SCHEDULED';
+    if (followup.status !== 'COMPLETED' && followup.status !== 'CANCELLED') {
+      if (followup.followUpDate < today) return 'OVERDUE';
+      if (followup.followUpDate === today) return 'DUE_TODAY';
+      return 'SCHEDULED';
+    }
+    return followup.status as string;
+  }, [followup, today]);
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -68,15 +98,24 @@ export const FollowupDetailPage: React.FC = () => {
     }
   };
 
-  const handleComplete = () => {
-    const updated = { 
-      ...followup, 
-      status: (followup.status === 'COMPLETED' ? 'PENDING' : 'COMPLETED') as FollowUpStatus,
-      completedAt: followup.status === 'COMPLETED' ? undefined : new Date().toISOString()
-    };
-    DataService.saveFollowUp(updated);
-    setFollowups(DataService.getFollowUps(tenantId));
-  };
+  if (!followup && !isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full">
+        <h2 className="text-xl font-bold text-slate-800">Follow-up not found</h2>
+        <button onClick={() => navigate('/followups')} className="mt-4 text-[#4744e5] hover:underline">
+          Back to Follow-ups
+        </button>
+      </div>
+    );
+  }
+
+  if (!followup) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <span className="material-symbols-outlined text-4xl text-[#4744e5] animate-spin">progress_activity</span>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 font-['Inter',sans-serif] pb-12">
