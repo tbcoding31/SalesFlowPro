@@ -16,6 +16,9 @@ export const ProjectsPage: React.FC = () => {
   const [pipelineAggregates, setPipelineAggregates] = useState<any>({});
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [totalItems, setTotalItems] = React.useState(0);
+  const [pageSize, setPageSize] = React.useState(10);
+  const [searchQuery, setSearchQuery] = React.useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('LIST');
   const [draggedOppId, setDraggedOppId] = useState<string | null>(null);
 

@@ -164,6 +164,7 @@ export const CustomerDetailPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant, currentUser, hasPermission } = useAuth();
   const tenantId = currentTenant?.id || 'TEN-00001';
+  const { timelineEvents, timelinePage, timelineHasMore, isLoadingTimeline, error: timelineError, loadTimeline } = useCustomerTimeline(id || '', tenantId);
 
   const [customer, setCustomer] = useState<Customer | undefined>(undefined);
   const [customerNextAction, setCustomerNextAction] = useState<any | null>(null);
@@ -3200,13 +3201,13 @@ const loadAllCustomerData = async () => {
             onOpenRelatedRecord={(type, recordId) => {
               if (type === 'TASK') {
                 const t = tasksList.find(x => x.id === recordId);
-                if (t) { setSelectedTask(t); setShowTaskModal(true); }
+                if (t) { setViewingTask(t); setShowTaskModal(true); }
               } else if (type === 'VISIT') {
                 const v = visitsList.find(x => x.id === recordId);
-                if (v) { setSelectedVisit(v); setShowVisitModal(true); }
+                if (v) { setViewingVisit(v); setShowVisitModal(true); }
               } else if (type === 'FOLLOW_UP') {
                 const f = followupsList.find(x => x.id === recordId);
-                if (f) { setSelectedFollowUp(f); setShowFollowUpModal(true); }
+                if (f) { setViewingFollowUp(f); setShowFollowUpModal(true); }
               } else if (type === 'PROJECT') {
                 navigate(`/projects/${recordId}`);
               }
