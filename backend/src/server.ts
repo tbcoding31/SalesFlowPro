@@ -5083,8 +5083,8 @@ app.post('/api/tenant/project-intervention-policies', async (req, res) => {
       // Insert Revision 1
       await conn.query(`
         INSERT INTO project_intervention_policy_revisions (
-          id, tenantId, policyId, revisionNumber, severity, matchMode, createdById, changeReason
-        ) VALUES (?, ?, ?, 1, ?, ?, ?, 'INITIAL_REVISION')
+          id, tenantId, policyId, revisionNumber, severity, matchMode, createdById, changeReason, migrationProvenance
+        ) VALUES (?, ?, ?, 1, ?, ?, ?, 'INITIAL_REVISION', 'RUNTIME_MUTATION')
       `, [revisionId, targetTenant, policyId, severity, matchMode, actorUserId || 'SYSTEM']);
 
       // Insert Revision Conditions (Single Canonical Semantic Authority)
@@ -5306,8 +5306,8 @@ app.put('/api/tenant/project-intervention-policies/:id', async (req, res) => {
         // Insert new revision
         await conn.query(`
           INSERT INTO project_intervention_policy_revisions (
-            id, tenantId, policyId, revisionNumber, severity, matchMode, createdById, changeReason
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            id, tenantId, policyId, revisionNumber, severity, matchMode, createdById, changeReason, migrationProvenance
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'RUNTIME_MUTATION')
         `, [newActiveRevisionId, targetTenant, policyId, newRevisionNumber, newSeverity, newMatchMode, actorUserId || 'SYSTEM', changeReason || null]);
 
         // Insert new revision conditions (Single Canonical Semantic Authority)
@@ -5516,7 +5516,10 @@ app.get('/api/management/project-interventions', async (req, res) => {
         r.severity,
         r.matchMode
       FROM project_intervention_policies p
-      JOIN project_intervention_policy_revisions r ON r.id = p.activeRevisionId
+      JOIN project_intervention_policy_revisions r 
+        ON r.id = p.activeRevisionId 
+       AND r.policyId = p.id 
+       AND r.tenantId = p.tenantId
       WHERE p.tenantId = ? AND p.status = 'ACTIVE'
       ORDER BY p.createdAt ASC
     `, [targetTenant]);
@@ -6010,7 +6013,10 @@ export async function synchronizeProjectInterventionHistory(
       r.severity,
       r.matchMode
     FROM project_intervention_policies p
-    JOIN project_intervention_policy_revisions r ON r.id = p.activeRevisionId
+    JOIN project_intervention_policy_revisions r 
+      ON r.id = p.activeRevisionId 
+     AND r.policyId = p.id 
+     AND r.tenantId = p.tenantId
     WHERE p.tenantId = ? AND p.status = 'ACTIVE'
   `, [tenantId]);
   if (policies.length === 0 && !projectId) return;
@@ -8965,11 +8971,11 @@ app.get('/api/management/control-tower', async (req, res) => {
       effectiveScope = 'ORGANIZATION';
     }
 
-    // Build base where clause for operational records based on actor dataScope
-    const { where: projWhere, params: projParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'p.picId');
-    const { where: taskWhere, params: taskParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 't.picId');
-    const { where: visitWhere, params: visitParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'v.picId');
-    const { where: fuWhere, params: fuParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'f.picId');
+    // Build base where clause for operational records based on actor effectiveScope
+    const { where: projWhere, params: projParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, effectiveScope, actorPermissions, 'p.picId');
+    const { where: taskWhere, params: taskParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, effectiveScope, actorPermissions, 't.picId');
+    const { where: visitWhere, params: visitParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, effectiveScope, actorPermissions, 'v.picId');
+    const { where: fuWhere, params: fuParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, effectiveScope, actorPermissions, 'f.picId');
 
     const requestedRepId = req.query.repId ? String(req.query.repId).trim() : null;
     const requestedTeamId = req.query.teamId ? String(req.query.teamId).trim() : null;
@@ -9025,7 +9031,17 @@ app.get('/api/management/control-tower', async (req, res) => {
     }
 
     repListQuery += ` ORDER BY u.name ASC`;
-    const [authorizedReps]: any = await pool.query(repListQuery, repListParams);
+    const [rawAuthorizedReps]: any = await pool.query(repListQuery, repListParams);
+    
+    // Deduplicate authorized reps by userId (e.g. if user has multiple roles or team entries)
+    const seenRepIds = new Set<string>();
+    const authorizedReps: any[] = [];
+    for (const r of rawAuthorizedReps) {
+      if (!seenRepIds.has(r.userId)) {
+        seenRepIds.add(r.userId);
+        authorizedReps.push(r);
+      }
+    }
     const authorizedRepIds = new Set(authorizedReps.map((r: any) => r.userId));
 
     // If a rep was explicitly requested but not in authorized list, deny

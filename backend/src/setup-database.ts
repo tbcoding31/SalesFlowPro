@@ -157,7 +157,7 @@ async function setupDatabase() {
       createdById VARCHAR(50) NOT NULL,
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
       changeReason TEXT DEFAULT NULL,
-      migrationProvenance VARCHAR(50) DEFAULT NULL,
+      migrationProvenance VARCHAR(50) NOT NULL,
       UNIQUE KEY uq_pipr_policy_rev (policyId, revisionNumber),
       INDEX idx_pipr_tenant_policy (tenantId, policyId),
       INDEX idx_pipr_created (createdAt)
@@ -179,7 +179,7 @@ async function setupDatabase() {
       policyId VARCHAR(50) NOT NULL,
       policyRevisionId VARCHAR(50) DEFAULT NULL,
       policyRevisionNumberSnapshot INT DEFAULT NULL,
-      policyRevisionLinkProvenance VARCHAR(50) NOT NULL DEFAULT 'NATIVE_VERSIONED',
+      policyRevisionLinkProvenance VARCHAR(50) NOT NULL,
       policyCodeSnapshot VARCHAR(100) NOT NULL,
       policyNameSnapshot VARCHAR(255) NOT NULL,
       severitySnapshot VARCHAR(20) NOT NULL,
@@ -232,6 +232,16 @@ async function setupDatabase() {
     }
   } catch (e: any) {}
 
+  // Ensure migrationProvenance on project_intervention_policy_revisions
+  try {
+    const [revCols]: any = await pool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'project_intervention_policy_revisions' AND COLUMN_NAME = 'migrationProvenance'`
+    );
+    if (revCols.length === 0) {
+      await pool.query(`ALTER TABLE project_intervention_policy_revisions ADD COLUMN migrationProvenance VARCHAR(50) NOT NULL DEFAULT 'RUNTIME_MUTATION'`);
+    }
+  } catch (e: any) {}
+
   // Ensure UNIQUE constraint on project_intervention_policy_conditions
   try {
     await pool.query(`
@@ -246,7 +256,7 @@ async function setupDatabase() {
   const episodeColumnsToAdd = [
     { name: 'policyRevisionId', def: 'VARCHAR(50) DEFAULT NULL' },
     { name: 'policyRevisionNumberSnapshot', def: 'INT DEFAULT NULL' },
-    { name: 'policyRevisionLinkProvenance', def: 'VARCHAR(50) NOT NULL DEFAULT "NATIVE_VERSIONED"' },
+    { name: 'policyRevisionLinkProvenance', def: 'VARCHAR(50) NOT NULL' },
     { name: 'startProvenance', def: 'VARCHAR(50) NOT NULL DEFAULT "TRANSITION_DETECTED"' },
     { name: 'picIdSnapshot', def: 'VARCHAR(50)' },
     { name: 'teamIdSnapshot', def: 'VARCHAR(50)' },
