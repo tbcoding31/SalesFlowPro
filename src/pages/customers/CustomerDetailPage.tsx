@@ -4,9 +4,9 @@ import { useAuth } from '../../context/AuthContext';
 import { usersApi } from '../../services/usersApi';
 import { crmApi } from '../../services/crmApi';
 import { Customer, Visit, Task, FollowUp, Project, Activity, User, CustomerContact, TaskPriority, TaskStatus, FollowUpType, FollowUpPriority, FollowUpStatus, ProjectStage } from '../../types';
+import { CustomerOverviewTab } from './components/CustomerOverviewTab';
 import { useCustomerTimeline } from './components/useCustomerTimeline';
 import { CustomerActivitiesTab } from './components/CustomerActivitiesTab';
-import { CustomerAttentionTab } from './components/CustomerAttentionTab';
 
 export interface ActivityTimelineItem {
   id: string;
@@ -633,35 +633,8 @@ const loadAllCustomerData = async () => {
 
   // Filtered Customer Activities
   const filteredCustomerActivities = scopedCustomerActivities.filter((act) => {
-    if (actCategoryFilter !== 'ALL') {
-      if (act.category !== actCategoryFilter && act.typeBadge !== actCategoryFilter) return false;
-    }
     if (actUserFilter !== 'ALL') {
       if (act.userId !== actUserFilter) return false;
-    }
-    if (actDateRangeFilter === 'TODAY') {
-      const today = new Date().toISOString().split('T')[0];
-      if (act.date !== today) return false;
-    } else if (actDateRangeFilter === 'LAST_7_DAYS') {
-      const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
-      if (act.date < sevenDaysAgo) return false;
-    } else if (actDateRangeFilter === 'LAST_30_DAYS') {
-      const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
-      if (act.date < thirtyDaysAgo) return false;
-    } else if (actDateRangeFilter === 'CUSTOM') {
-      if (actStartDate && act.date < actStartDate) return false;
-      if (actEndDate && act.date > actEndDate) return false;
-    }
-    if (actSearch.trim()) {
-      const q = actSearch.toLowerCase();
-      const match =
-        (act.subject || "").toLowerCase().includes(q) ||
-        (act.description || "").toLowerCase().includes(q) ||
-        (act.userName || "").toLowerCase().includes(q) ||
-        (act.entityId && (act.entityId || "").toLowerCase().includes(q)) ||
-        (act.status && (act.status || "").toLowerCase().includes(q)) ||
-        (act.category || "").toLowerCase().includes(q);
-      if (!match) return false;
     }
     return true;
   });
@@ -1791,461 +1764,36 @@ const loadAllCustomerData = async () => {
       </div>
 
       {/* OVERVIEW TAB CONTENT */}
-      {activeTab === 'overview' && (
-        <div className="space-y-6">
-          {/* SECTION 1 — CUSTOMER SUMMARY & SECTION 2 — KEY METRICS */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* SECTION 1: Customer Summary Card */}
-            <div className="lg:col-span-1 bg-white p-5 rounded-xl border border-[#E1E1E1] shadow-xs space-y-4">
-              <div className="flex items-center justify-between border-b border-[#E1E1E1] pb-3">
-                <h2 className="text-sm font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] flex items-center gap-2">
-                  <span className="material-symbols-outlined text-[18px] text-[#4744e5]">apartment</span>
-                  <span>Customer Summary</span>
-                </h2>
-                <span className="text-[10px] font-mono text-[#767587]">{customer.code}</span>
-              </div>
-
-              <div className="space-y-2.5 text-xs">
-                <div className="flex justify-between items-center">
-                  <span className="text-[#767587] font-medium">Customer Type</span>
-                  <span className="font-bold text-[#1a1c1c] bg-[#f3f3f3] px-2 py-0.5 rounded">{customer.type}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-[#767587] font-medium">Status</span>
-                  <span className="font-bold text-[#008f53] bg-[#00C875]/10 px-2 py-0.5 rounded-full text-[10px]">
-                    {customer.status}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-[#767587] font-medium">Primary PIC</span>
-                  <div className="flex items-center gap-1.5 font-bold text-[#4744e5]">
-                    {customer.assignedPicAvatar && (
-                      <img src={customer.assignedPicAvatar} alt="" className="w-4 h-4 rounded-full" />
-                    )}
-                    <span>{customer.assignedPicName}</span>
-                  </div>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-[#767587] font-medium">Department / Team</span>
-                  <span className="font-semibold text-[#1a1c1c]">{customer.teamName || '-'}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-[#767587] font-medium">Customer Since</span>
-                  <span className="font-medium text-[#1a1c1c]">{customer.createdAt ? new Date(customer.createdAt).toLocaleDateString('en-GB') : '-'}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-[#767587] font-medium">Last Activity</span>
-                  <span className="font-medium text-[#1a1c1c]">{customer.lastVisitAt ? new Date(customer.lastVisitAt).toLocaleDateString('en-GB') : (lastVisitDate !== '-' ? lastVisitDate : 'None')}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-[#767587] font-medium">Next Action</span>
-                  <span className="font-bold text-[#4744e5]">{customerNextAction?.actionAt || nextVisitDate || 'None Scheduled'}</span>
-                </div>
-                <div className="pt-2 border-t border-[#E1E1E1]">
-                  <span className="text-[#767587] font-medium block mb-1">Location / Region</span>
-                  <span className="text-[#1a1c1c] font-medium">{customer.address || '-'} {customer.region ? `(${customer.region})` : ''}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* SECTION 2: Key Metrics Cards */}
-            <div className="lg:col-span-2 grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div className="bg-white p-4 rounded-xl border border-[#E1E1E1] shadow-xs flex flex-col justify-between">
-                <div className="flex items-center justify-between text-[#767587]">
-                  <span className="text-[11px] font-bold uppercase tracking-wider">Total Visits</span>
-                  <span className="material-symbols-outlined text-[20px] text-[#4744e5]">route</span>
-                </div>
-                <div className="mt-3">
-                  <span className="text-2xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">{totalVisits}</span>
-                  <p className="text-[10px] text-[#767587] mt-0.5">Recorded visits</p>
-                </div>
-              </div>
-
-              <div className="bg-white p-4 rounded-xl border border-[#E1E1E1] shadow-xs flex flex-col justify-between">
-                <div className="flex items-center justify-between text-[#767587]">
-                  <span className="text-[11px] font-bold uppercase tracking-wider">Open Tasks</span>
-                  <span className="material-symbols-outlined text-[20px] text-[#f59e0b]">task_alt</span>
-                </div>
-                <div className="mt-3">
-                  <span className="text-2xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">{openTasks}</span>
-                  <p className="text-[10px] text-[#767587] mt-0.5">{completedTasks} completed</p>
-                </div>
-              </div>
-
-              <div className="bg-white p-4 rounded-xl border border-[#E1E1E1] shadow-xs flex flex-col justify-between">
-                <div className="flex items-center justify-between text-[#767587]">
-                  <span className="text-[11px] font-bold uppercase tracking-wider">Pending Follow-ups</span>
-                  <span className="material-symbols-outlined text-[20px] text-[#6366f1]">event_repeat</span>
-                </div>
-                <div className="mt-3">
-                  <span className="text-2xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">{pendingFollowups}</span>
-                  <p className="text-[10px] text-[#767587] mt-0.5">Scheduled actions</p>
-                </div>
-              </div>
-
-              <div className="bg-white p-4 rounded-xl border border-[#E1E1E1] shadow-xs flex flex-col justify-between">
-                <div className="flex items-center justify-between text-[#767587]">
-                  <span className="text-[11px] font-bold uppercase tracking-wider">Active Projects</span>
-                  <span className="material-symbols-outlined text-[20px] text-[#10b981]">folder_open</span>
-                </div>
-                <div className="mt-3">
-                  <span className="text-2xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">{activeOpps.length}</span>
-                  <p className="text-[10px] text-[#767587] mt-0.5">Projects in pipeline</p>
-                </div>
-              </div>
-
-              {/* Banner Metric: Pipeline Value */}
-              <div className="col-span-2 sm:col-span-4 bg-gradient-to-r from-[#4744e5] to-[#2c24ce] p-5 rounded-xl text-white shadow-xs flex justify-between items-center">
-                <div>
-                  <span className="text-[10px] font-bold uppercase tracking-wider opacity-80 block">
-                    Total Project Value (Pipeline)
-                  </span>
-                  <span className="text-2xl sm:text-3xl font-extrabold font-['Hanken_Grotesk'] block mt-0.5">
-                    Rp {pipelineValue.toLocaleString('id-ID')}
-                  </span>
-                  <span className="text-xs opacity-90 mt-1 block">
-                    Based on {activeOpps.length} active projects belonging to {customer.name}
-                  </span>
-                </div>
-                <button
-                  onClick={() => setShowOppModal(true)}
-                  className="px-3.5 py-2 bg-white text-[#4744e5] font-bold text-xs rounded-lg hover:bg-opacity-90 transition-colors shadow-xs cursor-pointer whitespace-nowrap"
-                >
-                  + Add Project
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* SECTION 3 — CUSTOMER CONTACT */}
-          <div className="bg-white p-5 rounded-xl border border-[#E1E1E1] shadow-xs space-y-4">
-            <div className="flex items-center justify-between border-b border-[#E1E1E1] pb-3">
-              <h2 className="text-sm font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] flex items-center gap-2">
-                <span className="material-symbols-outlined text-[18px] text-[#4744e5]">contacts</span>
-                <span>Main Contact Person</span>
-              </h2>
-              {primaryContact && (
-                <span className="px-2 py-0.5 bg-[#4744e5]/10 text-[#4744e5] text-[10px] font-bold rounded">
-                  Primary Contact
-                </span>
-              )}
-            </div>
-
-            {primaryContact ? (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
-                <div className="space-y-1">
-                  <span className="text-base font-bold text-[#1a1c1c] block">{primaryContact.name}</span>
-                  <span className="text-xs text-[#767587] font-medium block">{primaryContact.position || 'Contact'}</span>
-                  {primaryContact.phone && <span className="text-xs text-[#464555] block font-mono">{primaryContact.phone}</span>}
-                  {primaryContact.email && <span className="text-xs text-[#4744e5] block font-semibold">{primaryContact.email}</span>}
-                </div>
-
-                <div className="space-y-1 md:border-l md:border-r border-[#E1E1E1] md:px-4">
-                  <span className="text-xs font-bold text-[#1a1c1c] block mb-1">Office Address</span>
-                  <p className="text-xs text-[#767587] leading-relaxed">{customer.address || '-'}</p>
-                  <span className="text-xs text-[#1a1c1c] font-semibold block">{customer.region || '-'}</span>
-                </div>
-
-                <div className="flex flex-wrap md:flex-col gap-2 justify-center">
-                  {primaryContact.phone && (
-                    <a
-                      href={`tel:${primaryContact.phone}`}
-                      className="flex-1 md:flex-none px-3 py-1.5 bg-[#f3f3f3] hover:bg-[#e1dfff] text-[#1a1c1c] hover:text-[#09006b] font-bold text-xs rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      <span className="material-symbols-outlined text-[16px]">call</span>
-                      <span>Call Contact</span>
-                    </a>
-                  )}
-                  {primaryContact.email && (
-                    <a
-                      href={`mailto:${primaryContact.email}`}
-                      className="flex-1 md:flex-none px-3 py-1.5 bg-[#f3f3f3] hover:bg-[#e1dfff] text-[#1a1c1c] hover:text-[#09006b] font-bold text-xs rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      <span className="material-symbols-outlined text-[16px]">mail</span>
-                      <span>Send Email</span>
-                    </a>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="text-xs text-slate-500 italic py-2">
-                No contact person registered for this customer account.
-              </div>
-            )}
-          </div>
-
-          {/* SECTION 3.5 — DATABASE-AUTHORITATIVE NEXT ACTION */}
-          <div className="p-4 bg-indigo-50/80 border border-indigo-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold shrink-0">
-                <span className="material-symbols-outlined text-lg">
-                  {customerNextAction?.type === 'VISIT' ? 'route' : customerNextAction?.type === 'FOLLOW_UP' ? 'forum' : 'task'}
-                </span>
-              </div>
-              <div>
-                <span className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider block">
-                  Next Scheduled Action ({customerNextAction ? customerNextAction.type : 'None'})
-                </span>
-                <span className="text-sm font-bold text-slate-900 block">
-                  {customerNextAction ? customerNextAction.title : 'No pending operational work scheduled.'}
-                </span>
-              </div>
-            </div>
-            {customerNextAction ? (
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-indigo-800 bg-white px-3 py-1.5 rounded-lg border border-indigo-200 font-mono">
-                  {customerNextAction.actionAt}
-                </span>
-              </div>
-            ) : (
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setShowVisitModal(true)}
-                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg transition-colors"
-                >
-                  Schedule Action
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* SECTION 3.6 — DATABASE-AUTHORITATIVE NEEDS ATTENTION */}
-          <CustomerAttentionTab
+        {activeTab === 'overview' && (
+          <CustomerOverviewTab
+            customer={customer!}
+            customerNextAction={customerNextAction}
+            summaryMetrics={{
+              totalVisits,
+              openTasks,
+              completedTasks,
+              pendingFollowups,
+              activeProjects: activeOpps.length || 0,
+              pipelineValue
+            }}
+            primaryContact={primaryContact}
+            activities={activitiesList}
+            visits={visitsList}
+            tasks={tasksList}
+            projects={oppsList}
             customerAttentionSignals={customerAttentionSignals}
             projectAttentionSummary={projectAttentionSummary}
-            onAssignPic={() => setShowChangePicModal(true)}
-            onReviewOverdue={() => setActiveTab('tasks')}
+            onViewActivities={() => setActiveTab('activities')}
             onViewProjects={() => setActiveTab('projects')}
+            onViewVisits={() => setActiveTab('visits')}
+            onViewTasks={() => setActiveTab('tasks')}
+            onCreateProject={() => setShowOppModal(true)}
+            onCreateVisit={() => setShowVisitModal(true)}
+            onCreateTask={() => setShowTaskModal(true)}
+            onCreateNote={() => setShowNoteModal(true)}
+            onChangePic={() => setShowChangePicModal(true)}
           />
-
-          {/* SECTION 4 & 5 — RECENT ACTIVITIES & UPCOMING ACTIVITIES */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* SECTION 4: Recent Activities Timeline */}
-            <div className="bg-white p-5 rounded-xl border border-[#E1E1E1] shadow-xs space-y-4">
-              <div className="flex items-center justify-between border-b border-[#E1E1E1] pb-3">
-                <h2 className="text-sm font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] flex items-center gap-2">
-                  <span className="material-symbols-outlined text-[18px] text-[#4744e5]">history</span>
-                  <span>Recent Activities Timeline</span>
-                </h2>
-                <button
-                  onClick={() => setActiveTab('activities')}
-                  className="text-xs font-bold text-[#4744e5] hover:underline cursor-pointer"
-                >
-                  View All
-                </button>
-              </div>
-
-              <div className="space-y-3">
-                {activities.slice(0, 4).map((act) => (
-                  <div key={act.id} className="p-3 bg-[#f9f9f9] rounded-lg border border-[#E1E1E1] text-xs flex gap-3">
-                    <div className="w-8 h-8 rounded-full bg-[#4744e5]/10 text-[#4744e5] flex items-center justify-center shrink-0">
-                      <span className="material-symbols-outlined text-[16px]">
-                        {act.type === 'VISIT' ? 'route' : act.type === 'CALL' ? 'call' : act.type === 'NOTE' ? 'edit_note' : 'task_alt'}
-                      </span>
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex justify-between items-start">
-                        <span className="font-bold text-[#1a1c1c]">{act.subject}</span>
-                        <span className="text-[10px] text-[#767587] font-mono">{act.occurredAt}</span>
-                      </div>
-                      <p className="text-[11px] text-[#767587] mt-0.5">{act.description}</p>
-                      <span className="text-[10px] text-[#4744e5] font-semibold mt-1 block">By {act.userName}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* SECTION 5: Upcoming Activities */}
-            <div className="bg-white p-5 rounded-xl border border-[#E1E1E1] shadow-xs space-y-4">
-              <div className="flex items-center justify-between border-b border-[#E1E1E1] pb-3">
-                <h2 className="text-sm font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] flex items-center gap-2">
-                  <span className="material-symbols-outlined text-[18px] text-[#4744e5]">event_upcoming</span>
-                  <span>Upcoming Schedule & Tasks</span>
-                </h2>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setShowVisitModal(true)}
-                    className="text-xs font-bold text-[#4744e5] hover:underline cursor-pointer"
-                  >
-                    + Visit
-                  </button>
-                  <button
-                    onClick={() => setShowTaskModal(true)}
-                    className="text-xs font-bold text-[#4744e5] hover:underline cursor-pointer"
-                  >
-                    + Task
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                {visits.filter((v) => v.status === 'PLANNED').map((v) => (
-                  <div key={v.id} className="p-3 bg-[#e1dfff]/30 rounded-lg border border-[#c1beff] text-xs flex justify-between items-center">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="px-1.5 py-0.5 bg-[#4744e5] text-white text-[9px] font-bold rounded">VISIT</span>
-                        <span className="font-bold text-[#1a1c1c]">{v.title}</span>
-                      </div>
-                      <span className="text-[11px] text-[#767587] mt-1 block">Date: {v.visitDate} ({v.startTime}) • PIC: {v.picName}</span>
-                    </div>
-                    <span className="px-2 py-0.5 bg-[#00C875]/10 text-[#008f53] text-[10px] font-bold rounded-full">
-                      {v.status}
-                    </span>
-                  </div>
-                ))}
-
-                {tasks.filter((t) => t.status !== 'COMPLETED').map((t) => (
-                  <div key={t.id} className="p-3 bg-[#f9f9f9] rounded-lg border border-[#E1E1E1] text-xs flex justify-between items-center">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="px-1.5 py-0.5 bg-[#f59e0b] text-white text-[9px] font-bold rounded">TASK</span>
-                        <span className="font-bold text-[#1a1c1c]">{t.title}</span>
-                      </div>
-                      <span className="text-[11px] text-[#767587] mt-1 block">Due: {t.dueDate} • Assigned: {t.picName}</span>
-                    </div>
-                    <span className="px-2 py-0.5 bg-[#ba1a1a]/10 text-[#ba1a1a] text-[10px] font-bold rounded">
-                      {t.priority}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* SECTION 6 — ACTIVE PROJECTS */}
-          <div className="bg-white p-5 rounded-xl border border-[#E1E1E1] shadow-xs space-y-4">
-            <div className="flex items-center justify-between border-b border-[#E1E1E1] pb-3">
-              <h2 className="text-sm font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] flex items-center gap-2">
-                <span className="material-symbols-outlined text-[18px] text-[#4744e5]">monetization_on</span>
-                <span>Active Projects</span>
-              </h2>
-              <button
-                onClick={() => setActiveTab('projects')}
-                className="text-xs font-bold text-[#4744e5] hover:underline cursor-pointer"
-              >
-                View Projects Tab →
-              </button>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-[#E1E1E1] text-[#767587] font-bold">
-                    <th className="py-2 px-3">PROJECT</th>
-                    <th className="py-2 px-3">STAGE</th>
-                    <th className="py-2 px-3">PIC</th>
-                    <th className="py-2 px-3">EXPECTED CLOSE</th>
-                    <th className="py-2 px-3">ESTIMATED VALUE</th>
-                    <th className="py-2 px-3 text-right">ACTION</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#E1E1E1]">
-                  {projects.map((opp) => (
-                    <tr key={opp.id} className="hover:bg-[#f9f9f9]">
-                      <td className="py-3 px-3 font-bold text-[#1a1c1c]">{opp.name}</td>
-                      <td className="py-3 px-3">
-                        <span className="px-2 py-0.5 bg-[#4744e5]/10 text-[#4744e5] text-[10px] font-bold rounded">
-                          {opp.stage}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 text-[#464555] font-medium">{opp.picName}</td>
-                      <td className="py-3 px-3 text-[#767587]">{opp.expectedCloseDate}</td>
-                      <td className="py-3 px-3 font-bold text-[#008f53]">
-                        Rp {(opp.estimatedValue || 0).toLocaleString('id-ID')}
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        <button
-                          onClick={() => setActiveTab('projects')}
-                          className="px-2.5 py-1 bg-[#f3f3f3] hover:bg-[#e1dfff] text-[#1a1c1c] hover:text-[#09006b] rounded font-semibold text-[11px] cursor-pointer"
-                        >
-                          View Deal
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* SECTION 7 — RECENT VISITS */}
-          <div className="bg-white p-5 rounded-xl border border-[#E1E1E1] shadow-xs space-y-4">
-            <div className="flex items-center justify-between border-b border-[#E1E1E1] pb-3">
-              <h2 className="text-sm font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] flex items-center gap-2">
-                <span className="material-symbols-outlined text-[18px] text-[#4744e5]">route</span>
-                <span>Recent Customer Visits</span>
-              </h2>
-              <button
-                onClick={() => setActiveTab('visits')}
-                className="text-xs font-bold text-[#4744e5] hover:underline cursor-pointer"
-              >
-                View Visits Tab →
-              </button>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-[#E1E1E1] text-[#767587] font-bold">
-                    <th className="py-2 px-3">VISIT DATE</th>
-                    <th className="py-2 px-3">PIC</th>
-                    <th className="py-2 px-3">PURPOSE</th>
-                    <th className="py-2 px-3">RESULT / NOTES</th>
-                    <th className="py-2 px-3">STATUS</th>
-                    <th className="py-2 px-3 text-right">ACTION</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#E1E1E1]">
-                  {visits.map((vis) => (
-                    <tr key={vis.id} className="hover:bg-[#f9f9f9]">
-                      <td className="py-3 px-3 font-semibold text-[#1a1c1c] whitespace-nowrap">
-                        {vis.visitDate} ({vis.startTime})
-                      </td>
-                      <td className="py-3 px-3 font-medium text-[#464555]">{vis.picName}</td>
-                      <td className="py-3 px-3 font-bold text-[#1a1c1c]">{vis.title}</td>
-                      <td className="py-3 px-3 text-[#767587]">{vis.result || vis.purpose}</td>
-                      <td className="py-3 px-3">
-                        <span className="px-2 py-0.5 bg-[#00C875]/10 text-[#008f53] text-[10px] font-bold rounded-full">
-                          {vis.status}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        <button
-                          onClick={() => setActiveTab('visits')}
-                          className="px-2.5 py-1 bg-[#f3f3f3] hover:bg-[#e1dfff] text-[#1a1c1c] hover:text-[#09006b] rounded font-semibold text-[11px] cursor-pointer"
-                        >
-                          View Visit
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* SECTION 8 — CUSTOMER NOTES */}
-          <div className="bg-white p-5 rounded-xl border border-[#E1E1E1] shadow-xs space-y-4">
-            <div className="flex items-center justify-between border-b border-[#E1E1E1] pb-3">
-              <h2 className="text-sm font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] flex items-center gap-2">
-                <span className="material-symbols-outlined text-[18px] text-[#4744e5]">sticky_note_2</span>
-                <span>Customer Notes & Key Insights</span>
-              </h2>
-              <button
-                onClick={() => setShowNoteModal(true)}
-                className="px-3 py-1.5 bg-[#4744e5] text-white font-bold text-xs rounded-lg hover:bg-[#2c24ce] cursor-pointer"
-              >
-                + Add Note
-              </button>
-            </div>
-
-            <div className="p-4 bg-[#f9f9f9] rounded-lg border border-[#E1E1E1] text-xs leading-relaxed text-[#1a1c1c] whitespace-pre-wrap">
-              {customer.notes || 'No customer notes recorded yet.'}
-            </div>
-          </div>
-        </div>
-      )}
+        )}
 
       {/* TABS OTHER THAN OVERVIEW */}
       {activeTab === 'visits' && (
