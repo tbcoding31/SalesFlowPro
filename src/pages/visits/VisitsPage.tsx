@@ -1,4 +1,3 @@
-  const [searchQuery, setSearchQuery] = useState('');
 import React, { useState, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
@@ -12,6 +11,8 @@ export const VisitsPage: React.FC = () => {
   const tenantId = currentTenant?.id || 'TEN-00001';
 
   // Data state
+  const [projects, setProjects] = useState<any[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
   const [visits, setVisits] = useState<Visit[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [users, setUsers] = useState<User[]>([]);
@@ -37,7 +38,7 @@ export const VisitsPage: React.FC = () => {
         setCurrentPage((vRes as any).pagination.page);
       }
       setCustomers(cList as any);
-      setVisits(pList as any);
+      setProjects(pList as any);
     } catch (err) {
       console.error('Failed to load visits', err);
     } finally {
