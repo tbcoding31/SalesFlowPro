@@ -14,24 +14,39 @@ export const FollowupsPage: React.FC = () => {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [totalItems, setTotalItems] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
 
-  const loadData = async () => {
+  
+  const loadData = async (page = currentPage) => {
     setIsLoading(true);
     try {
-      const [fList, cList, uList] = await Promise.all([
-        crmApi.fetchCollection<FollowUp>('follow_ups', tenantId),
-        crmApi.fetchCollection<Customer>('customers', tenantId),
-        usersApi.fetchUsers(tenantId)
+      const [fRes, cList, pList] = await Promise.all([
+        crmApi.fetchFollowUps({ page, pageSize, search: searchQuery || undefined, tenantId }),
+        crmApi.fetchCollection('customers', tenantId),
+        crmApi.fetchCollection('projects', tenantId)
       ]);
-      setFollowups(fList);
-      setCustomers(cList);
-      setUsers(uList);
+      if ((fRes as any).data) {
+        setFollowups((fRes as any).data);
+        setTotalItems((fRes as any).pagination.totalItems);
+        setTotalPages((fRes as any).pagination.totalPages);
+        setCurrentPage((fRes as any).pagination.page);
+      }
+      setCustomers(cList as any);
+      setProjects(pList as any);
     } catch (err) {
-      console.error('Failed to load follow-ups from database:', err);
+      console.error('Failed to load follow-ups', err);
     } finally {
       setIsLoading(false);
     }
   };
+
+  React.useEffect(() => {
+    loadData(1);
+  }, [tenantId, pageSize, searchQuery]);
+
 
   React.useEffect(() => {
     loadData();

@@ -18,21 +18,41 @@ export const ProjectsPage: React.FC = () => {
   const [viewMode, setViewMode] = useState<ViewMode>('LIST');
   const [draggedOppId, setDraggedOppId] = useState<string | null>(null);
 
-  const loadData = async () => {
+  
+  const loadData = async (page = currentPage) => {
     setIsLoading(true);
     try {
-      const [pList, cList] = await Promise.all([
-        crmApi.fetchCollection<Project>('projects', tenantId),
-        crmApi.fetchCollection<Customer>('customers', tenantId)
-      ]);
-      setProjects(pList);
-      setCustomers(cList);
+      if (viewMode === 'LIST') {
+        const [pRes, cList] = await Promise.all([
+          crmApi.fetchProjects({ page, pageSize, search: searchQuery || undefined, tenantId }),
+          crmApi.fetchCollection('customers', tenantId)
+        ]);
+        if ((pRes as any).data) {
+          setProjects((pRes as any).data);
+          setTotalItems((pRes as any).pagination.totalItems);
+          setTotalPages((pRes as any).pagination.totalPages);
+          setCurrentPage((pRes as any).pagination.page);
+        }
+        setCustomers(cList as any);
+      } else {
+        const [pList, cList] = await Promise.all([
+          crmApi.fetchProjectPipeline(tenantId),
+          crmApi.fetchCollection('customers', tenantId)
+        ]);
+        setProjects(pList as any);
+        setCustomers(cList as any);
+      }
     } catch (err) {
-      console.error('Failed to load projects from database:', err);
+      console.error('Failed to load projects', err);
     } finally {
       setIsLoading(false);
     }
   };
+
+  React.useEffect(() => {
+    loadData(1);
+  }, [tenantId, viewMode, pageSize, searchQuery]);
+
 
   React.useEffect(() => {
     loadData();

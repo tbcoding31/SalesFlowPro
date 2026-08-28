@@ -212,8 +212,16 @@ async function setupDatabase() {
       INDEX idx_pie_tenant_policy (tenantId, policyId, startedAt),
       INDEX idx_pie_active (tenantId, projectId, policyId, isActive),
       INDEX idx_pie_revision (policyRevisionId)
-    )`
-  ];
+    )`,
+  
+    // R59R3 Pagination Indices
+    `CREATE INDEX idx_projects_tenant_id ON projects (tenantId, id)`,
+    `CREATE INDEX idx_visits_tenant_id ON visits (tenantId, id)`,
+    `CREATE INDEX idx_follow_ups_tenant_id ON follow_ups (tenantId, id)`,
+    `CREATE INDEX idx_activities_entity_type_id_time ON activities (entityType, entityId, occurredAt)`,
+    `CREATE INDEX idx_activities_customer_time ON activities (customerId, occurredAt)`,
+
+];
 
   for (const query of tableQueries) {
     try {

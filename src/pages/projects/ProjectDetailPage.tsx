@@ -17,11 +17,34 @@ export const ProjectDetailPage: React.FC = () => {
   const [visits, setVisits] = useState<Visit[]>([]);
   const [followups, setFollowups] = useState<FollowUp[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
+  const [timelinePage, setTimelinePage] = useState(1);
+  const [timelineHasMore, setTimelineHasMore] = useState(false);
+  const [isLoadingTimeline, setIsLoadingTimeline] = useState(false);
+
   const [attentionSignals, setAttentionSignals] = useState<any[]>([]);
   const [commentText, setCommentText] = useState('');
   const [isLoading, setIsLoading] = useState(true);
 
-  const loadData = async () => {
+  
+  const loadTimeline = async (pageToLoad: number, append: boolean = false) => {
+    if (!id) return;
+    setIsLoadingTimeline(true);
+    try {
+      const res = await crmApi.fetchProjectTimeline(id, pageToLoad, 25);
+      if (append) {
+        setActivities(prev => [...prev, ...res.data]);
+      } else {
+        setActivities(res.data);
+      }
+      setTimelinePage(res.pagination.page);
+      setTimelineHasMore(res.pagination.hasNextPage);
+    } catch (err) {
+      console.error('Failed to load project timeline', err);
+    } finally {
+      setIsLoadingTimeline(false);
+    }
+  };
+const loadData = async () => {
     if (!id) return;
     setIsLoading(true);
     try {
@@ -39,7 +62,7 @@ export const ProjectDetailPage: React.FC = () => {
         if (summaryRes.tasks) setTasks(summaryRes.tasks);
         if (summaryRes.visits) setVisits(summaryRes.visits);
         if (summaryRes.followups) setFollowups(summaryRes.followups);
-        if (summaryRes.activities) setActivities(summaryRes.activities);
+        loadTimeline(1, false);
 
         const naRes = await crmApi.fetchProjectNextAction(id);
         if (naRes && naRes.nextAction) {

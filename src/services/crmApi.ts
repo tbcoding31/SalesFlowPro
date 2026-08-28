@@ -1,4 +1,4 @@
-import { PaginatedResponse, Customer, Task, Activity } from '../types';
+import { PaginatedResponse, Customer, Task, Activity, Project, Visit, FollowUp } from '../types';
 
 const API_BASE = '/api';
 
@@ -45,7 +45,92 @@ export const crmApi = {
   },
 
   // Resource-specific Server-Side Paginated Fetchers
-  fetchCustomers: async (params?: QueryPaginationParams): Promise<PaginatedResponse<Customer>> => {
+  
+  fetchProjects: async (params?: QueryPaginationParams): Promise<PaginatedResponse<Project>> => {
+    const q = new URLSearchParams();
+    if (params) {
+      if (params.page) q.set('page', String(params.page));
+      if (params.pageSize) q.set('pageSize', String(params.pageSize));
+      if (params.search) q.set('search', params.search.trim());
+      if (params.sortBy) q.set('sortBy', params.sortBy);
+      if (params.sortOrder) q.set('sortOrder', params.sortOrder);
+      if (params.status && params.status !== 'ALL') q.set('status', params.status);
+      if (params.picId && params.picId !== 'ALL') q.set('picId', params.picId);
+      if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
+    }
+    const url = `${API_BASE}/projects${q.toString() ? '?' + q.toString() : ''}`;
+    const res = await fetch(url, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch projects`);
+    return await res.json();
+  },
+
+  fetchProjectPipeline: async (tenantId?: string): Promise<Project[]> => {
+    try {
+      const params = new URLSearchParams();
+      if (tenantId && tenantId !== 'ALL') params.set('tenantId', tenantId);
+
+      const url = `${API_BASE}/projects/pipeline${params.toString() ? '?' + params.toString() : ''}`;
+      const res = await fetch(url, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch project pipeline`);
+      const data = await res.json();
+      return data.data || [];
+    } catch (err) {
+      console.error('[crmApi.fetchProjectPipeline error]', err);
+      return [];
+    }
+  },
+
+  fetchVisits: async (params?: QueryPaginationParams): Promise<PaginatedResponse<Visit>> => {
+    const q = new URLSearchParams();
+    if (params) {
+      if (params.page) q.set('page', String(params.page));
+      if (params.pageSize) q.set('pageSize', String(params.pageSize));
+      if (params.search) q.set('search', params.search.trim());
+      if (params.sortBy) q.set('sortBy', params.sortBy);
+      if (params.sortOrder) q.set('sortOrder', params.sortOrder);
+      if (params.status && params.status !== 'ALL') q.set('status', params.status);
+      if (params.picId && params.picId !== 'ALL') q.set('picId', params.picId);
+      if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
+    }
+    const url = `${API_BASE}/visits${q.toString() ? '?' + q.toString() : ''}`;
+    const res = await fetch(url, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch visits`);
+    return await res.json();
+  },
+
+  fetchFollowUps: async (params?: QueryPaginationParams): Promise<PaginatedResponse<FollowUp>> => {
+    const q = new URLSearchParams();
+    if (params) {
+      if (params.page) q.set('page', String(params.page));
+      if (params.pageSize) q.set('pageSize', String(params.pageSize));
+      if (params.search) q.set('search', params.search.trim());
+      if (params.sortBy) q.set('sortBy', params.sortBy);
+      if (params.sortOrder) q.set('sortOrder', params.sortOrder);
+      if (params.status && params.status !== 'ALL') q.set('status', params.status);
+      if (params.picId && params.picId !== 'ALL') q.set('picId', params.picId);
+      if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
+    }
+    const url = `${API_BASE}/follow_ups${q.toString() ? '?' + q.toString() : ''}`;
+    const res = await fetch(url, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch follow_ups`);
+    return await res.json();
+  },
+
+  fetchCustomerTimeline: async (customerId: string, page: number = 1, pageSize: number = 25): Promise<PaginatedResponse<Activity>> => {
+    const url = `${API_BASE}/customers/${customerId}/timeline?page=${page}&pageSize=${pageSize}`;
+    const res = await fetch(url, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch customer timeline`);
+    return await res.json();
+  },
+
+  fetchProjectTimeline: async (projectId: string, page: number = 1, pageSize: number = 25): Promise<PaginatedResponse<Activity>> => {
+    const url = `${API_BASE}/projects/${projectId}/timeline?page=${page}&pageSize=${pageSize}`;
+    const res = await fetch(url, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch project timeline`);
+    return await res.json();
+  },
+
+fetchCustomers: async (params?: QueryPaginationParams): Promise<PaginatedResponse<Customer>> => {
     const q = new URLSearchParams();
     if (params) {
       if (params.page) q.set('page', String(params.page));

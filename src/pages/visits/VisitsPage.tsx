@@ -15,24 +15,39 @@ export const VisitsPage: React.FC = () => {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [totalItems, setTotalItems] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
 
-  const loadData = async () => {
+  
+  const loadData = async (page = currentPage) => {
     setIsLoading(true);
     try {
-      const [vList, cList, uList] = await Promise.all([
-        crmApi.fetchCollection<Visit>('visits', tenantId),
-        crmApi.fetchCollection<Customer>('customers', tenantId),
-        usersApi.fetchUsers(tenantId)
+      const [vRes, cList, pList] = await Promise.all([
+        crmApi.fetchVisits({ page, pageSize, search: searchQuery || undefined, tenantId }),
+        crmApi.fetchCollection('customers', tenantId),
+        crmApi.fetchCollection('projects', tenantId)
       ]);
-      setVisits(vList);
-      setCustomers(cList);
-      setUsers(uList);
+      if ((vRes as any).data) {
+        setVisits((vRes as any).data);
+        setTotalItems((vRes as any).pagination.totalItems);
+        setTotalPages((vRes as any).pagination.totalPages);
+        setCurrentPage((vRes as any).pagination.page);
+      }
+      setCustomers(cList as any);
+      setProjects(pList as any);
     } catch (err) {
-      console.error('Failed to load visits from database:', err);
+      console.error('Failed to load visits', err);
     } finally {
       setIsLoading(false);
     }
   };
+
+  React.useEffect(() => {
+    loadData(1);
+  }, [tenantId, pageSize, searchQuery]);
+
 
   React.useEffect(() => {
     loadData();

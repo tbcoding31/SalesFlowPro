@@ -788,7 +788,7 @@ const setupEndpoint = (table: string) => {
       }
     };
 
-    const paginatedTables = ['customers', 'tasks', 'activities', 'audit_logs'];
+    const paginatedTables = ['customers', 'tasks', 'activities', 'audit_logs', 'projects', 'visits', 'follow_ups'];
     const isPaginated = paginatedTables.includes(table) || req.query.page !== undefined || req.query.pageSize !== undefined;
 
     // Validate page & pageSize
@@ -8662,6 +8662,43 @@ app.get('/api/projects/:id/next-action', async (req, res) => {
 });
 
 // GET /api/customers/:id/summary
+
+// GET /api/customers/:id/timeline (Paginated)
+app.get('/api/customers/:id/timeline', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const customerId = req.params.id;
+  const rawPage = parseInt(req.query.page as string, 10);
+  const rawSize = parseInt(req.query.pageSize as string, 10);
+  const pageNum = isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
+  const sizeNum = isNaN(rawSize) || rawSize < 1 ? 25 : Math.min(rawSize, 100);
+  const offset = (pageNum - 1) * sizeNum;
+
+  try {
+    const [countRows]: any = await pool.query('SELECT COUNT(*) as total FROM activities WHERE customerId = ?', [customerId]);
+    const totalItems = countRows[0]?.total || 0;
+    const totalPages = Math.ceil(totalItems / sizeNum);
+    const [activities]: any = await pool.query('SELECT * FROM activities WHERE customerId = ? ORDER BY occurredAt DESC, id DESC LIMIT ? OFFSET ?', [customerId, sizeNum, offset]);
+
+    res.json({
+      data: activities,
+      pagination: {
+        page: pageNum,
+        pageSize: sizeNum,
+        totalItems,
+        totalPages,
+        hasNextPage: pageNum < totalPages,
+        hasPreviousPage: pageNum > 1
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 app.get('/api/customers/:id/summary', async (req, res) => {
   const actorRole = (req as any).userRole;
   const actorTenant = (req as any).userTenantId;
@@ -8751,6 +8788,71 @@ app.get('/api/customers/:id/summary', async (req, res) => {
 });
 
 // GET /api/projects/:id/summary
+
+// GET /api/projects/:id/timeline (Paginated)
+app.get('/api/projects/:id/timeline', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const projectId = req.params.id;
+  const rawPage = parseInt(req.query.page as string, 10);
+  const rawSize = parseInt(req.query.pageSize as string, 10);
+  const pageNum = isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
+  const sizeNum = isNaN(rawSize) || rawSize < 1 ? 25 : Math.min(rawSize, 100);
+  const offset = (pageNum - 1) * sizeNum;
+
+  try {
+    const [countRows]: any = await pool.query('SELECT COUNT(*) as total FROM activities WHERE (entityType = "PROJECT" AND entityId = ?) OR JSON_EXTRACT(metadata, "$.projectId") = ?', [projectId, projectId]);
+    const totalItems = countRows[0]?.total || 0;
+    const totalPages = Math.ceil(totalItems / sizeNum);
+    const [activities]: any = await pool.query('SELECT * FROM activities WHERE (entityType = "PROJECT" AND entityId = ?) OR JSON_EXTRACT(metadata, "$.projectId") = ? ORDER BY occurredAt DESC, id DESC LIMIT ? OFFSET ?', [projectId, projectId, sizeNum, offset]);
+
+    res.json({
+      data: activities,
+      pagination: {
+        page: pageNum,
+        pageSize: sizeNum,
+        totalItems,
+        totalPages,
+        hasNextPage: pageNum < totalPages,
+        hasPreviousPage: pageNum > 1
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+
+// GET /api/projects/pipeline (Unbounded / Active Only for Kanban)
+app.get('/api/projects/pipeline', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  try {
+    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+    const { where: projWhere, params: projParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'picId');
+
+    const [projects]: any = await pool.query(`
+      SELECT * FROM projects 
+      ${projWhere}
+      AND stageId NOT IN ('WON', 'LOST')
+      ORDER BY expectedClosingDate ASC
+    `, projParams);
+
+    res.json({ data: projects });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 app.get('/api/projects/:id/summary', async (req, res) => {
   const actorRole = (req as any).userRole;
   const actorTenant = (req as any).userTenantId;

@@ -361,10 +361,33 @@ export const CustomerDetailPage: React.FC = () => {
   const [tasksList, setTasksList] = useState<Task[]>([]);
   const [oppsList, setOppsList] = useState<Project[]>([]);
   const [activitiesList, setActivitiesList] = useState<Activity[]>([]);
+  const [timelinePage, setTimelinePage] = useState(1);
+  const [timelineHasMore, setTimelineHasMore] = useState(false);
+  const [isLoadingTimeline, setIsLoadingTimeline] = useState(false);
+
   const [contactsList, setContactsList] = useState<CustomerContact[]>([]);
   const [tenantUsers, setTenantUsers] = useState<User[]>([]);
 
-  const loadAllCustomerData = async () => {
+  
+  const loadTimeline = async (pageToLoad: number, append: boolean = false) => {
+    if (!id) return;
+    setIsLoadingTimeline(true);
+    try {
+      const res = await crmApi.fetchCustomerTimeline(id, pageToLoad, 25);
+      if (append) {
+        setActivitiesList(prev => [...prev, ...res.data]);
+      } else {
+        setActivitiesList(res.data);
+      }
+      setTimelinePage(res.pagination.page);
+      setTimelineHasMore(res.pagination.hasNextPage);
+    } catch (err) {
+      console.error('Failed to load timeline', err);
+    } finally {
+      setIsLoadingTimeline(false);
+    }
+  };
+const loadAllCustomerData = async () => {
     if (!id) return;
     try {
       const [custSummary, vList, tList, fList, pList, aList, cList, uList, naRes] = await Promise.all([
@@ -373,7 +396,7 @@ export const CustomerDetailPage: React.FC = () => {
         crmApi.fetchCollection<Task>('tasks', tenantId),
         crmApi.fetchCollection<FollowUp>('follow_ups', tenantId),
         crmApi.fetchCollection<Project>('projects', tenantId),
-        crmApi.fetchCollection<Activity>('activities', tenantId),
+        Promise.resolve([]),
         crmApi.fetchCollection<CustomerContact>('customer_contacts', tenantId),
         usersApi.fetchUsers(tenantId),
         crmApi.fetchCustomerNextAction(id)
