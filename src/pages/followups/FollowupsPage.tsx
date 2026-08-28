@@ -1,4 +1,3 @@
-  const [searchQuery, setSearchQuery] = useState('');
 import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
@@ -19,6 +18,8 @@ export const FollowupsPage: React.FC = () => {
   const [pageSize, setPageSize] = useState(10);
   const [totalItems, setTotalItems] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
+  const [projects, setProjects] = useState<any[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
 
   
   const loadData = async (page = currentPage) => {
@@ -36,7 +37,7 @@ export const FollowupsPage: React.FC = () => {
         setCurrentPage((fRes as any).pagination.page);
       }
       setCustomers(cList as any);
-      setFollowups(pList as any);
+      setProjects(pList as any);
     } catch (err) {
       console.error('Failed to load follow-ups', err);
     } finally {
