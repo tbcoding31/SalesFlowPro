@@ -48,3 +48,11 @@ FETCH_HEAD
 bun.lock
 .antigravity
 assets
+
+keys
+secrets
+credentials
+*.pem
+*.key
+*.p12
+*.pfx
