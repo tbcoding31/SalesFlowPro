@@ -196,16 +196,26 @@ export const CustomersListPage: React.FC = () => {
     setShowDeleteModal(true);
   };
 
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
     if (!customerToDelete) return;
 
-    setItems((prev) => prev.filter((i) => i.id !== customerToDelete.id));
-    crmApi.deleteRecord('customers', customerToDelete.id).then(res => {
-      if (!res.success) {
+    try {
+      const res = await crmApi.deleteRecord('customers', customerToDelete.id);
+      if (res.success) {
+        // If deleting the last item of a page greater than 1, step back 1 page
+        if (items.length === 1 && currentPage > 1) {
+          setCurrentPage(prev => prev - 1);
+        } else {
+          loadData(currentPage);
+        }
+      } else {
         console.error('Failed to delete customer in DB:', res.error);
-        loadData();
+        loadData(currentPage);
       }
-    });
+    } catch (err) {
+      console.error('Delete error:', err);
+      loadData(currentPage);
+    }
 
     setShowDeleteModal(false);
     setCustomerToDelete(null);
@@ -282,32 +292,16 @@ export const CustomersListPage: React.FC = () => {
       addresses: [],
     };
 
-    crmApi.createRecord('customers', newCustomerObj).then(() => {
-      loadData();
+    crmApi.createRecord('customers', newCustomerObj).then((res) => {
+      if (res.success) {
+        setCurrentPage(1);
+        loadData(1);
+      } else {
+        console.error('Failed to create customer:', res.error);
+        loadData(currentPage);
+      }
     });
 
-    const newExtended: ExtendedCustomerItem = {
-      id: newCustomerObj.id,
-      code: newCustomerObj.code,
-      name: newName,
-      industry: newIndustry,
-      avatarBg: 'bg-[#6161ff]',
-      avatarText: newName.substring(0, 2).toUpperCase(),
-      status: 'Active',
-      contactPersonName: newContactName || 'Budi Santoso',
-      contactPersonEmail: newContactEmail || 'contact@company.com',
-      picName: picUser?.firstName || picUser?.name || 'Ahmad',
-      picAvatar: picUser?.avatarUrl || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
-      lastVisit: 'Today',
-      followUpDate: '15 Aug 2026',
-      followUpStatus: 'scheduled',
-      tasksCount: 1,
-      oppsCount: 1,
-      updatedAt: 'Today',
-      type: newIndustry,
-    };
-
-    setItems([newExtended, ...items]);
     setShowAddModal(false);
     setNewName('');
     setNewContactName('');

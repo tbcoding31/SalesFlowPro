@@ -183,11 +183,18 @@ export const TasksPage: React.FC = () => {
     }
   };
   
-  const deleteTask = async (taskId: string) => {
-    if (window.confirm('Are you sure you want to delete this task?')) {
-      const res = await crmApi.deleteRecord('tasks', taskId);
+  const handleDelete = async (id: string) => {
+    if (confirm('Are you sure you want to delete this task?')) {
+      const res = await crmApi.deleteRecord('tasks', id);
       if (res.success) {
-        loadData();
+        if (tasks.length === 1 && currentPage > 1) {
+          setCurrentPage(prev => prev - 1);
+        } else {
+          loadData(currentPage);
+        }
+      } else {
+        console.error('Failed to delete task:', res.error);
+        loadData(currentPage);
       }
     }
   };
@@ -213,9 +220,13 @@ export const TasksPage: React.FC = () => {
 
     const res = await crmApi.createRecord('tasks', newTask);
     if (res.success) {
-      loadData();
+      setCurrentPage(1);
+      loadData(1);
       setShowAddModal(false);
       setTitle('');
+    } else {
+      console.error('Failed to create task:', res.error);
+      loadData(currentPage);
     }
   };
 
@@ -575,7 +586,7 @@ export const TasksPage: React.FC = () => {
                           </button>
                           <button
                             title="Delete Task"
-                            onClick={() => deleteTask(t.id)}
+                            onClick={() => handleDelete(t.id)}
                             className="p-1.5 text-[#767587] hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
                           >
                             <span className="material-symbols-outlined text-[18px]">delete</span>
