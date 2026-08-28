@@ -1,3 +1,4 @@
+  const [searchQuery, setSearchQuery] = useState('');
 import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
@@ -35,7 +36,7 @@ export const FollowupsPage: React.FC = () => {
         setCurrentPage((fRes as any).pagination.page);
       }
       setCustomers(cList as any);
-      setProjects(pList as any);
+      setFollowups(pList as any);
     } catch (err) {
       console.error('Failed to load follow-ups', err);
     } finally {
@@ -54,7 +55,6 @@ export const FollowupsPage: React.FC = () => {
 
   // Filters
   const [activeTab, setActiveTab] = useState<'ALL' | 'DUE_TODAY' | 'UPCOMING' | 'COMPLETED' | 'OVERDUE'>('ALL');
-  const [searchQuery, setSearchQuery] = useState('');
   const [customerFilter, setCustomerFilter] = useState('ALL');
   const [picFilter, setPicFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');

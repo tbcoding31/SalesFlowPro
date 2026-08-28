@@ -1124,3 +1124,13 @@ export interface InterventionAnalyticsResponse {
   projectBreakdown: ProjectRecurrenceAnalyticsItem[];
   repBreakdown: RepAnalyticsItem[];
 }
+
+export interface CustomerTimelineEvent {
+  eventType: string;
+  sourceId: string;
+  eventTimestamp: string;
+  stableEventKey: string;
+  title: string;
+  subType: string;
+  details: string;
+}

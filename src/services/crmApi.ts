@@ -116,14 +116,14 @@ export const crmApi = {
     return await res.json();
   },
 
-  fetchCustomerTimeline: async (customerId: string, page: number = 1, pageSize: number = 25): Promise<PaginatedResponse<Activity>> => {
+  fetchCustomerTimeline: async (customerId: string, page: number = 1, pageSize: number = 25): Promise<PaginatedResponse<CustomerTimelineEvent>> => {
     const url = `${API_BASE}/customers/${customerId}/timeline?page=${page}&pageSize=${pageSize}`;
     const res = await fetch(url, { headers: getAuthHeaders() });
     if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch customer timeline`);
     return await res.json();
   },
 
-  fetchProjectTimeline: async (projectId: string, page: number = 1, pageSize: number = 25): Promise<PaginatedResponse<Activity>> => {
+  fetchProjectTimeline: async (projectId: string, page: number = 1, pageSize: number = 25): Promise<PaginatedResponse<CustomerTimelineEvent>> => {
     const url = `${API_BASE}/projects/${projectId}/timeline?page=${page}&pageSize=${pageSize}`;
     const res = await fetch(url, { headers: getAuthHeaders() });
     if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch project timeline`);
@@ -168,7 +168,7 @@ fetchCustomers: async (params?: QueryPaginationParams): Promise<PaginatedRespons
     return await res.json();
   },
 
-  fetchActivities: async (params?: QueryPaginationParams): Promise<PaginatedResponse<Activity>> => {
+  fetchActivities: async (params?: QueryPaginationParams): Promise<PaginatedResponse<CustomerTimelineEvent>> => {
     const q = new URLSearchParams();
     if (params) {
       if (params.page) q.set('page', String(params.page));
@@ -187,7 +187,7 @@ fetchCustomers: async (params?: QueryPaginationParams): Promise<PaginatedRespons
     return await res.json();
   },
 
-  fetchAuditLogs: async (params?: QueryPaginationParams): Promise<PaginatedResponse<any>> => {
+  fetchAuditLogs: async (params?: QueryPaginationParams): Promise<PaginatedResponse<CustomerTimelineEvent>> => {
     const q = new URLSearchParams();
     if (params) {
       if (params.page) q.set('page', String(params.page));

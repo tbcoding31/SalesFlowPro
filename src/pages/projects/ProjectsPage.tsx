@@ -352,18 +352,18 @@ export const ProjectsPage: React.FC = () => {
                         {stage.label}
                       </h3>
                       <span className="px-2 py-0.5 bg-slate-100 text-slate-600 text-[10px] font-bold rounded-full">
-                        {displayCount}
+                        {stageOpps.length}
                       </span>
                     </div>
                     <div className="text-xs font-bold text-slate-500">
-                      {formatSummary(displayValue)}
+                      {formatSummary(0)}
                     </div>
                   </div>
 
                   <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                    {stageOpps.length < displayCount && (
+                    {stageOpps.length < stageOpps.length && (
                       <div className="text-[10px] font-bold text-center text-slate-400 uppercase tracking-wider mb-2">
-                        Showing {stageOpps.length} of {displayCount} (Load More)
+                        Showing {stageOpps.length} of {stageOpps.length} (Load More)
                       </div>
                     )}
                     {stageOpps.map(opp => (

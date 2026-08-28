@@ -4,6 +4,8 @@ import { useAuth } from '../../context/AuthContext';
 import { usersApi } from '../../services/usersApi';
 import { crmApi } from '../../services/crmApi';
 import { Customer, Visit, Task, FollowUp, Project, Activity, User, CustomerContact, TaskPriority, TaskStatus, FollowUpType, FollowUpPriority, FollowUpStatus, ProjectStage } from '../../types';
+import { useCustomerTimeline } from './components/useCustomerTimeline';
+import { CustomerActivitiesTab } from './components/CustomerActivitiesTab';
 import { CustomerAttentionTab } from './components/CustomerAttentionTab';
 
 export interface ActivityTimelineItem {
@@ -339,12 +341,7 @@ export const CustomerDetailPage: React.FC = () => {
   const [newNoteText, setNewNoteText] = useState('');
 
   // Activities Tab State & Filters
-  const [actCategoryFilter, setActCategoryFilter] = useState<string>('ALL');
   const [actUserFilter, setActUserFilter] = useState<string>('ALL');
-  const [actDateRangeFilter, setActDateRangeFilter] = useState<string>('ALL');
-  const [actStartDate, setActStartDate] = useState<string>('');
-  const [actEndDate, setActEndDate] = useState<string>('');
-  const [actSearch, setActSearch] = useState<string>('');
   const [viewingActivity, setViewingActivity] = useState<ActivityTimelineItem | null>(null);
 
   if (!customer) {
@@ -362,32 +359,11 @@ export const CustomerDetailPage: React.FC = () => {
   const [tasksList, setTasksList] = useState<Task[]>([]);
   const [oppsList, setOppsList] = useState<Project[]>([]);
   const [activitiesList, setActivitiesList] = useState<Activity[]>([]);
-  const [timelinePage, setTimelinePage] = useState(1);
-  const [timelineHasMore, setTimelineHasMore] = useState(false);
-  const [isLoadingTimeline, setIsLoadingTimeline] = useState(false);
 
   const [contactsList, setContactsList] = useState<CustomerContact[]>([]);
   const [tenantUsers, setTenantUsers] = useState<User[]>([]);
 
   
-  const loadTimeline = async (pageToLoad: number, append: boolean = false) => {
-    if (!id) return;
-    setIsLoadingTimeline(true);
-    try {
-      const res = await crmApi.fetchCustomerTimeline(id, pageToLoad, 25);
-      if (append) {
-        setActivitiesList(prev => [...prev, ...res.data]);
-      } else {
-        setActivitiesList(res.data);
-      }
-      setTimelinePage(res.pagination.page);
-      setTimelineHasMore(res.pagination.hasNextPage);
-    } catch (err) {
-      console.error('Failed to load timeline', err);
-    } finally {
-      setIsLoadingTimeline(false);
-    }
-  };
 const loadAllCustomerData = async () => {
     if (!id) return;
     try {
@@ -3665,372 +3641,30 @@ const loadAllCustomerData = async () => {
         </div>
       )}
 
-      {activeTab === 'activities' && (
-        <div className="space-y-5">
-          {/* Top Summary & Category Quick Filters */}
-          <div className="bg-white rounded-xl border border-[#E1E1E1] p-5 shadow-xs space-y-4">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-[#E1E1E1] pb-4">
-              <div>
-                <h2 className="text-base font-bold text-[#1a1c1c] flex items-center gap-2">
-                  <span className="material-symbols-outlined text-[#4744e5]">history</span>
-                  Customer Activity Timeline
-                </h2>
-                <p className="text-xs text-[#767587] mt-0.5">
-                  Complete chronological interaction history for {customer.name} ({customer.code})
-                </p>
-              </div>
-
-              <div className="flex items-center gap-2 text-xs">
-                <span className="px-3 py-1 bg-slate-100 text-[#1a1c1c] font-bold rounded-lg border border-slate-200">
-                  Total Logged: <strong className="text-[#4744e5]">{scopedCustomerActivities.length}</strong>
-                </span>
-                <span className="px-3 py-1 bg-indigo-50 text-indigo-700 font-bold rounded-lg border border-indigo-200">
-                  Showing: <strong>{filteredCustomerActivities.length}</strong>
-                </span>
-              </div>
-            </div>
-
-            {/* Category Filter Chips */}
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="text-[#767587] font-bold text-[11px] uppercase mr-1">Quick Filters:</span>
-
-              <button
-                type="button"
-                onClick={() => setActCategoryFilter('ALL')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                  actCategoryFilter === 'ALL'
-                    ? 'bg-[#4744e5] text-white shadow-xs'
-                    : 'bg-slate-100 text-[#767587] hover:bg-slate-200'
-                }`}
-              >
-                <span>All Activities</span>
-                <span className="px-1.5 py-0.2 bg-white/20 rounded text-[10px]">{scopedCustomerActivities.length}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActCategoryFilter('VISIT')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                  actCategoryFilter === 'VISIT'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'
-                }`}
-              >
-                <span className="material-symbols-outlined text-[14px]">directions_car</span>
-                <span>Visits</span>
-                <span className="px-1.5 py-0.2 bg-blue-200/50 rounded text-[10px]">
-                  {scopedCustomerActivities.filter((i) => i.category === 'VISIT').length}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActCategoryFilter('TASK')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                  actCategoryFilter === 'TASK'
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'
-                }`}
-              >
-                <span className="material-symbols-outlined text-[14px]">task_alt</span>
-                <span>Tasks</span>
-                <span className="px-1.5 py-0.2 bg-emerald-200/50 rounded text-[10px]">
-                  {scopedCustomerActivities.filter((i) => i.category === 'TASK').length}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActCategoryFilter('FOLLOWUP')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                  actCategoryFilter === 'FOLLOWUP'
-                    ? 'bg-amber-600 text-white shadow-xs'
-                    : 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200'
-                }`}
-              >
-                <span className="material-symbols-outlined text-[14px]">call</span>
-                <span>Follow-ups</span>
-                <span className="px-1.5 py-0.2 bg-amber-200/50 rounded text-[10px]">
-                  {scopedCustomerActivities.filter((i) => i.category === 'FOLLOWUP').length}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActCategoryFilter('PROJECT')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                  actCategoryFilter === 'PROJECT'
-                    ? 'bg-purple-600 text-white shadow-xs'
-                    : 'bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200'
-                }`}
-              >
-                <span className="material-symbols-outlined text-[14px]">add_chart</span>
-                <span>Projects</span>
-                <span className="px-1.5 py-0.2 bg-purple-200/50 rounded text-[10px]">
-                  {scopedCustomerActivities.filter((i) => i.category === 'PROJECT').length}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActCategoryFilter('CUSTOMER')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                  actCategoryFilter === 'CUSTOMER'
-                    ? 'bg-indigo-600 text-white shadow-xs'
-                    : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200'
-                }`}
-              >
-                <span className="material-symbols-outlined text-[14px]">domain</span>
-                <span>Customer Records</span>
-                <span className="px-1.5 py-0.2 bg-indigo-200/50 rounded text-[10px]">
-                  {scopedCustomerActivities.filter((i) => i.category === 'CUSTOMER').length}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActCategoryFilter('SYSTEM')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                  actCategoryFilter === 'SYSTEM'
-                    ? 'bg-slate-700 text-white shadow-xs'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200'
-                }`}
-              >
-                <span className="material-symbols-outlined text-[14px]">history</span>
-                <span>System Logs</span>
-                <span className="px-1.5 py-0.2 bg-slate-200/50 rounded text-[10px]">
-                  {scopedCustomerActivities.filter((i) => i.category === 'SYSTEM').length}
-                </span>
-              </button>
-            </div>
-
-            {/* Detailed Controls Bar */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 pt-2">
-              {/* Search */}
-              <div className="relative lg:col-span-2">
-                <span className="material-symbols-outlined absolute left-2.5 top-2 text-[18px] text-[#767587]">
-                  search
-                </span>
-                <input
-                  type="text"
-                  value={actSearch}
-                  onChange={(e) => setActSearch(e.target.value)}
-                  placeholder="Search activity subject, user, description, or record ID..."
-                  className="w-full pl-8 pr-3 py-1.5 border border-[#E1E1E1] rounded-lg text-xs bg-slate-50 focus:bg-white focus:outline-none focus:border-[#4744e5]"
-                />
-                {actSearch && (
-                  <button
-                    type="button"
-                    onClick={() => setActSearch('')}
-                    className="absolute right-2 top-2 text-[#767587] hover:text-[#1a1c1c]"
-                  >
-                    <span className="material-symbols-outlined text-[16px]">close</span>
-                  </button>
-                )}
-              </div>
-
-              {/* User Select */}
-              <div>
-                <select
-                  value={actUserFilter}
-                  onChange={(e) => setActUserFilter(e.target.value)}
-                  className="w-full px-2.5 py-1.5 border border-[#E1E1E1] rounded-lg text-xs bg-slate-50 focus:bg-white font-medium"
-                >
-                  <option value="ALL">All Sales PICs</option>
-                  {tenantUsers.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.name} ({u.role})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Date Range Select */}
-              <div>
-                <select
-                  value={actDateRangeFilter}
-                  onChange={(e) => setActDateRangeFilter(e.target.value)}
-                  className="w-full px-2.5 py-1.5 border border-[#E1E1E1] rounded-lg text-xs bg-slate-50 focus:bg-white font-medium"
-                >
-                  <option value="ALL">All Date Ranges</option>
-                  <option value="TODAY">Today</option>
-                  <option value="LAST_7_DAYS">Last 7 Days</option>
-                  <option value="LAST_30_DAYS">Last 30 Days</option>
-                  <option value="CUSTOM">Custom Range</option>
-                </select>
-              </div>
-
-              {/* Reset Filters */}
-              {(actCategoryFilter !== 'ALL' || actUserFilter !== 'ALL' || actDateRangeFilter !== 'ALL' || actSearch) && (
-                <div className="flex items-center">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActCategoryFilter('ALL');
-                      setActUserFilter('ALL');
-                      setActDateRangeFilter('ALL');
-                      setActStartDate('');
-                      setActEndDate('');
-                      setActSearch('');
-                    }}
-                    className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold rounded-lg border border-red-200 flex items-center gap-1 cursor-pointer w-full justify-center"
-                  >
-                    <span className="material-symbols-outlined text-[14px]">restart_alt</span>
-                    Reset Filters
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Custom Date Pickers */}
-            {actDateRangeFilter === 'CUSTOM' && (
-              <div className="flex items-center gap-3 pt-2 border-t border-[#E1E1E1] text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-[#767587]">From:</span>
-                  <input
-                    type="date"
-                    value={actStartDate}
-                    onChange={(e) => setActStartDate(e.target.value)}
-                    className="px-2.5 py-1 border border-[#E1E1E1] rounded-lg text-xs"
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-[#767587]">To:</span>
-                  <input
-                    type="date"
-                    value={actEndDate}
-                    onChange={(e) => setActEndDate(e.target.value)}
-                    className="px-2.5 py-1 border border-[#E1E1E1] rounded-lg text-xs"
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Timeline List */}
-          <div className="bg-white rounded-xl border border-[#E1E1E1] p-6 shadow-xs">
-            {filteredCustomerActivities.length === 0 ? (
-              <div className="py-12 text-center space-y-3">
-                <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto text-[#767587]">
-                  <span className="material-symbols-outlined text-2xl">history_toggle_off</span>
-                </div>
-                <h3 className="text-sm font-bold text-[#1a1c1c]">No Activities Found</h3>
-                <p className="text-xs text-[#767587] max-w-sm mx-auto">
-                  No interaction activity history matches your selected criteria for this customer account.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActCategoryFilter('ALL');
-                    setActUserFilter('ALL');
-                    setActDateRangeFilter('ALL');
-                    setActSearch('');
-                  }}
-                  className="px-3.5 py-1.5 bg-[#4744e5] text-white text-xs font-bold rounded-lg cursor-pointer"
-                >
-                  Clear All Filters
-                </button>
-              </div>
-            ) : (
-              <div className="relative border-l-2 border-slate-200 ml-4 pl-6 space-y-6 py-2">
-                {filteredCustomerActivities.map((act) => (
-                  <div key={act.id} className="relative group">
-                    {/* Circle Node Icon */}
-                    <div
-                      className={`absolute -left-[37px] top-0.5 w-8 h-8 rounded-full border-2 border-white flex items-center justify-center shadow-xs ${act.typeColor}`}
-                    >
-                      <span className="material-symbols-outlined text-[16px]">{act.typeIcon}</span>
-                    </div>
-
-                    {/* Timeline Card */}
-                    <div className="bg-white rounded-xl border border-[#E1E1E1] hover:border-slate-300 p-4 space-y-2.5 shadow-2xs hover:shadow-xs transition-all">
-                      {/* Header Row */}
-                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`px-2.5 py-0.5 rounded-md text-[10px] font-extrabold border ${act.typeColor}`}
-                          >
-                            {act.typeBadge}
-                          </span>
-
-                          {act.entityId && (
-                            <span className="font-mono text-[10px] bg-slate-100 text-[#767587] px-2 py-0.5 rounded border border-slate-200 font-bold">
-                              {act.entityId}
-                            </span>
-                          )}
-
-                          {act.status && (
-                            <span className="px-2 py-0.5 bg-slate-100 text-[#1a1c1c] text-[10px] font-bold rounded border border-slate-200 uppercase">
-                              {act.status}
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="flex items-center gap-1.5 text-[11px] text-[#767587] font-medium">
-                          <span className="material-symbols-outlined text-[14px]">schedule</span>
-                          <span>{act.date}</span>
-                          <span className="text-slate-300">•</span>
-                          <span className="font-mono">{act.time}</span>
-                        </div>
-                      </div>
-
-                      {/* Subject & Description */}
-                      <div>
-                        <h3 className="text-sm font-bold text-[#1a1c1c]">{act.subject}</h3>
-                        <p className="text-xs text-[#464555] mt-1 whitespace-pre-wrap leading-relaxed">
-                          {act.description}
-                        </p>
-                      </div>
-
-                      {/* User PIC Footer & Navigation Button */}
-                      <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-xs">
-                        <div className="flex items-center gap-2">
-                          {act.userAvatar ? (
-                            <img
-                              src={act.userAvatar}
-                              alt={act.userName}
-                              className="w-6 h-6 rounded-full object-cover border border-slate-200"
-                            />
-                          ) : (
-                            <div className="w-6 h-6 rounded-full bg-[#4744e5]/10 text-[#4744e5] font-bold text-[10px] flex items-center justify-center">
-                              {(act.userName || "U").substring(0, 2).toUpperCase()}
-                            </div>
-                          )}
-                          <span className="font-bold text-[#1a1c1c]">{act.userName}</span>
-                          {act.userRole && (
-                            <span className="text-[10px] text-[#767587] bg-slate-100 px-1.5 py-0.5 rounded font-medium">
-                              {act.userRole}
-                            </span>
-                          )}
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => handleOpenRelatedRecord(act)}
-                          className="px-3 py-1 bg-slate-100 hover:bg-[#4744e5] text-[#1a1c1c] hover:text-white font-bold rounded-lg border border-slate-200 text-xs flex items-center gap-1 transition-all cursor-pointer"
-                        >
-                          <span className="material-symbols-outlined text-[14px]">visibility</span>
-                          <span>
-                            {act.entityType === 'VISIT'
-                              ? 'View Visit'
-                              : act.entityType === 'TASK'
-                              ? 'View Task'
-                              : act.entityType === 'PROJECT'
-                              ? 'View Project'
-                              : act.entityType === 'FOLLOWUP'
-                              ? 'View Follow-up'
-                              : 'View Details'}
-                          </span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+        {activeTab === 'activities' && (
+          <CustomerActivitiesTab
+            timelineEvents={timelineEvents}
+            timelinePage={timelinePage}
+            timelineHasMore={timelineHasMore}
+            isLoadingTimeline={isLoadingTimeline}
+            error={timelineError}
+            onLoadMore={(page) => loadTimeline(page, true)}
+            onOpenRelatedRecord={(type, recordId) => {
+              if (type === 'TASK') {
+                const t = tasksList.find(x => x.id === recordId);
+                if (t) { setSelectedTask(t); setShowTaskModal(true); }
+              } else if (type === 'VISIT') {
+                const v = visitsList.find(x => x.id === recordId);
+                if (v) { setSelectedVisit(v); setShowVisitModal(true); }
+              } else if (type === 'FOLLOW_UP') {
+                const f = followupsList.find(x => x.id === recordId);
+                if (f) { setSelectedFollowUp(f); setShowFollowUpModal(true); }
+              } else if (type === 'PROJECT') {
+                navigate(`/projects/${recordId}`);
+              }
+            }}
+          />
+        )}
 
       {/* MODAL: VIEW ACTIVITY DETAIL */}
       {viewingActivity && (

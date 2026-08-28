@@ -1,3 +1,4 @@
+  const [searchQuery, setSearchQuery] = useState('');
 import React, { useState, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
@@ -36,7 +37,7 @@ export const VisitsPage: React.FC = () => {
         setCurrentPage((vRes as any).pagination.page);
       }
       setCustomers(cList as any);
-      setProjects(pList as any);
+      setVisits(pList as any);
     } catch (err) {
       console.error('Failed to load visits', err);
     } finally {
@@ -57,7 +58,6 @@ export const VisitsPage: React.FC = () => {
   const [activeView, setActiveView] = useState<'list' | 'calendar'>('list');
 
   // Filter toolbar states
-  const [searchQuery, setSearchQuery] = useState('');
   const [dateRangeFilter, setDateRangeFilter] = useState<'ALL' | 'TODAY' | 'WEEK' | 'MONTH' | 'CUSTOM'>('ALL');
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
