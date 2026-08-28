@@ -8671,30 +8671,57 @@ app.get('/api/customers/:id/timeline', async (req, res) => {
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
   const customerId = req.params.id;
-  const rawPage = parseInt(req.query.page as string, 10);
-  const rawSize = parseInt(req.query.pageSize as string, 10);
-  const pageNum = isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
-  const sizeNum = isNaN(rawSize) || rawSize < 1 ? 25 : Math.min(rawSize, 100);
-  const offset = (pageNum - 1) * sizeNum;
+  const page = parseInt(req.query.page as string) || 1;
+  const pageSize = parseInt(req.query.pageSize as string) || 25;
+  const offset = (page - 1) * pageSize;
 
   try {
-    const [countRows]: any = await pool.query('SELECT COUNT(*) as total FROM activities WHERE customerId = ?', [customerId]);
-    const totalItems = countRows[0]?.total || 0;
-    const totalPages = Math.ceil(totalItems / sizeNum);
-    const [activities]: any = await pool.query('SELECT * FROM activities WHERE customerId = ? ORDER BY occurredAt DESC, id DESC LIMIT ? OFFSET ?', [customerId, sizeNum, offset]);
+    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+
+    // Security check: ensure customer belongs to tenant
+    const [custRows]: any = await pool.query(`SELECT id FROM customers WHERE id = ? AND tenantId = ?`, [customerId, targetTenant]);
+    if (custRows.length === 0) return res.status(404).json({ error: 'Not Found' });
+
+    // Global Timeline Merge using UNION ALL
+    const projection = `
+      SELECT 'ACTIVITY' as eventType, id as sourceId, occurredAt as eventTimestamp, CONCAT('ACTIVITY:', id) as stableEventKey, title, type as subType, description as details FROM activities WHERE customerId = ? AND tenantId = ?
+      UNION ALL
+      SELECT 'TASK' as eventType, id as sourceId, dueDate as eventTimestamp, CONCAT('TASK:', id) as stableEventKey, title, status as subType, description as details FROM tasks WHERE customerId = ? AND tenantId = ?
+      UNION ALL
+      SELECT 'VISIT' as eventType, id as sourceId, visitDate as eventTimestamp, CONCAT('VISIT:', id) as stableEventKey, title, statusId as subType, result as details FROM visits WHERE customerId = ? AND tenantId = ?
+      UNION ALL
+      SELECT 'FOLLOW_UP' as eventType, id as sourceId, followUpDate as eventTimestamp, CONCAT('FOLLOW_UP:', id) as stableEventKey, title, statusId as subType, notes as details FROM follow_ups WHERE customerId = ? AND tenantId = ?
+    `;
+    const params = [
+      customerId, targetTenant,
+      customerId, targetTenant,
+      customerId, targetTenant,
+      customerId, targetTenant
+    ];
+
+    const countQuery = `SELECT COUNT(*) as total FROM (${projection}) as global_timeline`;
+    const dataQuery = `
+      SELECT * FROM (${projection}) as global_timeline
+      ORDER BY eventTimestamp DESC, stableEventKey DESC
+      LIMIT ? OFFSET ?
+    `;
+
+    const [[{ total }]] = await pool.query(countQuery, params) as any;
+    const [events] = await pool.query(dataQuery, [...params, pageSize, offset]);
 
     res.json({
-      data: activities,
+      data: events,
       pagination: {
-        page: pageNum,
-        pageSize: sizeNum,
-        totalItems,
-        totalPages,
-        hasNextPage: pageNum < totalPages,
-        hasPreviousPage: pageNum > 1
+        page,
+        pageSize,
+        totalItems: parseInt(total),
+        totalPages: Math.ceil(parseInt(total) / pageSize),
+        hasNextPage: page * pageSize < parseInt(total),
+        hasPreviousPage: page > 1
       }
     });
   } catch (err: any) {
+    console.error(err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
@@ -8797,30 +8824,59 @@ app.get('/api/projects/:id/timeline', async (req, res) => {
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
   const projectId = req.params.id;
-  const rawPage = parseInt(req.query.page as string, 10);
-  const rawSize = parseInt(req.query.pageSize as string, 10);
-  const pageNum = isNaN(rawPage) || rawPage < 1 ? 1 : rawPage;
-  const sizeNum = isNaN(rawSize) || rawSize < 1 ? 25 : Math.min(rawSize, 100);
-  const offset = (pageNum - 1) * sizeNum;
+  const page = parseInt(req.query.page as string) || 1;
+  const pageSize = parseInt(req.query.pageSize as string) || 25;
+  const offset = (page - 1) * pageSize;
 
   try {
-    const [countRows]: any = await pool.query('SELECT COUNT(*) as total FROM activities WHERE (entityType = "PROJECT" AND entityId = ?) OR JSON_EXTRACT(metadata, "$.projectId") = ?', [projectId, projectId]);
-    const totalItems = countRows[0]?.total || 0;
-    const totalPages = Math.ceil(totalItems / sizeNum);
-    const [activities]: any = await pool.query('SELECT * FROM activities WHERE (entityType = "PROJECT" AND entityId = ?) OR JSON_EXTRACT(metadata, "$.projectId") = ? ORDER BY occurredAt DESC, id DESC LIMIT ? OFFSET ?', [projectId, projectId, sizeNum, offset]);
+    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+
+    const [projRows]: any = await pool.query(`SELECT id FROM projects WHERE id = ? AND tenantId = ?`, [projectId, targetTenant]);
+    if (projRows.length === 0) return res.status(404).json({ error: 'Not Found' });
+
+    // Global Timeline Merge using UNION ALL
+    const projection = `
+      SELECT 'ACTIVITY' as eventType, id as sourceId, occurredAt as eventTimestamp, CONCAT('ACTIVITY:', id) as stableEventKey, title, type as subType, description as details FROM activities WHERE entityType = 'PROJECT' AND entityId = ? AND tenantId = ?
+      UNION ALL
+      SELECT 'TASK' as eventType, id as sourceId, dueDate as eventTimestamp, CONCAT('TASK:', id) as stableEventKey, title, status as subType, description as details FROM tasks WHERE relatedProjectId = ? AND tenantId = ?
+      UNION ALL
+      SELECT 'VISIT' as eventType, id as sourceId, visitDate as eventTimestamp, CONCAT('VISIT:', id) as stableEventKey, title, statusId as subType, result as details FROM visits WHERE relatedProjectId = ? AND tenantId = ?
+      UNION ALL
+      SELECT 'FOLLOW_UP' as eventType, id as sourceId, followUpDate as eventTimestamp, CONCAT('FOLLOW_UP:', id) as stableEventKey, title, statusId as subType, notes as details FROM follow_ups WHERE relatedProjectId = ? AND tenantId = ?
+      UNION ALL
+      SELECT 'INTERVENTION' as eventType, id as sourceId, startedAt as eventTimestamp, CONCAT('INTERVENTION:', id) as stableEventKey, policyNameSnapshot as title, matchModeSnapshot as subType, startReason as details FROM project_intervention_episodes WHERE projectId = ? AND tenantId = ?
+    `;
+    const params = [
+      projectId, targetTenant,
+      projectId, targetTenant,
+      projectId, targetTenant,
+      projectId, targetTenant,
+      projectId, targetTenant
+    ];
+
+    const countQuery = `SELECT COUNT(*) as total FROM (${projection}) as global_timeline`;
+    const dataQuery = `
+      SELECT * FROM (${projection}) as global_timeline
+      ORDER BY eventTimestamp DESC, stableEventKey DESC
+      LIMIT ? OFFSET ?
+    `;
+
+    const [[{ total }]] = await pool.query(countQuery, params) as any;
+    const [events] = await pool.query(dataQuery, [...params, pageSize, offset]);
 
     res.json({
-      data: activities,
+      data: events,
       pagination: {
-        page: pageNum,
-        pageSize: sizeNum,
-        totalItems,
-        totalPages,
-        hasNextPage: pageNum < totalPages,
-        hasPreviousPage: pageNum > 1
+        page,
+        pageSize,
+        totalItems: parseInt(total),
+        totalPages: Math.ceil(parseInt(total) / pageSize),
+        hasNextPage: page * pageSize < parseInt(total),
+        hasPreviousPage: page > 1
       }
     });
   } catch (err: any) {
+    console.error(err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
@@ -8840,15 +8896,37 @@ app.get('/api/projects/pipeline', async (req, res) => {
     const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
     const { where: projWhere, params: projParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'picId');
 
+    // 1. Aggregate query for complete counts/values
+    const [aggRows]: any = await pool.query(`
+      SELECT stageId, COUNT(*) as count, SUM(estimatedValue) as totalValue 
+      FROM projects 
+      ${projWhere}
+      AND stageId NOT IN ('WON', 'LOST')
+      GROUP BY stageId
+    `, projParams);
+
+    const aggregates: any = {};
+    for (const row of aggRows) {
+      aggregates[row.stageId] = {
+        count: parseInt(row.count),
+        value: parseFloat(row.totalValue || 0)
+      };
+    }
+
+    // 2. Bounded data query (fetch up to 25 per stage using UNION ALL, or limit 100 globally)
+    // To ensure strict bounding without a complex UNION ALL, we will limit the total board to 100 recent projects.
+    // In a real system, per-stage bounds might use window functions, but a global limit is definitively bounded.
     const [projects]: any = await pool.query(`
       SELECT * FROM projects 
       ${projWhere}
       AND stageId NOT IN ('WON', 'LOST')
       ORDER BY expectedClosingDate ASC
+      LIMIT 100
     `, projParams);
 
-    res.json({ data: projects });
+    res.json({ data: projects, aggregates });
   } catch (err: any) {
+    console.error(err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });

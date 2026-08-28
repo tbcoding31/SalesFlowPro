@@ -13,6 +13,7 @@ export const ProjectsPage: React.FC = () => {
   const tenantId = currentTenant?.id || 'TEN-00001';
 
   const [projects, setProjects] = useState<Project[]>([]);
+  const [pipelineAggregates, setPipelineAggregates] = useState<any>({});
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('LIST');
@@ -35,11 +36,12 @@ export const ProjectsPage: React.FC = () => {
         }
         setCustomers(cList as any);
       } else {
-        const [pList, cList] = await Promise.all([
+        const [pListRes, cList] = await Promise.all([
           crmApi.fetchProjectPipeline(tenantId),
           crmApi.fetchCollection('customers', tenantId)
         ]);
-        setProjects(pList as any);
+        setProjects(pListRes.data as any);
+        setPipelineAggregates(pListRes.aggregates);
         setCustomers(cList as any);
       }
     } catch (err) {
@@ -350,15 +352,20 @@ export const ProjectsPage: React.FC = () => {
                         {stage.label}
                       </h3>
                       <span className="px-2 py-0.5 bg-slate-100 text-slate-600 text-[10px] font-bold rounded-full">
-                        {stageOpps.length}
+                        {displayCount}
                       </span>
                     </div>
                     <div className="text-xs font-bold text-slate-500">
-                      {formatSummary(stageValue)}
+                      {formatSummary(displayValue)}
                     </div>
                   </div>
 
                   <div className="flex-1 overflow-y-auto p-3 space-y-3">
+                    {stageOpps.length < displayCount && (
+                      <div className="text-[10px] font-bold text-center text-slate-400 uppercase tracking-wider mb-2">
+                        Showing {stageOpps.length} of {displayCount} (Load More)
+                      </div>
+                    )}
                     {stageOpps.map(opp => (
                       <div
                         key={opp.id}
