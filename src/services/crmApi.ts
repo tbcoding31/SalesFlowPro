@@ -18,6 +18,7 @@ export interface QueryPaginationParams {
   sortBy?: string;
   sortOrder?: 'asc' | 'desc' | 'ASC' | 'DESC';
   status?: string;
+  upcoming?: string;
   priority?: string;
   picId?: string;
   customerId?: string;
@@ -57,6 +58,7 @@ export const crmApi = {
       if (params.sortBy) q.set('sortBy', params.sortBy);
       if (params.sortOrder) q.set('sortOrder', params.sortOrder);
       if (params.status && params.status !== 'ALL') q.set('status', params.status);
+      if (params.upcoming) q.set('upcoming', params.upcoming);
       if (params.picId && params.picId !== 'ALL') q.set('picId', params.picId);
       if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
       if (params.customerId && params.customerId !== 'ALL') q.set('customerId', params.customerId);

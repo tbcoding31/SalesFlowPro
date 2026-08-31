@@ -68,13 +68,14 @@ export const CustomerOverviewTab: React.FC<CustomerOverviewTabProps> = ({
          customerId: customer.id, 
          pageSize: 5, 
          status: 'OPEN',
+           upcoming: 'true',
          sortBy: 'dueDate', 
          sortOrder: 'ASC' 
        }).then(res => setLocalTasks(res.data || [])).catch(() => setTasksError(true));
        
        // Fetch upcoming visits using generic collection (need to pass query params via URL)
        // Since fetchCollection doesn't easily support all this, let's just fetch manually
-       fetch(`${API_BASE}/visits?customerId=${customer.id}&status=OPEN&sortBy=visitDate&sortOrder=ASC&pageSize=5`, { headers: getAuthHeaders() })
+       fetch(`${API_BASE}/visits?customerId=${customer.id}&status=OPEN&upcoming=true&sortBy=visitDate&sortOrder=ASC&pageSize=5`, { headers: getAuthHeaders() })
          .then(r => { if (!r.ok) throw new Error(); return r.json(); })
          .then(d => setLocalVisits(d.data || d || []))
          .catch(() => setVisitsError(true));

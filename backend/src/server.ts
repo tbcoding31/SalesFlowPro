@@ -911,6 +911,13 @@ const setupEndpoint = (table: string) => {
       const statusCol = table === 'follow_ups' ? 'status' : 'statusId';
       if (req.query.status === 'OPEN' && ['tasks', 'visits', 'follow_ups'].includes(table)) {
         whereClauses.push(`${statusCol} NOT IN ('COMPLETED', 'CANCELLED')`);
+        
+        // UPCOMING SEMANTICS
+        if (req.query.upcoming === 'true') {
+          const dateCol = table === 'tasks' ? 'dueDate' : table === 'visits' ? 'visitDate' : 'followUpDate';
+          // Use authoritative backend date for comparison
+          whereClauses.push(`(${dateCol} >= CURDATE() OR ${dateCol} IS NULL)`);
+        }
       } else {
         whereClauses.push(`${statusCol} = ?`);
         params.push(req.query.status);
@@ -1153,7 +1160,7 @@ const setupEndpoint = (table: string) => {
       // R58R8R: Validate relatedProjectId belongs to the same customer & tenant
       if (data.relatedProjectId && ['tasks', 'visits', 'follow_ups'].includes(table)) {
         const targetTenant = data.tenantId || actorTenant;
-        const [projRows] = await pool.query('SELECT id, tenantId, customerId FROM projects WHERE id = ?', [data.relatedProjectId]);
+        const [projRows]: any = await pool.query('SELECT id, tenantId, customerId FROM projects WHERE id = ?', [data.relatedProjectId]);
         if (projRows.length === 0) {
           return res.status(400).json({ error: 'Referenced project does not exist.', code: 'PROJECT_NOT_FOUND' });
         }
