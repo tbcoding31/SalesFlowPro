@@ -153,7 +153,7 @@ export const TaskBoardPage: React.FC = () => {
         id: `ACT-${Date.now()}`,
         tenantId,
         customerId: updatedTask.customerId,
-        userId: currentUser?.id || 'SYSTEM',
+        userId: currentUser?.id || 'SYSTEM_JOB',
         type: 'TASK',
         subject: 'Task Status Updated',
         description: `Moved task "${updatedTask.title}" from ${oldStatus.replace('_', ' ')} to ${newStatus.replace('_', ' ')}`

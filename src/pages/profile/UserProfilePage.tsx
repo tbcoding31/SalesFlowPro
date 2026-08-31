@@ -29,7 +29,7 @@ export const UserProfilePage: React.FC = () => {
   // Use current user data if available, otherwise fallback to the requested mock data
   const user = {
     name: currentUser?.name || 'Ahmad Ricky',
-    role: currentUser?.tenantId === 'SYSTEM' ? 'System Administrator' : 
+    role: currentUser?.role === 'SUPER_ADMIN' ? 'System Administrator' : 
           currentUser?.role === 'TENANT_ADMIN' ? 'Tenant Administrator' : 
           currentUser?.role === 'SALES_MANAGER' ? 'Sales Manager' :
           currentUser?.role === 'SUPERVISOR' ? 'Supervisor' :

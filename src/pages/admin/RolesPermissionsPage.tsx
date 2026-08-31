@@ -6,7 +6,7 @@ import { RolePermissions, PermissionDefinition, UserRole } from '../../types';
 export const RolesPermissionsPage: React.FC = () => {
   const { currentTenant, currentUser } = useAuth();
   const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
-  const tenantId = isSuperAdmin ? 'SYSTEM' : (currentTenant?.id || currentUser?.tenantId );
+  const tenantId = isSuperAdmin ? null : (currentTenant?.id || currentUser?.tenantId );
 
   // Core Data States
   const [rolesList, setRolesList] = useState<RolePermissions[]>([]);

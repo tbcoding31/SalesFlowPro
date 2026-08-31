@@ -25,7 +25,7 @@ export const LoginPage: React.FC = () => {
       // Read user from localStorage to avoid stale state closure
       const savedUserStr = localStorage.getItem('sfp_currentUser');
       const savedUser = savedUserStr ? JSON.parse(savedUserStr) : null;
-      if (savedUser?.tenantId === 'SYSTEM') {
+      if (savedUser?.role === 'SUPER_ADMIN') {
         navigate('/admin/dashboard');
       } else {
         navigate('/dashboard');

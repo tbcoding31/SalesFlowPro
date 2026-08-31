@@ -104,7 +104,7 @@ export const TaskDetailPage: React.FC = () => {
     await crmApi.createRecord('activities', {
       tenantId,
       customerId: task.customerId,
-      userId: currentUser?.id || 'SYSTEM',
+      userId: currentUser?.id || 'SYSTEM_JOB',
       typeId: 'TASK',
       subject: 'PIC Reassigned',
       description: `Reassigned task from ${oldPicName || 'previous PIC'} to ${selectedNewPic.name}`,
@@ -128,7 +128,7 @@ export const TaskDetailPage: React.FC = () => {
     await crmApi.createRecord('activities', {
       tenantId,
       customerId: task.customerId,
-      userId: currentUser?.id || 'SYSTEM',
+      userId: currentUser?.id || 'SYSTEM_JOB',
       typeId: 'TASK',
       subject: 'Task Completed',
       description: `Marked task "${task.title}" as completed`,
@@ -145,7 +145,7 @@ export const TaskDetailPage: React.FC = () => {
     await crmApi.createRecord('activities', {
       tenantId,
       customerId: task.customerId,
-      userId: currentUser?.id || 'SYSTEM',
+      userId: currentUser?.id || 'SYSTEM_JOB',
       typeId: 'NOTE',
       subject: 'Comment Added',
       description: comment,

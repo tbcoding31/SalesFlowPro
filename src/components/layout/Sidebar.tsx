@@ -12,7 +12,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => 
   const navigate = useNavigate();
   const location = useLocation();
 
-  const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN' || (hasPermission('MANAGE_TENANT') && (!currentUser?.tenantId || currentUser?.tenantId === 'SYSTEM'));
+  const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN' || (hasPermission('MANAGE_TENANT') && (!currentUser?.tenantId || currentUser?.role === 'SUPER_ADMIN'));
   const isManagerOrSupervisor = hasPermission('VIEW_TEAM_TASKS');
   const canViewReports = hasPermission('VIEW_REPORTS') || hasPermission('VIEW_FINANCE');
   const isSalesRep = !hasPermission('VIEW_ALL_CUSTOMERS');

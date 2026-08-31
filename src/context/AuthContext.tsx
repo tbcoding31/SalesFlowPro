@@ -59,7 +59,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (data.user) {
           setCurrentUser(data.user);
           setToken(savedToken);
-          if (data.user.role === 'SUPER_ADMIN' || !data.user.tenantId || data.user.tenantId === 'SYSTEM') {
+          if (data.user.role === 'SUPER_ADMIN' || !data.user.tenantId ) {
             setCurrentTenant(null);
           } else {
             setCurrentTenant({ id: data.user.tenantId, name: 'Active Tenant', status: 'ACTIVE' } as any);
@@ -213,7 +213,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.setItem(AUTH_USER_KEY, user.id);
       localStorage.setItem(AUTH_TOKEN_KEY, newToken);
 
-      if (user.role === 'SUPER_ADMIN' || !user.tenantId || user.tenantId === 'SYSTEM') {
+      if (user.role === 'SUPER_ADMIN' || !user.tenantId ) {
         setCurrentTenant(null);
       } else {
         setCurrentTenant({ id: user.tenantId, name: 'Active Tenant', status: 'ACTIVE' } as any);
@@ -255,7 +255,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const switchTenant = (tenantId: string) => {
-    if (tenantId === 'SYSTEM') {
+    if (tenantId === null) {
       setCurrentTenant(null);
     } else {
       setCurrentTenant({ id: tenantId, name: 'Selected Tenant', status: 'ACTIVE' } as any);
