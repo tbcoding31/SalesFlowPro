@@ -657,7 +657,7 @@ const setupEndpoint = (table: string) => {
         LEFT JOIN teams t ON t.id = tm.teamId
       `;
       const params: any[] = [];
-      const tenantForJoin = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId || 'SYSTEM');
+      const tenantForJoin = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId || null);
       params.push(tenantForJoin);
 
       const whereClauses: string[] = [];
@@ -1370,6 +1370,19 @@ const setupEndpoint = (table: string) => {
         }
 
         // Authoritative PIC validation on update (only if picId is being modified/reassigned)
+        
+        // Authoritative Customer validation on update
+        if (table === 'projects' && data.customerId && data.customerId !== existing[0].customerId) {
+          const authoritativeTenant = existing[0].tenantId;
+          const [custCheck]: any = await pool.query('SELECT tenantId FROM customers WHERE id = ?', [data.customerId]);
+          if (custCheck.length === 0) {
+            return res.status(404).json({ error: 'Referenced customer does not exist.', code: 'CUSTOMER_NOT_FOUND' });
+          }
+          if (custCheck[0].tenantId !== authoritativeTenant) {
+            return res.status(403).json({ error: 'Cross-tenant customer reference forbidden.', code: 'CROSS_TENANT_CUSTOMER' });
+          }
+        }
+  
         if (data.picId && data.picId !== existing[0].picId) {
           const picCheck = await validateAssignableTenantUser(pool, actorTenant, data.picId);
           if (!picCheck.valid) {
@@ -1479,7 +1492,7 @@ const setupEndpoint = (table: string) => {
         }
 
         // Domain Activity Emission and completion timestamp handling on specific PUT mutations
-        const targetTenant = actorTenant !== 'SYSTEM' ? actorTenant : (data.tenantId || 'SYSTEM');
+        const targetTenant = actorTenant !== 'SYSTEM' ? actorTenant : (data.tenantId || null);
         const nowFormatted = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
         if (table === 'tasks' && (data.statusId === 'COMPLETED' || data.status === 'COMPLETED')) {
@@ -2756,7 +2769,7 @@ app.get('/api/reports/sales', async (req, res) => {
 
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
 
   try {
     const { where, params } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'picId');
@@ -2869,7 +2882,7 @@ app.get('/api/reports/pipeline', async (req, res) => {
     return res.status(403).json({ error: 'Access denied. VIEW_REPORTS permission required.' });
   }
 
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
   const todayStr = getBusinessDate(new Date())!;
   const evaluatedAt = new Date().toISOString();
 
@@ -3293,7 +3306,7 @@ app.get('/api/reports/customers', async (req, res) => {
 
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
 
   try {
     const { where, params } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'picId');
@@ -3416,7 +3429,7 @@ app.get('/api/sales-targets', async (req, res) => {
 
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
 
   try {
     let effectiveScope = actorDataScope;
@@ -3507,7 +3520,7 @@ app.post('/api/sales-targets', async (req, res) => {
     return res.status(403).json({ error: 'Forbidden. Managing sales targets requires management permissions.', code: 'FORBIDDEN_MANAGE_TARGETS' });
   }
 
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.body.tenantId || 'SYSTEM');
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.body.tenantId || null);
   const data = { ...req.body, tenantId: targetTenant };
 
   const validation = validateSalesTargetInput(data);
@@ -3746,7 +3759,7 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
 
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
   const todayStr = getBusinessDate(new Date())!;
   const evaluatedAt = new Date().toISOString();
 
@@ -4157,7 +4170,7 @@ app.get('/api/sales-targets/coverage', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
   if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && targetTenant !== actorTenant) {
     return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
   }
@@ -4561,7 +4574,7 @@ app.get('/api/reports/pipeline-velocity', async (req, res) => {
   if (req.query.tenantId && actorRole !== 'SUPER_ADMIN' && actorTenant !== 'SYSTEM' && req.query.tenantId !== actorTenant) {
     return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
   }
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
 
   const todayStr = getBusinessDate(new Date()) || new Date().toISOString().slice(0, 10);
   const evaluatedAt = new Date().toISOString();
@@ -4945,7 +4958,7 @@ app.get('/api/tenant/analytics-settings', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
   if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && targetTenant !== actorTenant) {
     return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
   }
@@ -4997,7 +5010,7 @@ app.put('/api/tenant/analytics-settings', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.body.tenantId || 'SYSTEM');
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.body.tenantId || null);
   if (actorRole !== 'SUPER_ADMIN' && actorTenant && actorTenant !== 'SYSTEM' && targetTenant !== actorTenant) {
     return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
   }
@@ -5740,7 +5753,7 @@ app.get('/api/management/project-interventions', async (req, res) => {
   if (req.query.tenantId && actorRole !== 'SUPER_ADMIN' && actorTenant !== 'SYSTEM' && req.query.tenantId !== actorTenant) {
     return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
   }
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
 
   const todayStr = getBusinessDate(new Date()) || new Date().toISOString().slice(0, 10);
   const evaluatedAt = new Date().toISOString();
@@ -6693,7 +6706,7 @@ app.get('/api/management/project-intervention-history', async (req, res) => {
   if (req.query.tenantId && actorRole !== 'SUPER_ADMIN' && actorTenant !== 'SYSTEM' && req.query.tenantId !== actorTenant) {
     return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
   }
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
 
   try {
     const hasViewPerm = actorRole === 'SUPER_ADMIN' ||
@@ -6867,7 +6880,7 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
   if (req.query.tenantId && actorRole !== 'SUPER_ADMIN' && actorTenant !== 'SYSTEM' && req.query.tenantId !== actorTenant) {
     return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
   }
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
 
   try {
     const hasViewPerm = actorRole === 'SUPER_ADMIN' ||
@@ -7894,7 +7907,7 @@ app.post('/api/maintenance_cadences/:id/generate-next', async (req, res) => {
   await connection.beginTransaction();
 
   try {
-    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
 
     // 1. Row Lock Cadence
     const [cadRows]: any = await connection.query(`
@@ -8315,7 +8328,7 @@ app.get(['/api/sales/agenda', '/api/agenda'], async (req, res) => {
 
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
-  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+  const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
 
   try {
     const todayStr = (req.query.date as string) || getBusinessDate(new Date())!;
@@ -8603,7 +8616,7 @@ app.get('/api/customers/:id/next-action', async (req, res) => {
 
   const customerId = req.params.id;
   try {
-    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
     const { where: custWhere, params: custParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'c.picId');
 
     const [custRows]: any = await pool.query(`
@@ -8671,7 +8684,7 @@ app.get('/api/projects/:id/next-action', async (req, res) => {
 
   const projectId = req.params.id;
   try {
-    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
     const { where: projWhere, params: projParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'p.picId');
 
     const [projRows]: any = await pool.query(`
@@ -8742,7 +8755,7 @@ app.get('/api/customers/:id/timeline', async (req, res) => {
   const offset = (page - 1) * pageSize;
 
   try {
-    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
 
     // Security check: ensure customer belongs to tenant
     const [custRows]: any = await pool.query(`SELECT id FROM customers WHERE id = ? AND tenantId = ?`, [customerId, targetTenant]);
@@ -8803,7 +8816,7 @@ app.get('/api/customers/:id/summary', async (req, res) => {
 
   const customerId = req.params.id;
   try {
-    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
     const { where: custWhere, params: custParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'c.picId');
 
     const [custRows]: any = await pool.query(`
@@ -8895,7 +8908,7 @@ app.get('/api/projects/:id/timeline', async (req, res) => {
   const offset = (page - 1) * pageSize;
 
   try {
-    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
 
     const [projRows]: any = await pool.query(`SELECT id FROM projects WHERE id = ? AND tenantId = ?`, [projectId, targetTenant]);
     if (projRows.length === 0) return res.status(404).json({ error: 'Not Found' });
@@ -8959,7 +8972,7 @@ app.get('/api/projects/pipeline', async (req, res) => {
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
-    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
     const { where: projWhere, params: projParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'picId');
 
     // 1. Aggregate query for complete counts/values
@@ -9008,7 +9021,7 @@ app.get('/api/projects/:id/summary', async (req, res) => {
 
   const projectId = req.params.id;
   try {
-    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
     const { where: projWhere, params: projParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'p.picId');
 
     const [projRows]: any = await pool.query(`
@@ -9067,7 +9080,7 @@ app.get('/api/sales/attention', async (req, res) => {
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
-    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
     const todayStr = req.query.date ? String(req.query.date).trim() : getBusinessDate(new Date())!;
     const evaluatedAt = new Date().toISOString();
 
@@ -9415,7 +9428,7 @@ app.get('/api/management/control-tower', async (req, res) => {
   }
 
   try {
-    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || 'SYSTEM');
+    const targetTenant = (actorTenant && actorTenant !== 'SYSTEM') ? actorTenant : (req.query.tenantId as string || null);
     const todayStr = req.query.date ? String(req.query.date).trim() : getBusinessDate(new Date())!;
     const evaluatedAt = new Date().toISOString();
 
