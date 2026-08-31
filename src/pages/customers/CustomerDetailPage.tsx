@@ -1,6 +1,7 @@
 import { CustomerVisitsTab } from './components/CustomerVisitsTab';
 import { CustomerFollowUpsTab } from './components/CustomerFollowUpsTab';
 import { CustomerTasksTab } from './components/CustomerTasksTab';
+import { CustomerProjectsTab } from './components/CustomerProjectsTab';
 import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
@@ -1601,6 +1602,9 @@ const loadAllCustomerData = async () => {
       )}
       {activeTab === 'followups' && (<CustomerFollowUpsTab customerId={id || ''} tenantUsers={tenantUsers} projects={projects} />)}
         {activeTab === 'projects' && (
+        <CustomerProjectsTab customerId={id || ''} tenantUsers={tenantUsers} customer={customer} />
+      )}
+      {false && (
         <div className="space-y-6">
           {/* SUMMARY CARDS */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">

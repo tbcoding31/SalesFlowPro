@@ -924,6 +924,11 @@ const setupEndpoint = (table: string) => {
       }
     }
 
+    if (req.query.stageId && req.query.stageId !== 'ALL') {
+      whereClauses.push('stageId = ?');
+      params.push(req.query.stageId);
+    }
+
     if (req.query.priority && req.query.priority !== 'ALL') {
       whereClauses.push('priorityId = ?');
       params.push(req.query.priority);
