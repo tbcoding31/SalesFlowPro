@@ -1,3 +1,5 @@
+import { API_BASE, getAuthHeaders } from '../../../services/crmApi';
+import { crmApi } from '../../../services/crmApi';
 import React from 'react';
 import { Customer, Visit, Task, Project, Activity, AttentionSignal, ProjectAttentionSummary } from '../../../types';
 import { CustomerAttentionTab } from './CustomerAttentionTab';
@@ -54,6 +56,30 @@ export const CustomerOverviewTab: React.FC<CustomerOverviewTabProps> = ({
   onCreateNote,
   onChangePic
 }) => {
+    const [localVisits, setLocalVisits] = React.useState<any[]>([]);
+  const [localTasks, setLocalTasks] = React.useState<any[]>([]);
+  const [tasksError, setTasksError] = React.useState(false);
+  const [visitsError, setVisitsError] = React.useState(false);
+
+  React.useEffect(() => {
+    if (customer?.id) {
+       // Fetch upcoming tasks
+       crmApi.fetchTasks({ 
+         customerId: customer.id, 
+         pageSize: 5, 
+         status: 'OPEN',
+         sortBy: 'dueDate', 
+         sortOrder: 'ASC' 
+       }).then(res => setLocalTasks(res.data || [])).catch(() => setTasksError(true));
+       
+       // Fetch upcoming visits using generic collection (need to pass query params via URL)
+       // Since fetchCollection doesn't easily support all this, let's just fetch manually
+       fetch(`${API_BASE}/visits?customerId=${customer.id}&status=OPEN&sortBy=visitDate&sortOrder=ASC&pageSize=5`, { headers: getAuthHeaders() })
+         .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+         .then(d => setLocalVisits(d.data || d || []))
+         .catch(() => setVisitsError(true));
+    }
+  }, [customer?.id]);
   return (
     <div className="space-y-6 animate-fade-in pb-12">
       {/* SECTION 1 — CUSTOMER SUMMARY & SECTION 2 — KEY METRICS */}
@@ -263,37 +289,43 @@ export const CustomerOverviewTab: React.FC<CustomerOverviewTabProps> = ({
               </div>
 
               <div className="space-y-3">
-                {visits.filter((v) => v.status === 'PLANNED').map((v) => (
-                  <div key={v.id} className="p-3 bg-[#e1dfff]/30 rounded-lg border border-[#c1beff] text-xs flex justify-between items-center">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="px-1.5 py-0.5 bg-[#4744e5] text-white text-[9px] font-bold rounded">VISIT</span>
-                        <span className="font-bold text-[#1a1c1c]">{v.title}</span>
+                {visitsError ? (
+                  <div className="text-center py-6 text-red-500 text-sm">Failed to load visits</div>
+                ) : localVisits.length === 0 ? (
+                  <div className="text-center py-6 text-[#767587] text-sm">No upcoming visits</div>
+                ) : (
+                  localVisits.map((v: any) => (
+                    <div key={v.id} className="p-3 bg-[#f9f9f9] rounded-lg border border-[#E1E1E1] text-xs flex justify-between items-center">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="px-1.5 py-0.5 bg-[#e6f0ff] text-[#0052cc] text-[9px] font-bold rounded">VISIT</span>
+                          <span className="font-bold text-[#1a1c1c]">{v.title}</span>
+                        </div>
+                        <div className="text-[#767587] mt-1">{new Date(v.visitDate).toLocaleDateString()}</div>
                       </div>
-                      <span className="text-[11px] text-[#767587] mt-1 block">Date: {v.visitDate} ({v.startTime}) • PIC: {v.picName}</span>
+                      <button onClick={onViewVisits} className="text-[#0052cc] font-bold hover:underline">View</button>
                     </div>
-                    <span className="px-2 py-0.5 bg-[#00C875]/10 text-[#008f53] text-[10px] font-bold rounded-full">
-                      {v.status}
-                    </span>
-                  </div>
-                ))}
+                  ))
+                )}
 
-                {tasks.filter((t) => t.status !== 'COMPLETED').map((t) => (
-                  <div key={t.id} className="p-3 bg-[#f9f9f9] rounded-lg border border-[#E1E1E1] text-xs flex justify-between items-center">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="px-1.5 py-0.5 bg-slate-200 text-slate-700 text-[9px] font-bold rounded">TASK</span>
-                        <span className="font-bold text-[#1a1c1c]">{t.title}</span>
+                {tasksError ? (
+                  <div className="text-center py-6 text-red-500 text-sm">Failed to load tasks</div>
+                ) : localTasks.length === 0 ? (
+                  <div className="text-center py-6 text-[#767587] text-sm">No upcoming tasks</div>
+                ) : (
+                  localTasks.map((t: any) => (
+                    <div key={t.id} className="p-3 bg-[#f9f9f9] rounded-lg border border-[#E1E1E1] text-xs flex justify-between items-center">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="px-1.5 py-0.5 bg-slate-200 text-slate-700 text-[9px] font-bold rounded">TASK</span>
+                          <span className="font-bold text-[#1a1c1c]">{t.title}</span>
+                        </div>
+                        <div className="text-[#767587] mt-1">{new Date(t.dueDate).toLocaleDateString()}</div>
                       </div>
-                      <span className="text-[11px] text-[#767587] mt-1 block">Due: {t.dueDate}</span>
+                      <button onClick={onViewTasks} className="text-[#0052cc] font-bold hover:underline">View</button>
                     </div>
-                    <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
-                      t.priority === 'HIGH' ? 'bg-[#FF3366]/10 text-[#FF3366]' : 'bg-slate-100 text-slate-600'
-                    }`}>
-                      {t.priority}
-                    </span>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             </div>
           </div>

@@ -1,5 +1,6 @@
 import { CustomerVisitsTab } from './components/CustomerVisitsTab';
 import { CustomerFollowUpsTab } from './components/CustomerFollowUpsTab';
+import { CustomerTasksTab } from './components/CustomerTasksTab';
 import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
@@ -166,6 +167,7 @@ export const CustomerDetailPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant, currentUser, hasPermission } = useAuth();
   const tenantId = currentTenant?.id ;
+  const todayISO = new Date().toISOString().split('T')[0];
   const { timelineEvents, timelinePage, timelineHasMore, isLoadingTimeline, error: timelineError, loadTimeline } = useCustomerTimeline(id || '', tenantId);
 
   const [customer, setCustomer] = useState<Customer | undefined>(undefined);
@@ -180,7 +182,6 @@ export const CustomerDetailPage: React.FC = () => {
   const [showEditCustomerModal, setShowEditCustomerModal] = useState(false);
   const [showChangePicModal, setShowChangePicModal] = useState(false);
   const [showVisitModal, setShowVisitModal] = useState(false);
-  const [showTaskModal, setShowTaskModal] = useState(false);
   const [showFollowUpModal, setShowFollowUpModal] = useState(false);
   const [showOppModal, setShowOppModal] = useState(false);
   const [showNoteModal, setShowNoteModal] = useState(false);
@@ -238,39 +239,14 @@ export const CustomerDetailPage: React.FC = () => {
   const [cancelReason, setCancelReason] = useState('');
 
   // Task Form state
-  const [taskTitle, setTaskTitle] = useState('');
-  const [taskPriority, setTaskPriority] = useState<any>('HIGH');
-  const [taskDueDate, setTaskDueDate] = useState(new Date().toISOString().split('T')[0]);
-  const [taskDescription, setTaskDescription] = useState('');
-  const [taskPicId, setTaskPicId] = useState('');
-  const [taskRelatedVisitId, setTaskRelatedVisitId] = useState('');
-  const [taskRelatedOppId, setTaskRelatedOppId] = useState('');
 
   // Task Filters State
-  const [taskSearch, setTaskSearch] = useState('');
-  const [taskStatusFilter, setTaskStatusFilter] = useState('ALL');
-  const [taskPriorityFilter, setTaskPriorityFilter] = useState('ALL');
-  const [taskPicFilter, setTaskPicFilter] = useState('ALL');
-  const [taskDueDateFilter, setTaskDueDateFilter] = useState('');
-  const [taskOppFilter, setTaskOppFilter] = useState('ALL');
 
   // Task Modals State
-  const [viewingTask, setViewingTask] = useState<Task | null>(null);
-  const [editingTask, setEditingTask] = useState<Task | null>(null);
-  const [reassigningTask, setReassigningTask] = useState<Task | null>(null);
 
   // Edit Task Form State
-  const [editTaskTitle, setEditTaskTitle] = useState('');
-  const [editTaskDescription, setEditTaskDescription] = useState('');
-  const [editTaskPriority, setEditTaskPriority] = useState<TaskPriority>('HIGH');
-  const [editTaskStatus, setEditTaskStatus] = useState<TaskStatus>('TODO');
-  const [editTaskDueDate, setEditTaskDueDate] = useState('');
-  const [editTaskPicId, setEditTaskPicId] = useState('');
-  const [editTaskRelatedVisitId, setEditTaskRelatedVisitId] = useState('');
-  const [editTaskRelatedOppId, setEditTaskRelatedOppId] = useState('');
 
   // Reassign Task PIC State
-  const [reassignTaskPicId, setReassignTaskPicId] = useState('');
   const [reassignSearch, setReassignSearch] = useState('');
 
   // Follow-Up List State & Filters
@@ -360,7 +336,6 @@ export const CustomerDetailPage: React.FC = () => {
   }
 
   
-  const [tasksList, setTasksList] = useState<Task[]>([]);
   const [oppsList, setOppsList] = useState<Project[]>([]);
   const [activitiesList, setActivitiesList] = useState<Activity[]>([]);
 
@@ -371,10 +346,10 @@ export const CustomerDetailPage: React.FC = () => {
 const loadAllCustomerData = async () => {
     if (!id) return;
     try {
-      const [custSummary, vList, tList, pList, aList, cList, uList, naRes] = await Promise.all([
+      const [custSummary, vList, pList, aList, cList, uList, naRes] = await Promise.all([
         crmApi.fetchCustomerSummary(id),
         Promise.resolve([]), /* visits moved to tab */
-        crmApi.fetchCollection<Task>('tasks', tenantId),
+        
         crmApi.fetchCollection<Project>('projects', tenantId),
         Promise.resolve([]),
         crmApi.fetchCollection<CustomerContact>('customer_contacts', tenantId),
@@ -403,7 +378,7 @@ const loadAllCustomerData = async () => {
       }
 
       
-      setTasksList(tList.filter((t: any) => t.customerId === id));
+      
       setOppsList(pList.filter((p: any) => p.customerId === id));
       setActivitiesList(aList.filter((a: any) => a.customerId === id || a.entityId === id));
       setContactsList(cList.filter((c: any) => c.customerId === id));
@@ -428,7 +403,7 @@ const loadAllCustomerData = async () => {
   const refreshOpps = () => loadAllCustomerData();
 
   
-  const tasks: Task[] = tasksList;
+  const tasks: Task[] = []; // tasks are now handled in CustomerTasksTab
   const followups: FollowUp[] = followupsList;
   const projects: Project[] = oppsList;
   const activities: Activity[] = activitiesList;
@@ -647,7 +622,7 @@ const loadAllCustomerData = async () => {
       if (v) setViewingVisit(v);
     } else if (act.entityType === 'TASK') {
       const t = tasks.find((item) => item.id === act.entityId) || act.recordObj;
-      if (t) setViewingTask(t);
+      if (t) setActiveTab('tasks');
     } else if (act.entityType === 'PROJECT') {
       const o = projects.find((item) => item.id === act.entityId) || act.recordObj;
       if (o) setViewingOpp(o);
@@ -724,79 +699,6 @@ const loadAllCustomerData = async () => {
     })
     .sort((a, b) => (a.visitDate || "").localeCompare(b.visitDate || ""));
   const nextVisitDate = upcomingVisitsSorted.length > 0 ? `${upcomingVisitsSorted[0].visitDate} (${upcomingVisitsSorted[0].startTime})` : 'None scheduled';
-
-  // Role Scope logic for Tasks
-  const scopedTasks = tasks.filter((t) => {
-    if (!hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS')) {
-      return t.picId === currentUser.id;
-    }
-    if (hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS') && currentUser.teamId) {
-      const picUser = tenantUsers.find((u) => u.id === t.picId);
-      return t.picId === currentUser.id || picUser?.teamId === currentUser.teamId;
-    }
-    return true; // Sales Manager, Tenant Admin, Super Admin
-  });
-
-  const todayISO = new Date().toISOString().split('T')[0];
-
-  // Filtered Tasks
-  const filteredTasks = scopedTasks.filter((t) => {
-    if (taskSearch.trim()) {
-      const q = taskSearch.toLowerCase();
-      const picUser = tenantUsers.find((u) => u.id === t.picId);
-      const relVisit = [].find((v) => v.id === t.relatedVisitId);
-      const relOpp = projects.find((o) => o.id === t.relatedProjectId);
-      const matches =
-        (t.title || "").toLowerCase().includes(q) ||
-        (t.description && (t.description || "").toLowerCase().includes(q)) ||
-        (t.picName || "").toLowerCase().includes(q) ||
-        (picUser?.teamName && (picUser.teamName || "").toLowerCase().includes(q)) ||
-        (picUser?.department && (picUser.department || "").toLowerCase().includes(q)) ||
-        (relVisit && (relVisit.title || "").toLowerCase().includes(q)) ||
-        (relOpp && (relOpp.name || "").toLowerCase().includes(q));
-      if (!matches) return false;
-    }
-
-    if (taskStatusFilter !== 'ALL') {
-      const isOverdue = t.dueDate < todayISO && t.status !== 'COMPLETED' && t.status !== 'CANCELLED';
-      if (taskStatusFilter === 'OVERDUE') {
-        if (!isOverdue) return false;
-      } else if (taskStatusFilter === 'OPEN' || taskStatusFilter === 'TODO') {
-        if (t.status !== 'TODO' && t.status !== 'IN_PROGRESS') return false;
-      } else if (t.status !== taskStatusFilter) {
-        return false;
-      }
-    }
-
-    if (taskPriorityFilter !== 'ALL' && t.priority !== taskPriorityFilter) {
-      return false;
-    }
-
-    if (taskPicFilter !== 'ALL' && t.picId !== taskPicFilter) {
-      return false;
-    }
-
-    if (taskDueDateFilter && t.dueDate !== taskDueDateFilter) {
-      return false;
-    }
-
-    if (taskOppFilter !== 'ALL') {
-      if (taskOppFilter === 'NONE') {
-        if (t.relatedProjectId) return false;
-      } else if (t.relatedProjectId !== taskOppFilter) {
-        return false;
-      }
-    }
-
-    return true;
-  });
-
-  // Task Summary Metrics
-  const totalTasksCount = scopedTasks.length;
-  const openTasksCount = scopedTasks.filter((t) => t.status === 'TODO').length;
-  const inProgressTasksCount = scopedTasks.filter((t) => t.status === 'IN_PROGRESS').length;
-  const completedTasksCount = scopedTasks.filter((t) => t.status === 'COMPLETED').length;
-  const overdueTasksCount = scopedTasks.filter((t) => t.dueDate < todayISO && t.status !== 'COMPLETED' && t.status !== 'CANCELLED').length;
 
   // Role Scope logic for Follow-ups
   const scopedFollowups = followups.filter((f) => {
@@ -1481,113 +1383,6 @@ const loadAllCustomerData = async () => {
     });
   };
 
-  const handleCreateTask = (e: React.FormEvent) => {
-    e.preventDefault();
-    const assignedUser = tenantUsers.find((u) => u.id === (taskPicId || currentUser?.id || 'USR-005'));
-    const newTask: Partial<Task> = {
-      id: `TSK-${Math.floor(1000 + Math.random() * 9000)}`,
-      tenantId,
-      title: taskTitle,
-      description: taskDescription,
-      customerId: customer.id,
-      customerName: customer.name,
-      customerCode: customer.code,
-      picId: assignedUser?.id || currentUser?.id || 'USR-005',
-      picName: assignedUser?.name || currentUser?.name || 'Budi Santoso',
-      picAvatar: assignedUser?.avatarUrl,
-      priority: taskPriority,
-      status: 'TODO',
-      dueDate: taskDueDate,
-      createdAt: new Date().toISOString().split('T')[0],
-      relatedVisitId: taskRelatedVisitId || undefined,
-      relatedProjectId: taskRelatedOppId || undefined,
-    };
-
-    crmApi.createRecord('tasks', newTask).then(() => {
-      refreshTasks();
-      setShowTaskModal(false);
-      setTaskTitle('');
-      setTaskDescription('');
-      setTaskPicId('');
-      setTaskRelatedVisitId('');
-      setTaskRelatedOppId('');
-    });
-  };
-
-  const handleToggleCompleteTask = (t: Task) => {
-    const isCompleted = t.status === 'COMPLETED';
-    const updatedStatus: TaskStatus = isCompleted ? 'TODO' : 'COMPLETED';
-    const updated: Partial<Task> = {
-      ...t,
-      status: updatedStatus,
-      completedAt: isCompleted ? undefined : new Date().toISOString().split('T')[0],
-    };
-    crmApi.updateRecord('tasks', t.id, updated).then(() => {
-      refreshTasks();
-    });
-  };
-
-  const openEditTaskModal = (t: Task) => {
-    setEditingTask(t);
-    setEditTaskTitle(t.title);
-    setEditTaskDescription(t.description || '');
-    setEditTaskPriority(t.priority);
-    setEditTaskStatus(t.status);
-    setEditTaskDueDate(t.dueDate);
-    setEditTaskPicId(t.picId);
-    setEditTaskRelatedVisitId(t.relatedVisitId || '');
-    setEditTaskRelatedOppId(t.relatedProjectId || '');
-  };
-
-  const handleSaveEditTask = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingTask) return;
-    const assignedUser = tenantUsers.find((u) => u.id === editTaskPicId);
-    const updated: Partial<Task> = {
-      ...editingTask,
-      title: editTaskTitle,
-      description: editTaskDescription,
-      priority: editTaskPriority,
-      status: editTaskStatus,
-      dueDate: editTaskDueDate,
-      picId: assignedUser?.id || editingTask.picId,
-      picName: assignedUser?.name || editingTask.picName,
-      picAvatar: assignedUser?.avatarUrl || editingTask.picAvatar,
-      relatedVisitId: editTaskRelatedVisitId || undefined,
-      relatedProjectId: editTaskRelatedOppId || undefined,
-      completedAt: editTaskStatus === 'COMPLETED' ? (editingTask.completedAt || new Date().toISOString().split('T')[0]) : undefined,
-    };
-    crmApi.updateRecord('tasks', editingTask.id, updated).then(() => {
-      refreshTasks();
-      setEditingTask(null);
-    });
-  };
-
-  const openReassignTaskModal = (t: Task) => {
-    setReassigningTask(t);
-    setReassignSearch('');
-    const firstOther = tenantUsers.find((u) => u.id !== t.picId);
-    setReassignTaskPicId(firstOther ? firstOther.id : t.picId);
-  };
-
-  const handleConfirmReassignTask = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!reassigningTask) return;
-    const newPic = tenantUsers.find((u) => u.id === reassignTaskPicId);
-    if (!newPic) return;
-
-    const updated: Partial<Task> = {
-      ...reassigningTask,
-      picId: newPic.id,
-      picName: newPic.name,
-      picAvatar: newPic.avatarUrl,
-    };
-
-    crmApi.updateRecord('tasks', reassigningTask.id, updated).then(() => {
-      refreshTasks();
-      setReassigningTask(null);
-    });
-  };
 
 
 
@@ -1709,7 +1504,7 @@ const loadAllCustomerData = async () => {
           </button>
 
           <button
-            onClick={() => setShowTaskModal(true)}
+            onClick={() => setActiveTab('tasks')}
             className="px-3 py-1.5 bg-white border border-[#E1E1E1] text-[#1a1c1c] font-semibold text-xs rounded-lg hover:border-[#4744e5] hover:text-[#4744e5] transition-colors flex items-center gap-1.5 cursor-pointer"
           >
             <span className="material-symbols-outlined text-[16px]">task_alt</span>
@@ -1782,7 +1577,7 @@ const loadAllCustomerData = async () => {
             primaryContact={primaryContact}
             activities={activitiesList}
             visits={[]}
-            tasks={tasksList}
+            tasks={[]}
             projects={oppsList}
             customerAttentionSignals={customerAttentionSignals}
             projectAttentionSummary={projectAttentionSummary}
@@ -1792,7 +1587,7 @@ const loadAllCustomerData = async () => {
             onViewTasks={() => setActiveTab('tasks')}
             onCreateProject={() => setShowOppModal(true)}
             onCreateVisit={() => setShowVisitModal(true)}
-            onCreateTask={() => setShowTaskModal(true)}
+            onCreateTask={() => setActiveTab('tasks')}
             onCreateNote={() => setShowNoteModal(true)}
             onChangePic={() => setShowChangePicModal(true)}
           />
@@ -1802,360 +1597,8 @@ const loadAllCustomerData = async () => {
       {activeTab === 'visits' && (<CustomerVisitsTab customerId={id || ''} tenantUsers={tenantUsers} />)}
 
       {activeTab === 'tasks' && (
-        <div className="space-y-6">
-          {/* TASKS TAB HEADER & ACTION */}
-          <div className="bg-white p-6 rounded-xl border border-[#E1E1E1] shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-[#4744e5]">check_box</span>
-                <h2 className="text-lg font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">Customer Sales Tasks & Action Items</h2>
-              </div>
-              <p className="text-xs text-[#767587] mt-0.5">
-                Track follow-ups, deliverable deadlines, PIC ownership, and task links to visits and deal projects for {customer.name}.
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                setTaskPicId(customer.assignedPicId || currentUser?.id || 'USR-005');
-                setShowTaskModal(true);
-              }}
-              className="px-4 py-2 bg-[#4744e5] hover:bg-[#3834d0] text-white text-xs font-bold rounded-lg flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors self-start md:self-auto"
-            >
-              <span className="material-symbols-outlined text-[18px]">add</span>
-              <span>Create New Task</span>
-            </button>
-          </div>
-
-          {/* TASK SUMMARY METRICS */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-            <div className="bg-white p-4 rounded-xl border border-[#E1E1E1] shadow-xs">
-              <span className="text-[11px] font-semibold text-[#767587] block uppercase tracking-wider">Total Tasks</span>
-              <span className="text-xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk'] mt-1 block">
-                {totalTasksCount}
-              </span>
-            </div>
-            <div className="bg-white p-4 rounded-xl border border-[#f59e0b]/30 shadow-xs bg-[#f59e0b]/5">
-              <span className="text-[11px] font-semibold text-[#d97706] block uppercase tracking-wider">Open Tasks</span>
-              <span className="text-xl font-extrabold text-[#d97706] font-['Hanken_Grotesk'] mt-1 block">
-                {openTasksCount}
-              </span>
-            </div>
-            <div className="bg-white p-4 rounded-xl border border-[#3b82f6]/30 shadow-xs bg-[#3b82f6]/5">
-              <span className="text-[11px] font-semibold text-[#2563eb] block uppercase tracking-wider">In Progress</span>
-              <span className="text-xl font-extrabold text-[#2563eb] font-['Hanken_Grotesk'] mt-1 block">
-                {inProgressTasksCount}
-              </span>
-            </div>
-            <div className="bg-white p-4 rounded-xl border border-[#00C875]/30 shadow-xs bg-[#00C875]/5">
-              <span className="text-[11px] font-semibold text-[#008f53] block uppercase tracking-wider">Completed</span>
-              <span className="text-xl font-extrabold text-[#008f53] font-['Hanken_Grotesk'] mt-1 block">
-                {completedTasksCount}
-              </span>
-            </div>
-            <div className="bg-white p-4 rounded-xl border border-[#ba1a1a]/30 shadow-xs bg-[#ba1a1a]/5 col-span-2 sm:col-span-1">
-              <span className="text-[11px] font-semibold text-[#ba1a1a] block uppercase tracking-wider">Overdue</span>
-              <span className="text-xl font-extrabold text-[#ba1a1a] font-['Hanken_Grotesk'] mt-1 block">
-                {overdueTasksCount}
-              </span>
-            </div>
-          </div>
-
-          {/* TASK FILTERS SECTION */}
-          <div className="bg-white p-4 rounded-xl border border-[#E1E1E1] shadow-xs space-y-3 text-xs">
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-[#1a1c1c] uppercase text-[11px] tracking-wider flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-[16px] text-[#767587]">filter_list</span>
-                <span>Filter Tasks</span>
-              </span>
-              {(taskSearch || taskStatusFilter !== 'ALL' || taskPriorityFilter !== 'ALL' || taskPicFilter !== 'ALL' || taskDueDateFilter || taskOppFilter !== 'ALL') && (
-                <button
-                  onClick={() => {
-                    setTaskSearch('');
-                    setTaskStatusFilter('ALL');
-                    setTaskPriorityFilter('ALL');
-                    setTaskPicFilter('ALL');
-                    setTaskDueDateFilter('');
-                    setTaskOppFilter('ALL');
-                  }}
-                  className="text-xs text-[#4744e5] hover:underline font-bold cursor-pointer"
-                >
-                  Reset Filters
-                </button>
-              )}
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5">
-              {/* Search */}
-              <div className="relative col-span-1 sm:col-span-2 lg:col-span-1">
-                <span className="material-symbols-outlined absolute left-2.5 top-2 text-[#767587] text-[16px]">search</span>
-                <input
-                  type="text"
-                  placeholder="Search tasks..."
-                  value={taskSearch}
-                  onChange={(e) => setTaskSearch(e.target.value)}
-                  className="w-full pl-8 pr-3 py-1.5 border border-[#E1E1E1] rounded-lg bg-white"
-                />
-              </div>
-
-              {/* Status Filter */}
-              <div>
-                <select
-                  value={taskStatusFilter}
-                  onChange={(e) => setTaskStatusFilter(e.target.value)}
-                  className="w-full px-2.5 py-1.5 border border-[#E1E1E1] rounded-lg bg-white font-medium"
-                >
-                  <option value="ALL">All Statuses</option>
-                  <option value="OPEN">Open (To Do)</option>
-                  <option value="IN_PROGRESS">In Progress</option>
-                  <option value="COMPLETED">Completed</option>
-                  <option value="OVERDUE">Overdue</option>
-                  <option value="CANCELLED">Cancelled</option>
-                </select>
-              </div>
-
-              {/* Priority Filter */}
-              <div>
-                <select
-                  value={taskPriorityFilter}
-                  onChange={(e) => setTaskPriorityFilter(e.target.value)}
-                  className="w-full px-2.5 py-1.5 border border-[#E1E1E1] rounded-lg bg-white font-medium"
-                >
-                  <option value="ALL">All Priorities</option>
-                  <option value="URGENT">Urgent</option>
-                  <option value="HIGH">High</option>
-                  <option value="MEDIUM">Medium</option>
-                  <option value="LOW">Low</option>
-                </select>
-              </div>
-
-              {/* PIC Filter */}
-              <div>
-                <select
-                  value={taskPicFilter}
-                  onChange={(e) => setTaskPicFilter(e.target.value)}
-                  className="w-full px-2.5 py-1.5 border border-[#E1E1E1] rounded-lg bg-white font-medium"
-                >
-                  <option value="ALL">All Assigned PICs</option>
-                  {tenantUsers.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Due Date Filter */}
-              <div>
-                <input
-                  type="date"
-                  value={taskDueDateFilter}
-                  onChange={(e) => setTaskDueDateFilter(e.target.value)}
-                  className="w-full px-2.5 py-1.5 border border-[#E1E1E1] rounded-lg bg-white text-[11px]"
-                  title="Filter by Exact Due Date"
-                />
-              </div>
-
-              {/* Related Project Filter */}
-              <div>
-                <select
-                  value={taskOppFilter}
-                  onChange={(e) => setTaskOppFilter(e.target.value)}
-                  className="w-full px-2.5 py-1.5 border border-[#E1E1E1] rounded-lg bg-white font-medium truncate"
-                >
-                  <option value="ALL">All Related Deals</option>
-                  <option value="NONE">No Project</option>
-                  {projects.map((o) => (
-                    <option key={o.id} value={o.id}>
-                      {o.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </div>
-
-          {/* TASK TABLE */}
-          <div className="bg-white rounded-xl border border-[#E1E1E1] shadow-xs overflow-hidden">
-            <div className="p-4 border-b border-[#E1E1E1] flex justify-between items-center bg-[#fcfcfc]">
-              <span className="text-xs font-bold text-[#1a1c1c]">
-                Showing {filteredTasks.length} of {scopedTasks.length} tasks
-              </span>
-              <span className="text-[11px] text-[#767587]">
-                Scope: {!hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS') ? 'Own Tasks' : hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS') ? 'Team Scope' : 'Organization Scope'}
-              </span>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-[#f9f9f9] border-b border-[#E1E1E1] text-[10px] font-extrabold uppercase text-[#767587]">
-                  <tr>
-                    <th className="py-3 px-4">Task Details</th>
-                    <th className="py-3 px-4">Status</th>
-                    <th className="py-3 px-4">Priority</th>
-                    <th className="py-3 px-4">PIC & Ownership</th>
-                    <th className="py-3 px-4">Due Date</th>
-                    <th className="py-3 px-4">Related Visit</th>
-                    <th className="py-3 px-4">Related Project</th>
-                    <th className="py-3 px-4 text-center">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#E1E1E1]">
-                  {filteredTasks.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="py-8 text-center text-[#767587]">
-                        No tasks found matching your filters.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredTasks.map((t) => {
-                      const picUser = tenantUsers.find((u) => u.id === t.picId);
-                      const relVisit = [].find((v) => v.id === t.relatedVisitId);
-                      const relOpp = projects.find((o) => o.id === t.relatedProjectId);
-                      const isOverdue = t.dueDate < todayISO && t.status !== 'COMPLETED' && t.status !== 'CANCELLED';
-
-                      return (
-                        <tr key={t.id} className="hover:bg-[#fcfcfc] transition-colors">
-                          {/* Task Title & Desc */}
-                          <td className="py-3 px-4 max-w-[240px]">
-                            <div className="flex items-center gap-1.5 mb-0.5">
-                              <span className="text-[10px] font-mono bg-[#f0f0f0] px-1.5 py-0.5 rounded text-[#767587]">
-                                #{t.id}
-                              </span>
-                              <span className="font-bold text-[#1a1c1c] text-xs line-clamp-1">{t.title}</span>
-                            </div>
-                            {t.description && (
-                              <p className="text-[11px] text-[#767587] line-clamp-2 mt-0.5">{t.description}</p>
-                            )}
-                          </td>
-
-                          {/* Status */}
-                          <td className="py-3 px-4 whitespace-nowrap">
-                            {renderTaskStatusBadge(t.status, t.dueDate)}
-                          </td>
-
-                          {/* Priority */}
-                          <td className="py-3 px-4 whitespace-nowrap">
-                            {renderTaskPriorityBadge(t.priority)}
-                          </td>
-
-                          {/* PIC Ownership */}
-                          <td className="py-3 px-4 whitespace-nowrap">
-                            <div className="flex items-center gap-2">
-                              {t.picAvatar ? (
-                                <img src={t.picAvatar} alt={t.picName} className="w-7 h-7 rounded-full object-cover border border-[#E1E1E1]" />
-                              ) : (
-                                <div className="w-7 h-7 rounded-full bg-[#4744e5]/10 text-[#4744e5] font-bold text-[10px] flex items-center justify-center">
-                                  {(t.picName || "U").charAt(0)}
-                                </div>
-                              )}
-                              <div>
-                                <span className="font-bold text-[#1a1c1c] block text-xs">{t.picName}</span>
-                                <div className="flex items-center gap-1 text-[10px] text-[#767587] mt-0.5">
-                                  <span className="bg-[#f0f0f0] px-1 py-0.2 rounded font-medium">
-                                    {picUser?.teamName || picUser?.teamId || customer.teamName || 'Sales Team'}
-                                  </span>
-                                  <span>•</span>
-                                  <span>{picUser?.department || picUser?.roleName || 'Sales'}</span>
-                                </div>
-                              </div>
-                            </div>
-                          </td>
-
-                          {/* Due Date */}
-                          <td className="py-3 px-4 whitespace-nowrap">
-                            <div className="flex items-center gap-1">
-                              <span className={`material-symbols-outlined text-[14px] ${isOverdue ? 'text-[#ba1a1a]' : 'text-[#767587]'}`}>
-                                {isOverdue ? 'warning' : 'event'}
-                              </span>
-                              <span className={`font-semibold ${isOverdue ? 'text-[#ba1a1a] font-bold' : 'text-[#1a1c1c]'}`}>
-                                {t.dueDate}
-                              </span>
-                            </div>
-                          </td>
-
-                          {/* Related Visit */}
-                          <td className="py-3 px-4 max-w-[160px]">
-                            {relVisit ? (
-                              <span className="text-[11px] text-[#4744e5] font-semibold bg-[#4744e5]/5 px-2 py-1 rounded inline-flex items-center gap-1 truncate max-w-full">
-                                <span className="material-symbols-outlined text-[13px]">route</span>
-                                <span className="truncate">{relVisit.title}</span>
-                              </span>
-                            ) : (
-                              <span className="text-[11px] text-[#a0a0a0] italic">—</span>
-                            )}
-                          </td>
-
-                          {/* Related Project */}
-                          <td className="py-3 px-4 max-w-[160px]">
-                            {relOpp ? (
-                              <span className="text-[11px] text-[#008f53] font-semibold bg-[#00C875]/10 px-2 py-1 rounded inline-flex items-center gap-1 truncate max-w-full">
-                                <span className="material-symbols-outlined text-[13px]">monetization_on</span>
-                                <span className="truncate">{relOpp.name}</span>
-                              </span>
-                            ) : (
-                              <span className="text-[11px] text-[#a0a0a0] italic">—</span>
-                            )}
-                          </td>
-
-                          {/* Actions */}
-                          <td className="py-3 px-4 whitespace-nowrap text-center">
-                            <div className="flex items-center justify-center gap-1">
-                              {/* Quick Complete Button */}
-                              <button
-                                onClick={() => handleToggleCompleteTask(t)}
-                                title={t.status === 'COMPLETED' ? 'Mark as Incomplete' : 'Mark as Complete'}
-                                className={`p-1.5 rounded cursor-pointer transition-colors ${
-                                  t.status === 'COMPLETED'
-                                    ? 'bg-[#00C875]/20 text-[#008f53]'
-                                    : 'hover:bg-[#00C875]/10 text-[#767587] hover:text-[#008f53]'
-                                }`}
-                              >
-                                <span className="material-symbols-outlined text-[18px]">
-                                  {t.status === 'COMPLETED' ? 'check_circle' : 'radio_button_unchecked'}
-                                </span>
-                              </button>
-
-                              {/* View Task */}
-                              <button
-                                onClick={() => setViewingTask(t)}
-                                title="View Task Details"
-                                className="p-1.5 hover:bg-[#f0f0f0] rounded text-[#464555] hover:text-[#1a1c1c] cursor-pointer"
-                              >
-                                <span className="material-symbols-outlined text-[18px]">visibility</span>
-                              </button>
-
-                              {/* Edit Task */}
-                              <button
-                                onClick={() => openEditTaskModal(t)}
-                                title="Edit Task"
-                                className="p-1.5 hover:bg-[#e1dfff] rounded text-[#4744e5] cursor-pointer"
-                              >
-                                <span className="material-symbols-outlined text-[18px]">edit</span>
-                              </button>
-
-                              {/* Reassign PIC */}
-                              {canReassignPic && (
-                                <button
-                                  onClick={() => openReassignTaskModal(t)}
-                                  title="Reassign Task Ownership (PIC)"
-                                  className="p-1.5 hover:bg-[#fef3c7] rounded text-[#d97706] cursor-pointer"
-                                >
-                                  <span className="material-symbols-outlined text-[18px]">person_switch</span>
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
+        <CustomerTasksTab customerId={id} tenantUsers={tenantUsers} projects={projects} />
       )}
-
       {activeTab === 'followups' && (<CustomerFollowUpsTab customerId={id || ''} tenantUsers={tenantUsers} projects={projects} />)}
         {activeTab === 'projects' && (
         <div className="space-y-6">
@@ -2514,8 +1957,9 @@ const loadAllCustomerData = async () => {
             onLoadMore={(page) => loadTimeline(page, true)}
             onOpenRelatedRecord={(type, recordId) => {
               if (type === 'TASK') {
-                const t = tasksList.find(x => x.id === recordId);
-                if (t) { setViewingTask(t); setShowTaskModal(true); }
+                const t = null; // tasks removed
+                // tasksList.find(x => x.id === recordId);
+                if (t) { setActiveTab('tasks'); setActiveTab('tasks'); }
               } else if (type === 'VISIT') {
                 const v = [].find(x => x.id === recordId);
                 if (v) { setViewingVisit(v); setShowVisitModal(true); }
@@ -2827,655 +2271,16 @@ const loadAllCustomerData = async () => {
       )}
 
       {/* MODAL: CREATE TASK */}
-      {showTaskModal && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl border border-[#E1E1E1] shadow-lg max-w-md w-full p-6 space-y-4">
-            <div className="flex justify-between items-center border-b border-[#E1E1E1] pb-3">
-              <h2 className="text-base font-bold text-[#1a1c1c]">Create Sales Task</h2>
-              <button onClick={() => setShowTaskModal(false)} className="text-[#767587]">
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </div>
-            <form onSubmit={handleCreateTask} className="space-y-3 text-xs">
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Task Title *</label>
-                <input
-                  type="text"
-                  required
-                  value={taskTitle}
-                  onChange={(e) => setTaskTitle(e.target.value)}
-                  placeholder="e.g. Prepare revised commercial quotation"
-                  className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Description / Instructions</label>
-                <textarea
-                  rows={2}
-                  value={taskDescription}
-                  onChange={(e) => setTaskDescription(e.target.value)}
-                  placeholder="Enter detailed action plan or requirements..."
-                  className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block font-bold text-[#1a1c1c] mb-1">Priority</label>
-                  <select
-                    value={taskPriority}
-                    onChange={(e) => setTaskPriority(e.target.value as any)}
-                    className="w-full px-2 py-1.5 border border-[#E1E1E1] rounded bg-white font-bold"
-                  >
-                    <option value="URGENT">Urgent</option>
-                    <option value="HIGH">High</option>
-                    <option value="MEDIUM">Medium</option>
-                    <option value="LOW">Low</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block font-bold text-[#1a1c1c] mb-1">Due Date *</label>
-                  <input
-                    type="date"
-                    required
-                    value={taskDueDate}
-                    onChange={(e) => setTaskDueDate(e.target.value)}
-                    className="w-full px-2 py-1.5 border border-[#E1E1E1] rounded"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Assigned PIC (Task Owner)</label>
-                <select
-                  value={taskPicId}
-                  onChange={(e) => setTaskPicId(e.target.value)}
-                  className="w-full px-2 py-1.5 border border-[#E1E1E1] rounded bg-white font-medium"
-                >
-                  {tenantUsers.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.name} — {u.teamName || 'Sales Team'} ({u.department || u.roleName})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Related Visit (Optional)</label>
-                <select
-                  value={taskRelatedVisitId}
-                  onChange={(e) => setTaskRelatedVisitId(e.target.value)}
-                  className="w-full px-2 py-1.5 border border-[#E1E1E1] rounded bg-white font-medium"
-                >
-                  <option value="">None / Standalone Task</option>
-                  {visits.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.title} ({v.visitDate})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Related Project (Optional)</label>
-                <select
-                  value={taskRelatedOppId}
-                  onChange={(e) => setTaskRelatedOppId(e.target.value)}
-                  className="w-full px-2 py-1.5 border border-[#E1E1E1] rounded bg-white font-medium"
-                >
-                  <option value="">None / Standalone Task</option>
-                  {projects.map((o) => (
-                    <option key={o.id} value={o.id}>
-                      {o.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-[#E1E1E1]">
-                <button
-                  type="button"
-                  onClick={() => setShowTaskModal(false)}
-                  className="px-4 py-2 border border-[#E1E1E1] rounded"
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="px-4 py-2 bg-[#4744e5] text-white rounded font-bold">
-                  Create Task
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      
 
       {/* MODAL: VIEW TASK DETAILS */}
-      {viewingTask && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl border border-[#E1E1E1] shadow-lg max-w-lg w-full p-6 space-y-4">
-            <div className="flex justify-between items-center border-b border-[#E1E1E1] pb-3">
-              <div>
-                <span className="text-[10px] font-mono text-[#767587] block">Task #{viewingTask.id}</span>
-                <h2 className="text-base font-bold text-[#1a1c1c]">{viewingTask.title}</h2>
-              </div>
-              <button onClick={() => setViewingTask(null)} className="text-[#767587] hover:text-[#1a1c1c]">
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-3 bg-[#f9f9f9] p-3 rounded-lg border border-[#E1E1E1]">
-                <div>
-                  <span className="text-[#767587] block text-[10px] uppercase font-bold">Status</span>
-                  <span className="mt-0.5 block">{renderTaskStatusBadge(viewingTask.status, viewingTask.dueDate)}</span>
-                </div>
-                <div>
-                  <span className="text-[#767587] block text-[10px] uppercase font-bold">Priority</span>
-                  <span className="mt-0.5 block">{renderTaskPriorityBadge(viewingTask.priority)}</span>
-                </div>
-                <div>
-                  <span className="text-[#767587] block text-[10px] uppercase font-bold">Due Date</span>
-                  <span className="font-bold text-[#1a1c1c] mt-0.5 block">{viewingTask.dueDate}</span>
-                </div>
-                <div>
-                  <span className="text-[#767587] block text-[10px] uppercase font-bold">Created Date</span>
-                  <span className="font-medium text-[#464555] mt-0.5 block">{viewingTask.createdAt}</span>
-                </div>
-              </div>
-
-              {/* Task Ownership Card */}
-              <div className="p-3 bg-[#4744e5]/5 rounded-lg border border-[#4744e5]/20 space-y-1">
-                <span className="text-[10px] uppercase font-bold text-[#4744e5] block">Task Owner (PIC)</span>
-                {(() => {
-                  const picUser = tenantUsers.find((u) => u.id === viewingTask.picId);
-                  return (
-                    <div className="flex items-center gap-3 pt-1">
-                      {viewingTask.picAvatar ? (
-                        <img src={viewingTask.picAvatar} alt={viewingTask.picName} className="w-9 h-9 rounded-full object-cover border border-[#E1E1E1]" />
-                      ) : (
-                        <div className="w-9 h-9 rounded-full bg-[#4744e5]/20 text-[#4744e5] font-bold text-xs flex items-center justify-center">
-                          {(viewingTask.picName || "U").charAt(0)}
-                        </div>
-                      )}
-                      <div>
-                        <span className="font-bold text-[#1a1c1c] text-sm block">{viewingTask.picName}</span>
-                        <div className="text-[11px] text-[#464555] flex items-center gap-2 mt-0.5">
-                          <span>Team: <strong>{picUser?.teamName || picUser?.teamId || customer.teamName || 'Sales Team'}</strong></span>
-                          <span>•</span>
-                          <span>Dept: <strong>{picUser?.department || picUser?.roleName || 'Sales'}</strong></span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-
-              {/* Description */}
-              <div>
-                <span className="text-[#767587] block text-[11px] font-bold uppercase mb-1">Description & Instructions</span>
-                <div className="p-3 bg-[#f9f9f9] rounded border border-[#E1E1E1] text-[#1a1c1c] min-h-[50px]">
-                  {viewingTask.description || 'No detailed instructions recorded for this task.'}
-                </div>
-              </div>
-
-              {/* Related Links */}
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <span className="text-[#767587] block text-[10px] font-bold uppercase mb-1">Related Visit</span>
-                  {viewingTask.relatedVisitId ? (
-                    (() => {
-                      const v = [].find((item) => item.id === viewingTask.relatedVisitId);
-                      return (
-                        <div className="p-2 bg-[#f3f3f3] rounded border border-[#E1E1E1] font-semibold text-[#4744e5]">
-                          {v ? v.title : viewingTask.relatedVisitId}
-                        </div>
-                      );
-                    })()
-                  ) : (
-                    <div className="p-2 bg-[#f3f3f3] rounded border border-[#E1E1E1] text-[#a0a0a0] italic">None</div>
-                  )}
-                </div>
-
-                <div>
-                  <span className="text-[#767587] block text-[10px] font-bold uppercase mb-1">Related Project</span>
-                  {viewingTask.relatedProjectId ? (
-                    (() => {
-                      const o = projects.find((item) => item.id === viewingTask.relatedProjectId);
-                      return (
-                        <div className="p-2 bg-[#f3f3f3] rounded border border-[#E1E1E1] font-semibold text-[#008f53]">
-                          {o ? o.name : viewingTask.relatedProjectId}
-                        </div>
-                      );
-                    })()
-                  ) : (
-                    <div className="p-2 bg-[#f3f3f3] rounded border border-[#E1E1E1] text-[#a0a0a0] italic">None</div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-between items-center pt-3 border-t border-[#E1E1E1]">
-              <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    const t = viewingTask;
-                    setViewingTask(null);
-                    openEditTaskModal(t);
-                  }}
-                  className="px-3 py-1.5 bg-[#4744e5]/10 text-[#4744e5] rounded text-xs font-bold hover:bg-[#4744e5]/20 cursor-pointer"
-                >
-                  Edit Task
-                </button>
-                {canReassignPic && (
-                  <button
-                    onClick={() => {
-                      const t = viewingTask;
-                      setViewingTask(null);
-                      openReassignTaskModal(t);
-                    }}
-                    className="px-3 py-1.5 bg-[#f59e0b]/10 text-[#d97706] rounded text-xs font-bold hover:bg-[#f59e0b]/20 cursor-pointer"
-                  >
-                    Reassign PIC
-                  </button>
-                )}
-              </div>
-              <button
-                onClick={() => setViewingTask(null)}
-                className="px-4 py-1.5 border border-[#E1E1E1] text-[#1a1c1c] rounded text-xs font-bold cursor-pointer"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      
 
       {/* MODAL: EDIT TASK */}
-      {editingTask && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl border border-[#E1E1E1] shadow-lg max-w-md w-full p-6 space-y-4">
-            <div className="flex justify-between items-center border-b border-[#E1E1E1] pb-3">
-              <h2 className="text-base font-bold text-[#1a1c1c]">Edit Task</h2>
-              <button onClick={() => setEditingTask(null)} className="text-[#767587]">
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </div>
-            <form onSubmit={handleSaveEditTask} className="space-y-3 text-xs">
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Task Title *</label>
-                <input
-                  type="text"
-                  required
-                  value={editTaskTitle}
-                  onChange={(e) => setEditTaskTitle(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Description</label>
-                <textarea
-                  rows={2}
-                  value={editTaskDescription}
-                  onChange={(e) => setEditTaskDescription(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block font-bold text-[#1a1c1c] mb-1">Status</label>
-                  <select
-                    value={editTaskStatus}
-                    onChange={(e) => setEditTaskStatus(e.target.value as any)}
-                    className="w-full px-2 py-1.5 border border-[#E1E1E1] rounded bg-white font-bold"
-                  >
-                    <option value="TODO">Open (To Do)</option>
-                    <option value="IN_PROGRESS">In Progress</option>
-                    <option value="COMPLETED">Completed</option>
-                    <option value="CANCELLED">Cancelled</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-bold text-[#1a1c1c] mb-1">Priority</label>
-                  <select
-                    value={editTaskPriority}
-                    onChange={(e) => setEditTaskPriority(e.target.value as any)}
-                    className="w-full px-2 py-1.5 border border-[#E1E1E1] rounded bg-white font-bold"
-                  >
-                    <option value="URGENT">Urgent</option>
-                    <option value="HIGH">High</option>
-                    <option value="MEDIUM">Medium</option>
-                    <option value="LOW">Low</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block font-bold text-[#1a1c1c] mb-1">Due Date</label>
-                  <input
-                    type="date"
-                    required
-                    value={editTaskDueDate}
-                    onChange={(e) => setEditTaskDueDate(e.target.value)}
-                    className="w-full px-2 py-1.5 border border-[#E1E1E1] rounded"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-bold text-[#1a1c1c] mb-1">Assigned PIC</label>
-                  <select
-                    value={editTaskPicId}
-                    onChange={(e) => setEditTaskPicId(e.target.value)}
-                    disabled={!canReassignPic}
-                    className="w-full px-2 py-1.5 border border-[#E1E1E1] rounded bg-white font-medium disabled:bg-[#f0f0f0]"
-                  >
-                    {tenantUsers.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.name} ({u.teamName || 'Sales'})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Related Visit</label>
-                <select
-                  value={editTaskRelatedVisitId}
-                  onChange={(e) => setEditTaskRelatedVisitId(e.target.value)}
-                  className="w-full px-2 py-1.5 border border-[#E1E1E1] rounded bg-white font-medium"
-                >
-                  <option value="">None / Unlinked</option>
-                  {visits.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.title} ({v.visitDate})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Related Project</label>
-                <select
-                  value={editTaskRelatedOppId}
-                  onChange={(e) => setEditTaskRelatedOppId(e.target.value)}
-                  className="w-full px-2 py-1.5 border border-[#E1E1E1] rounded bg-white font-medium"
-                >
-                  <option value="">None / Unlinked</option>
-                  {projects.map((o) => (
-                    <option key={o.id} value={o.id}>
-                      {o.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-[#E1E1E1]">
-                <button
-                  type="button"
-                  onClick={() => setEditingTask(null)}
-                  className="px-4 py-2 border border-[#E1E1E1] rounded cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="px-4 py-2 bg-[#4744e5] text-white rounded font-bold cursor-pointer">
-                  Save Changes
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      
 
       {/* MODAL: REASSIGN TASK PIC */}
-      {reassigningTask && (() => {
-        const allTenantTasks = tasks;
-        const currentPicUser = tenantUsers.find((u) => u.id === reassigningTask.picId) || {
-          id: reassigningTask.picId,
-          name: reassigningTask.picName,
-          roleName: 'Sales Representative',
-          department: 'Sales',
-          avatarUrl: reassigningTask.picAvatar,
-        };
-        const currentActiveCount = allTenantTasks.filter((tk) => tk.picId === currentPicUser.id && tk.status !== 'COMPLETED' && tk.status !== 'CANCELLED').length;
-        const currentOverdueCount = allTenantTasks.filter((tk) => tk.picId === currentPicUser.id && tk.dueDate < todayISO && tk.status !== 'COMPLETED' && tk.status !== 'CANCELLED').length;
-
-        const candidateUsers = tenantUsers.filter((u) => u.id !== currentPicUser.id && (
-          (u.name || "").toLowerCase().includes(reassignSearch.toLowerCase()) ||
-          (u.roleName && (u.roleName || "").toLowerCase().includes(reassignSearch.toLowerCase())) ||
-          (u.department && (u.department || "").toLowerCase().includes(reassignSearch.toLowerCase()))
-        ));
-
-        const selectedNewPicUser = tenantUsers.find((u) => u.id === reassignTaskPicId);
-        const selectedActiveCount = selectedNewPicUser
-          ? allTenantTasks.filter((tk) => tk.picId === selectedNewPicUser.id && tk.status !== 'COMPLETED' && tk.status !== 'CANCELLED').length
-          : 0;
-
-        const currentFirstName = (currentPicUser.name || "User").split(" ")[0];
-        const selectedFirstName = selectedNewPicUser ? selectedNewPicUser.name.split(' ')[0] : '';
-
-        return (
-          <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-2xl border border-[#E1E1E1] shadow-xl max-w-md w-full overflow-hidden text-xs font-['Hanken_Grotesk',sans-serif]">
-              {/* HEADER */}
-              <div className="px-6 py-4 flex justify-between items-center border-b border-[#E1E1E1]">
-                <h2 className="text-lg font-bold text-[#111827]">Reassign PIC</h2>
-                <button
-                  type="button"
-                  onClick={() => setReassigningTask(null)}
-                  className="text-[#9ca3af] hover:text-[#111827] p-1 rounded-lg transition-colors cursor-pointer"
-                >
-                  <span className="material-symbols-outlined text-[20px]">close</span>
-                </button>
-              </div>
-
-              <form onSubmit={handleConfirmReassignTask} className="flex flex-col">
-                <div className="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
-                  {/* CURRENT ASSIGNMENT */}
-                  <div>
-                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#6b7280] block mb-2">
-                      CURRENT ASSIGNMENT
-                    </span>
-                    <div className="p-3.5 bg-[#f9fafb] rounded-xl border border-[#e5e7eb] flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        {currentPicUser.avatarUrl ? (
-                          <img
-                            src={currentPicUser.avatarUrl}
-                            alt={currentPicUser.name}
-                            className="w-10 h-10 rounded-lg object-cover border border-[#e5e7eb]"
-                          />
-                        ) : (
-                          <div className="w-10 h-10 rounded-lg bg-[#4744e5]/10 text-[#4744e5] font-bold text-sm flex items-center justify-center border border-[#e5e7eb]">
-                            {(currentPicUser.name || "U").charAt(0)}
-                          </div>
-                        )}
-                        <div>
-                          <span className="font-bold text-[#111827] text-sm block">{currentPicUser.name}</span>
-                          <span className="text-xs text-[#6b7280] block mt-0.5">
-                            {currentPicUser.roleName || currentPicUser.department || 'Sales Representative'}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-4 text-right">
-                        <div>
-                          <span className="font-bold text-sm text-[#111827] block text-center">{currentActiveCount}</span>
-                          <span className="text-[11px] text-[#6b7280]">Active</span>
-                        </div>
-                        <div className="w-[1px] h-7 bg-[#e5e7eb]" />
-                        <div>
-                          <span className="font-bold text-sm text-[#ef4444] block text-center">{currentOverdueCount}</span>
-                          <span className="text-[11px] text-[#ef4444] font-medium">Overdue</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* SELECT NEW PIC */}
-                  <div>
-                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#6b7280] block mb-2">
-                      SELECT NEW PIC
-                    </span>
-
-                    {/* SEARCH INPUT */}
-                    <div className="relative mb-3">
-                      <span className="material-symbols-outlined absolute left-3 top-2.5 text-[#9ca3af] text-[18px]">
-                        search
-                      </span>
-                      <input
-                        type="text"
-                        placeholder="Search team members..."
-                        value={reassignSearch}
-                        onChange={(e) => setReassignSearch(e.target.value)}
-                        className="w-full pl-9 pr-3 py-2 border border-[#e5e7eb] rounded-xl bg-[#f9fafb] text-xs text-[#111827] placeholder-[#9ca3af] focus:outline-none focus:ring-2 focus:ring-[#4f46e5]/20 focus:border-[#4f46e5] transition-all"
-                      />
-                    </div>
-
-                    {/* PIC CANDIDATES LIST */}
-                    <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
-                      {candidateUsers.length === 0 ? (
-                        <div className="p-4 text-center text-[#9ca3af] italic">
-                          No team members found.
-                        </div>
-                      ) : (
-                        candidateUsers.map((u) => {
-                          const isSelected = reassignTaskPicId === u.id;
-                          const uActiveCount = allTenantTasks.filter((tk) => tk.picId === u.id && tk.status !== 'COMPLETED' && tk.status !== 'CANCELLED').length;
-                          const uOverdueCount = allTenantTasks.filter((tk) => tk.picId === u.id && tk.dueDate < todayISO && tk.status !== 'COMPLETED' && tk.status !== 'CANCELLED').length;
-
-                          // Workload badge logic (Normal / High)
-                          let badgeText = 'Normal';
-                          let badgeClass = 'bg-[#dcfce7] text-[#15803d]';
-                          if (uActiveCount >= 10 || uOverdueCount >= 3) {
-                            badgeText = 'High';
-                            badgeClass = 'bg-[#fee2e2] text-[#b91c1c]';
-                          } else if (uActiveCount >= 6) {
-                            badgeText = 'Medium';
-                            badgeClass = 'bg-[#fef3c7] text-[#d97706]';
-                          }
-
-                          return (
-                            <div
-                              key={u.id}
-                              onClick={() => setReassignTaskPicId(u.id)}
-                              className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between ${
-                                isSelected
-                                  ? 'border-2 border-[#4f46e5] bg-[#f5f3ff]'
-                                  : 'border-[#e5e7eb] bg-[#f9fafb] hover:bg-white'
-                              }`}
-                            >
-                              <div className="flex items-center gap-3">
-                                {/* Radio button */}
-                                <div
-                                  className={`w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0 ${
-                                    isSelected ? 'border-4 border-[#4f46e5] bg-white' : 'border-2 border-[#d1d5db] bg-white'
-                                  }`}
-                                />
-
-                                {u.avatarUrl ? (
-                                  <img
-                                    src={u.avatarUrl}
-                                    alt={u.name}
-                                    className="w-10 h-10 rounded-lg object-cover border border-[#e5e7eb]"
-                                  />
-                                ) : (
-                                  <div className="w-10 h-10 rounded-lg bg-[#4744e5]/10 text-[#4744e5] font-bold text-sm flex items-center justify-center border border-[#e5e7eb]">
-                                    {(u.name || "U").charAt(0)}
-                                  </div>
-                                )}
-
-                                <div>
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-bold text-[#111827] text-sm">{u.name}</span>
-                                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${badgeClass}`}>
-                                      {badgeText}
-                                    </span>
-                                  </div>
-                                  <span className="text-xs text-[#6b7280] block mt-0.5">
-                                    {u.roleName || u.department || 'Account Executive'}
-                                  </span>
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-4 text-right">
-                                <div>
-                                  <span className="font-bold text-sm text-[#111827] block text-center">{uActiveCount}</span>
-                                  <span className="text-[10px] text-[#6b7280] block -mt-0.5">Active</span>
-                                </div>
-                                <div>
-                                  <span className={`font-bold text-sm block text-center ${uOverdueCount > 0 ? 'text-[#ef4444]' : 'text-[#111827]'}`}>
-                                    {uOverdueCount}
-                                  </span>
-                                  <span className={`text-[10px] block -mt-0.5 ${uOverdueCount > 0 ? 'text-[#ef4444]' : 'text-[#6b7280]'}`}>
-                                    Overdue
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  </div>
-
-                  {/* CONFIRMATION BANNER */}
-                  {selectedNewPicUser && (
-                    <div className="p-4 bg-[#f8f9fa] border border-[#e5e7eb] rounded-xl text-center space-y-3">
-                      <p className="text-xs text-[#374151] font-medium">
-                        Are you sure you want to reassign this task from <span className="font-bold text-[#111827]">{currentFirstName}</span> to <span className="font-bold text-[#111827]">{selectedFirstName}</span>?
-                      </p>
-
-                      <div className="flex items-center justify-center gap-8 pt-1">
-                        <div className="text-center">
-                          <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#6b7280] block mb-0.5">
-                            CURRENT
-                          </span>
-                          <span className="font-bold text-sm text-[#111827] block">{currentFirstName}</span>
-                          <span className="text-xs text-[#6b7280] block">{currentActiveCount} tasks</span>
-                        </div>
-
-                        <span className="material-symbols-outlined text-[#4f46e5] text-xl font-bold">
-                          arrow_forward
-                        </span>
-
-                        <div className="text-center">
-                          <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#6b7280] block mb-0.5">
-                            NEW
-                          </span>
-                          <span className="font-bold text-sm text-[#111827] block">{selectedFirstName}</span>
-                          <span className="text-xs text-[#6b7280] block">{selectedActiveCount} tasks</span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* FOOTER ACTIONS */}
-                <div className="px-6 py-4 border-t border-[#E1E1E1] flex justify-end gap-3 bg-white">
-                  <button
-                    type="button"
-                    onClick={() => setReassigningTask(null)}
-                    className="px-5 py-2 border border-[#d1d5db] text-[#374151] hover:bg-[#f9fafb] text-xs font-bold rounded-xl transition-colors cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={!reassignTaskPicId || reassignTaskPicId === currentPicUser.id}
-                    className="px-5 py-2 bg-[#4f46e5] hover:bg-[#4338ca] disabled:opacity-50 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shadow-xs"
-                  >
-                    Reassign PIC
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        );
-      })()}
+      
 
       {/* MODAL 5: CREATE FOLLOW-UP */}
       

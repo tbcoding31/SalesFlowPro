@@ -1,8 +1,8 @@
 import { PaginatedResponse, Customer, Task, Activity, Project, Visit, FollowUp, CustomerTimelineEvent } from '../types';
 
-const API_BASE = '/api';
+export const API_BASE = '/api';
 
-const getAuthHeaders = () => {
+export const getAuthHeaders = () => {
   const token = localStorage.getItem('sfp_auth_token') || '';
   const headers: Record<string, string> = {
     'Content-Type': 'application/json'
@@ -24,6 +24,8 @@ export interface QueryPaginationParams {
   userId?: string;
   typeId?: string;
   tenantId?: string;
+  dueDate?: string;
+  projectId?: string;
 }
 
 export const crmApi = {
@@ -152,6 +154,38 @@ fetchCustomers: async (params?: QueryPaginationParams): Promise<PaginatedRespons
     return await res.json();
   },
 
+      fetchCustomerProjects: async (customerId: string): Promise<any[]> => {
+    try {
+      let allProjects: any[] = [];
+      let page = 1;
+      const pageSize = 50;
+      let hasMore = true;
+      
+      while (hasMore) {
+        const res = await fetch(`${API_BASE}/projects?customerId=${customerId}&page=${page}&pageSize=${pageSize}`, { headers: getAuthHeaders() });
+        if (!res.ok) break;
+        const data = await res.json();
+        
+        if (Array.isArray(data)) {
+           allProjects = [...allProjects, ...data];
+           hasMore = false; // No pagination metadata
+        } else {
+           const items = data.data || [];
+           allProjects = [...allProjects, ...items];
+           if (data.pagination && data.pagination.totalPages) {
+             hasMore = page < data.pagination.totalPages;
+           } else {
+             hasMore = false;
+           }
+        }
+        page++;
+      }
+      return allProjects;
+    } catch (err) {
+      console.error('[fetchCustomerProjects error]', err);
+      return [];
+    }
+  },
   fetchTasks: async (params?: QueryPaginationParams): Promise<PaginatedResponse<Task>> => {
     const q = new URLSearchParams();
     if (params) {
@@ -165,6 +199,8 @@ fetchCustomers: async (params?: QueryPaginationParams): Promise<PaginatedRespons
       if (params.customerId && params.customerId !== 'ALL') q.set('customerId', params.customerId);
       if (params.picId && params.picId !== 'ALL') q.set('picId', params.picId);
       if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
+      if (params.dueDate) q.set('dueDate', params.dueDate);
+      if (params.projectId && params.projectId !== 'ALL') q.set('projectId', params.projectId);
     }
     const url = `${API_BASE}/tasks${q.toString() ? '?' + q.toString() : ''}`;
     const res = await fetch(url, { headers: getAuthHeaders() });

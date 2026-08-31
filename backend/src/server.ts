@@ -909,8 +909,12 @@ const setupEndpoint = (table: string) => {
 
     if (req.query.status && req.query.status !== 'ALL') {
       const statusCol = table === 'follow_ups' ? 'status' : 'statusId';
-      whereClauses.push(`${statusCol} = ?`);
-      params.push(req.query.status);
+      if (req.query.status === 'OPEN' && ['tasks', 'visits', 'follow_ups'].includes(table)) {
+        whereClauses.push(`${statusCol} NOT IN ('COMPLETED', 'CANCELLED')`);
+      } else {
+        whereClauses.push(`${statusCol} = ?`);
+        params.push(req.query.status);
+      }
     }
 
     if (req.query.priority && req.query.priority !== 'ALL') {
@@ -936,6 +940,22 @@ const setupEndpoint = (table: string) => {
     if (req.query.typeId && req.query.typeId !== 'ALL') {
       whereClauses.push('typeId = ?');
       params.push(req.query.typeId);
+    }
+
+    if (req.query.dueDate) {
+      whereClauses.push('dueDate = ?');
+      params.push(req.query.dueDate);
+    }
+
+    if (req.query.projectId && req.query.projectId !== 'ALL') {
+      if (req.query.projectId === 'NONE') {
+        const projCol = table === 'follow_ups' || table === 'tasks' ? 'relatedProjectId' : 'projectId';
+        whereClauses.push(`${projCol} IS NULL`);
+      } else {
+        const projCol = table === 'follow_ups' || table === 'tasks' ? 'relatedProjectId' : 'projectId';
+        whereClauses.push(`${projCol} = ?`);
+        params.push(req.query.projectId);
+      }
     }
 
     const whereSql = whereClauses.join(' AND ');
@@ -1126,6 +1146,22 @@ const setupEndpoint = (table: string) => {
         // If picId is not explicitly provided on child entity, inherit from Customer PIC
         if (!data.picId && custRows[0].picId && table !== 'customer_contacts') {
           data.picId = custRows[0].picId;
+        }
+      }
+
+
+      // R58R8R: Validate relatedProjectId belongs to the same customer & tenant
+      if (data.relatedProjectId && ['tasks', 'visits', 'follow_ups'].includes(table)) {
+        const targetTenant = data.tenantId || actorTenant;
+        const [projRows] = await pool.query('SELECT id, tenantId, customerId FROM projects WHERE id = ?', [data.relatedProjectId]);
+        if (projRows.length === 0) {
+          return res.status(400).json({ error: 'Referenced project does not exist.', code: 'PROJECT_NOT_FOUND' });
+        }
+        if (targetTenant !== 'SYSTEM' && projRows[0].tenantId !== targetTenant) {
+          return res.status(403).json({ error: 'Cross-tenant project reference forbidden.', code: 'CROSS_TENANT_PROJECT' });
+        }
+        if (data.customerId && projRows[0].customerId !== data.customerId) {
+          return res.status(400).json({ error: 'Project does not belong to the specified customer.', code: 'CROSS_CUSTOMER_PROJECT' });
         }
       }
 
@@ -1370,7 +1406,22 @@ const setupEndpoint = (table: string) => {
         if (data.createdAt !== undefined) delete data.createdAt;
       }
 
+
+      // R58R8R: Strip completedAt from client payload to enforce backend authority
+      if (['tasks', 'visits', 'follow_ups'].includes(table)) {
+        if (data.completedAt !== undefined) {
+          delete data.completedAt;
+        }
+        // If reopening a task, clear completedAt explicitly
+        const currentStatus = data.statusId || data.status;
+        const prevStatus = existing[0]?.statusId || existing[0]?.status;
+        if (prevStatus === 'COMPLETED' && currentStatus !== 'COMPLETED' && currentStatus !== undefined) {
+           data.completedAt = null;
+        }
+      }
+      
       const keys = Object.keys(data).filter(k => k !== 'id');
+
       // For projects table, normalize expectedClosingDate if present
       if (table === 'projects' && data.expectedClosingDate && !data.expectedCloseDate) {
         data.expectedCloseDate = data.expectedClosingDate;
@@ -1420,11 +1471,13 @@ const setupEndpoint = (table: string) => {
         const nowFormatted = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
         if (table === 'tasks' && (data.statusId === 'COMPLETED' || data.status === 'COMPLETED')) {
-          if (!data.completedAt) {
+          const prevStatus = existing[0]?.statusId || existing[0]?.status;
+          if (prevStatus !== 'COMPLETED') {
             await connection.query('UPDATE tasks SET completedAt = ? WHERE id = ?', [nowFormatted, id]);
           }
         } else if (table === 'visits' && (data.statusId === 'COMPLETED' || data.status === 'COMPLETED')) {
-          if (!data.completedAt) {
+          const prevStatus = existing[0]?.statusId || existing[0]?.status;
+          if (prevStatus !== 'COMPLETED') {
             await connection.query('UPDATE visits SET completedAt = ? WHERE id = ?', [nowFormatted, id]);
           }
           const [vRows]: any = await connection.query('SELECT customerId, title, result, nextAction FROM visits WHERE id = ?', [id]);
@@ -1448,7 +1501,8 @@ const setupEndpoint = (table: string) => {
             }
           }
         } else if (table === 'follow_ups' && (data.status === 'COMPLETED' || data.statusId === 'COMPLETED')) {
-          if (!data.completedAt) {
+          const prevStatus = existing[0]?.status || existing[0]?.statusId;
+          if (prevStatus !== 'COMPLETED') {
             await connection.query('UPDATE follow_ups SET completedAt = ? WHERE id = ?', [nowFormatted, id]);
           }
           const [fRows]: any = await connection.query('SELECT customerId, title, outcome, notes FROM follow_ups WHERE id = ?', [id]);
