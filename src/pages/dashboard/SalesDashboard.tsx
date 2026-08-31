@@ -6,7 +6,7 @@ import { crmApi } from '../../services/crmApi';
 
 export const SalesDashboard: React.FC = () => {
   const { currentUser, currentTenant } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
 
   const [agenda, setAgenda] = useState<any | null>(null);
   const [attention, setAttention] = useState<any | null>(null);

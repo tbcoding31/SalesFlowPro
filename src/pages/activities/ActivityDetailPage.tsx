@@ -8,7 +8,7 @@ export const ActivityDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { currentTenant } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
 
   const [activity, setActivity] = useState<Activity | null>(null);
 

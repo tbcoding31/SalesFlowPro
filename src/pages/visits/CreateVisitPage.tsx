@@ -16,7 +16,7 @@ interface UserWorkloadInfo {
 export const CreateVisitPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
-  const tenantId = currentUser?.tenantId || 'TEN-00001';
+  const tenantId = currentUser?.tenantId ;
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [rawUsers, setRawUsers] = useState<User[]>([]);

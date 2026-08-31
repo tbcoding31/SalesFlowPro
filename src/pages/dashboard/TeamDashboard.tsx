@@ -6,7 +6,7 @@ import { crmApi } from '../../services/crmApi';
 
 export const TeamDashboard: React.FC = () => {
   const { currentTenant, currentUser } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
   const navigate = useNavigate();
 
   const [controlTower, setControlTower] = useState<ControlTowerResponse | null>(null);

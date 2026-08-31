@@ -163,7 +163,7 @@ export const CustomerDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { currentTenant, currentUser, hasPermission } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
   const { timelineEvents, timelinePage, timelineHasMore, isLoadingTimeline, error: timelineError, loadTimeline } = useCustomerTimeline(id || '', tenantId);
 
   const [customer, setCustomer] = useState<Customer | undefined>(undefined);

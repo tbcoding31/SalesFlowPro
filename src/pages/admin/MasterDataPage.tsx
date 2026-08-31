@@ -5,7 +5,7 @@ import { MasterDataItem } from '../../types';
 
 export const MasterDataPage: React.FC = () => {
   const { currentTenant } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
 
   const [selectedCategory, setSelectedCategory] = useState<MasterDataItem['category']>('task_priorities');
   const [items, setItems] = useState<MasterDataItem[]>([]);

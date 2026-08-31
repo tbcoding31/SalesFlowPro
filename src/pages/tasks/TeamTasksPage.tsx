@@ -7,7 +7,7 @@ import { crmApi } from '../../services/crmApi';
 export const TeamTasksPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant, currentUser } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);

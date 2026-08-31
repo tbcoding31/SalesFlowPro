@@ -10,7 +10,7 @@ type ViewMode = 'PIPELINE' | 'LIST';
 export const ProjectsPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant, currentUser } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [pipelineAggregates, setPipelineAggregates] = useState<any>({});

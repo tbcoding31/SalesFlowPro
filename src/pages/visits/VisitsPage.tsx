@@ -8,7 +8,7 @@ import { usersApi } from '../../services/usersApi';
 export const VisitsPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant, currentUser } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
 
   // Data state
   const [projects, setProjects] = useState<any[]>([]);

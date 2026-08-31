@@ -8,7 +8,7 @@ export const ProjectDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { currentTenant, currentUser } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
 
   const [project, setProject] = useState<Project | null>(null);
   const [customer, setCustomer] = useState<Customer | null>(null);

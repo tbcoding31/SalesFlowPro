@@ -459,7 +459,7 @@ app.get('/api/sync/all', async (req, res) => {
     const users = dbUsers.map((u: any) => {
       // Find primary tenant_user mapping (or just first one for simplicity)
       const tu = dbTenantUsers.find((tu: any) => tu.userId === u.id);
-      let tenantId = 'TEN-00001';
+      let tenantId = null;
       let role = 'SALES_REPRESENTATIVE';
       let roleName = 'Sales Representative';
 

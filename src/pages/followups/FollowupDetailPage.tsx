@@ -8,7 +8,7 @@ export const FollowupDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { currentTenant } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
 
   const [followup, setFollowup] = useState<FollowUp | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);

@@ -9,7 +9,7 @@ export const TasksPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { currentTenant, currentUser } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [tasks, setTasks] = useState<Task[]>([]);

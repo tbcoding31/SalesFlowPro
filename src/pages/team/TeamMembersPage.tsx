@@ -6,7 +6,7 @@ import { User } from '../../types';
 
 export const TeamMembersPage: React.FC = () => {
   const { currentTenant } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
 
   const [teams, setTeams] = useState<Team[]>([]);
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);

@@ -8,7 +8,7 @@ import { usersApi } from '../../services/usersApi';
 export const ActivitiesPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
   
   const [activities, setActivities] = useState<Activity[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);

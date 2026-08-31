@@ -31,7 +31,7 @@ export interface ExtendedCustomerItem {
 export const CustomersListPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant, currentUser } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
 
   // Database-backed state for list items
   const [items, setItems] = useState<ExtendedCustomerItem[]>([]);

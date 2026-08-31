@@ -8,7 +8,7 @@ export const VisitReportPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { currentUser } = useAuth();
-  const tenantId = currentUser?.tenantId || 'TEN-00001';
+  const tenantId = currentUser?.tenantId ;
 
   const [visit, setVisit] = useState<Visit | null>(null);
   const [isLoading, setIsLoading] = useState(true);

@@ -4,7 +4,7 @@ import { crmApi } from '../../services/crmApi';
 
 export const AuditLogsPage: React.FC = () => {
   const { currentTenant } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
 
   const [logs, setLogs] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);

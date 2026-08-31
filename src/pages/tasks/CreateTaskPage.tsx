@@ -9,7 +9,7 @@ import { usersApi } from '../../services/usersApi';
 export const CreateTaskPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant, currentUser } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
 
   const [title, setTitle] = useState('');
   const [taskType, setTaskType] = useState('');

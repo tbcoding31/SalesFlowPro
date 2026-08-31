@@ -12,7 +12,7 @@ export const CreateTenantUserPage: React.FC = () => {
   const [roleOptions, setRoleOptions] = useState<{id: string, name: string, scope: string}[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const paramTenantId = searchParams.get('tenantId');
-  const [selectedTenantId, setSelectedTenantId] = useState<string>(paramTenantId || authTenant?.id || 'TEN-00001');
+  const [selectedTenantId, setSelectedTenantId] = useState<string>(paramTenantId || authTenant?.id );
 
   useEffect(() => {
     fetch('/api/roles/assignable', {

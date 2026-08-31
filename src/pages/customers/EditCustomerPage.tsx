@@ -10,7 +10,7 @@ export const EditCustomerPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { currentTenant, currentUser } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
 
   const [assignableUsers, setAssignableUsers] = useState<User[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>([]);

@@ -9,7 +9,7 @@ import { crmApi } from '../../services/crmApi';
 export const CreateCustomerPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant, currentUser } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
 
   const [tenantUsers, setTenantUsers] = useState<User[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);

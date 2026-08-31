@@ -5,7 +5,7 @@ import { Task, Visit, Project, Activity } from '../../types';
 
 export const UserProfilePage: React.FC = () => {
   const { currentUser } = useAuth();
-  const tenantId = currentUser?.tenantId || 'TEN-00001';
+  const tenantId = currentUser?.tenantId ;
 
   const [myTasks, setMyTasks] = useState<Task[]>([]);
   const [myVisits, setMyVisits] = useState<Visit[]>([]);

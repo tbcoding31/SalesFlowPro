@@ -8,7 +8,7 @@ import { usersApi } from '../../services/usersApi';
 export const FollowupsPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant } = useAuth();
-  const tenantId = currentTenant?.id || 'TEN-00001';
+  const tenantId = currentTenant?.id ;
 
   const [followups, setFollowups] = useState<FollowUp[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);

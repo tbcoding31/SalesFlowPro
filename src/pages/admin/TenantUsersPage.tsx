@@ -8,7 +8,7 @@ export const TenantUsersPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant, currentUser } = useAuth();
   const [selectedTenantId, setSelectedTenantId] = useState<string>(
-    currentUser?.tenantId === 'SYSTEM' ? 'ALL' : (currentTenant?.id || 'TEN-00001')
+    currentUser?.tenantId === 'SYSTEM' ? 'ALL' : (currentTenant?.id )
   );
   const [users, setUsers] = useState<User[]>([]);
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -41,7 +41,7 @@ export const TenantUsersPage: React.FC = () => {
   const [department, setDepartment] = useState('Sales');
   const [position, setPosition] = useState('Account Executive');
   const [targetTenantId, setTargetTenantId] = useState(
-    selectedTenantId === 'ALL' ? 'TEN-00001' : selectedTenantId
+    selectedTenantId === 'ALL' ? '' : selectedTenantId
   );
 
   const loadUsers = async (tenantId: string) => {
