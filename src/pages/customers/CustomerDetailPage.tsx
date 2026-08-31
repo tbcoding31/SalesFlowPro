@@ -1,3 +1,4 @@
+import { CustomerVisitsTab } from './components/CustomerVisitsTab';
 import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
@@ -171,6 +172,7 @@ export const CustomerDetailPage: React.FC = () => {
   const [customerAttentionSignals, setCustomerAttentionSignals] = useState<any[]>([]);
   const [projectAttentionSummary, setProjectAttentionSummary] = useState<any | null>(null);
 
+  const visits: Visit[] = [];
   const [activeTab, setActiveTab] = useState<'overview' | 'visits' | 'tasks' | 'followups' | 'projects' | 'activities'>('overview');
 
   // Modals state
@@ -356,7 +358,7 @@ export const CustomerDetailPage: React.FC = () => {
     );
   }
 
-  const [visitsList, setVisitsList] = useState<Visit[]>([]);
+  
   const [tasksList, setTasksList] = useState<Task[]>([]);
   const [oppsList, setOppsList] = useState<Project[]>([]);
   const [activitiesList, setActivitiesList] = useState<Activity[]>([]);
@@ -370,7 +372,7 @@ const loadAllCustomerData = async () => {
     try {
       const [custSummary, vList, tList, fList, pList, aList, cList, uList, naRes] = await Promise.all([
         crmApi.fetchCustomerSummary(id),
-        crmApi.fetchCollection<Visit>('visits', tenantId),
+        Promise.resolve([]), /* visits moved to tab */
         crmApi.fetchCollection<Task>('tasks', tenantId),
         crmApi.fetchCollection<FollowUp>('follow_ups', tenantId),
         crmApi.fetchCollection<Project>('projects', tenantId),
@@ -400,7 +402,7 @@ const loadAllCustomerData = async () => {
         setSelectedPicId(custData.picId || (custData as any).assignedPicId || '');
       }
 
-      setVisitsList(vList.filter((v: any) => v.customerId === id));
+      
       setTasksList(tList.filter((t: any) => t.customerId === id));
       setFollowupsList(fList.filter((f: any) => f.customerId === id));
       setOppsList(pList.filter((p: any) => p.customerId === id));
@@ -426,7 +428,7 @@ const loadAllCustomerData = async () => {
   const refreshFollowups = () => loadAllCustomerData();
   const refreshOpps = () => loadAllCustomerData();
 
-  const visits: Visit[] = visitsList;
+  
   const tasks: Task[] = tasksList;
   const followups: FollowUp[] = followupsList;
   const projects: Project[] = oppsList;
@@ -448,7 +450,7 @@ const loadAllCustomerData = async () => {
       cat = 'VISIT';
       icon = 'directions_car';
       color = 'bg-blue-50 text-blue-700 border-blue-200';
-      recObj = visits.find((v) => v.id === a.entityId || (a.description && a.description.includes(v.id)));
+      recObj = [].find((v) => v.id === a.entityId || (a.description && a.description.includes(v.id)));
     } else if (tUpper === 'TASK') {
       cat = 'TASK';
       icon = 'task_alt';
@@ -499,7 +501,7 @@ const loadAllCustomerData = async () => {
   });
 
   // 2. Include Visits for complete activity history
-  visits.forEach((v) => {
+  [].forEach((v) => {
     const key = `VISIT-${v.id}`;
     if (!addedActivityKeys.has(key)) {
       addedActivityKeys.add(key);
@@ -642,7 +644,7 @@ const loadAllCustomerData = async () => {
 
   const handleOpenRelatedRecord = (act: ActivityTimelineItem) => {
     if (act.entityType === 'VISIT') {
-      const v = visits.find((item) => item.id === act.entityId) || act.recordObj;
+      const v = [].find((item) => item.id === act.entityId) || act.recordObj;
       if (v) setViewingVisit(v);
     } else if (act.entityType === 'TASK') {
       const t = tasks.find((item) => item.id === act.entityId) || act.recordObj;
@@ -742,7 +744,7 @@ const loadAllCustomerData = async () => {
     if (taskSearch.trim()) {
       const q = taskSearch.toLowerCase();
       const picUser = tenantUsers.find((u) => u.id === t.picId);
-      const relVisit = visits.find((v) => v.id === t.relatedVisitId);
+      const relVisit = [].find((v) => v.id === t.relatedVisitId);
       const relOpp = projects.find((o) => o.id === t.relatedProjectId);
       const matches =
         (t.title || "").toLowerCase().includes(q) ||
@@ -814,7 +816,7 @@ const loadAllCustomerData = async () => {
     if (followUpSearch.trim()) {
       const q = followUpSearch.toLowerCase();
       const relOppName = (projects.find((o) => o.id === f.relatedProjectId)?.name || "").toLowerCase() || '';
-      const relVisitTitle = (visits.find((v) => v.id === f.relatedVisitId)?.title || "").toLowerCase() || '';
+      const relVisitTitle = ([].find((v) => v.id === f.relatedVisitId)?.title || "").toLowerCase() || '';
       const matches =
         (f.title && (f.title || "").toLowerCase().includes(q)) ||
         (f.notes && (f.notes || "").toLowerCase().includes(q)) ||
@@ -1329,7 +1331,7 @@ const loadAllCustomerData = async () => {
   };
 
   // Computed Metrics
-  const totalVisits = visits.length;
+  const totalVisits = 0;
   const totalTasks = tasks.length;
   const openTasks = tasks.filter((t) => t.status !== 'COMPLETED' && t.status !== 'CANCELLED').length;
   const completedTasks = tasks.filter((t) => t.status === 'COMPLETED').length;
@@ -1736,7 +1738,7 @@ const loadAllCustomerData = async () => {
       <div className="border-b border-[#E1E1E1] flex gap-6 overflow-x-auto pb-0">
         {[
           { id: 'overview', label: 'Overview', count: null },
-          { id: 'visits', label: 'Visits', count: visits.length },
+          { id: 'visits', label: 'Visits', count: 0 },
           { id: 'tasks', label: 'Tasks', count: tasks.length },
           { id: 'followups', label: 'Follow-ups', count: followups.length },
           { id: 'projects', label: 'Projects', count: projects.length },
@@ -1779,7 +1781,7 @@ const loadAllCustomerData = async () => {
             }}
             primaryContact={primaryContact}
             activities={activitiesList}
-            visits={visitsList}
+            visits={[]}
             tasks={tasksList}
             projects={oppsList}
             customerAttentionSignals={customerAttentionSignals}
@@ -1797,312 +1799,7 @@ const loadAllCustomerData = async () => {
         )}
 
       {/* TABS OTHER THAN OVERVIEW */}
-      {activeTab === 'visits' && (
-        <div className="space-y-6">
-          {/* VISITS TAB HEADER & ACTION */}
-          <div className="bg-white p-6 rounded-xl border border-[#E1E1E1] shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-[#4744e5]">route</span>
-                <h2 className="text-lg font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">Customer Visit Records & Schedule</h2>
-              </div>
-              <p className="text-xs text-[#767587] mt-0.5">
-                Complete log of sales presentations, technical site audits, and upcoming client visits for {customer.name}.
-              </p>
-            </div>
-            <button
-              onClick={() => setShowVisitModal(true)}
-              className="px-4 py-2 bg-[#4744e5] hover:bg-[#3834d0] text-white text-xs font-bold rounded-lg flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors self-start md:self-auto"
-            >
-              <span className="material-symbols-outlined text-[18px]">add</span>
-              <span>Schedule New Visit</span>
-            </button>
-          </div>
-
-          {/* VISIT SUMMARY METRICS */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            <div className="bg-white p-4 rounded-xl border border-[#E1E1E1] shadow-xs">
-              <span className="text-[11px] font-semibold text-[#767587] block uppercase tracking-wider">Total Visits</span>
-              <span className="text-xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk'] mt-1 block">
-                {totalVisitsCount}
-              </span>
-            </div>
-            <div className="bg-white p-4 rounded-xl border border-[#00C875]/30 shadow-xs bg-[#00C875]/5">
-              <span className="text-[11px] font-semibold text-[#008f53] block uppercase tracking-wider">Completed</span>
-              <span className="text-xl font-extrabold text-[#008f53] font-['Hanken_Grotesk'] mt-1 block">
-                {completedVisitsCount}
-              </span>
-            </div>
-            <div className="bg-white p-4 rounded-xl border border-[#4744e5]/30 shadow-xs bg-[#4744e5]/5">
-              <span className="text-[11px] font-semibold text-[#4744e5] block uppercase tracking-wider">Upcoming</span>
-              <span className="text-xl font-extrabold text-[#4744e5] font-['Hanken_Grotesk'] mt-1 block">
-                {upcomingVisitsCount}
-              </span>
-            </div>
-            <div className="bg-white p-4 rounded-xl border border-[#ba1a1a]/30 shadow-xs bg-[#ba1a1a]/5">
-              <span className="text-[11px] font-semibold text-[#ba1a1a] block uppercase tracking-wider">Cancelled</span>
-              <span className="text-xl font-extrabold text-[#ba1a1a] font-['Hanken_Grotesk'] mt-1 block">
-                {cancelledVisitsCount}
-              </span>
-            </div>
-            <div className="bg-white p-4 rounded-xl border border-[#E1E1E1] shadow-xs">
-              <span className="text-[11px] font-semibold text-[#767587] block uppercase tracking-wider">Last Visit</span>
-              <span className="text-xs font-bold text-[#1a1c1c] mt-1 block truncate">
-                {lastVisitDate}
-              </span>
-            </div>
-            <div className="bg-white p-4 rounded-xl border border-[#E1E1E1] shadow-xs">
-              <span className="text-[11px] font-semibold text-[#767587] block uppercase tracking-wider">Next Visit</span>
-              <span className="text-xs font-bold text-[#4744e5] mt-1 block truncate">
-                {nextVisitDate}
-              </span>
-            </div>
-          </div>
-
-          {/* FILTERS SECTION */}
-          <div className="bg-white p-4 rounded-xl border border-[#E1E1E1] shadow-xs space-y-3 text-xs">
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-[#1a1c1c] uppercase text-[11px] tracking-wider flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-[16px] text-[#767587]">filter_list</span>
-                <span>Filter Visit History</span>
-              </span>
-              {(visitSearch || visitPicFilter !== 'ALL' || visitStatusFilter !== 'ALL' || visitPurposeFilter !== 'ALL' || visitStartDate || visitEndDate) && (
-                <button
-                  onClick={() => {
-                    setVisitSearch('');
-                    setVisitPicFilter('ALL');
-                    setVisitStatusFilter('ALL');
-                    setVisitPurposeFilter('ALL');
-                    setVisitStartDate('');
-                    setVisitEndDate('');
-                  }}
-                  className="text-xs text-[#4744e5] hover:underline font-bold cursor-pointer"
-                >
-                  Reset Filters
-                </button>
-              )}
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
-              {/* Search */}
-              <div className="relative">
-                <span className="material-symbols-outlined absolute left-2.5 top-2 text-[#767587] text-[16px]">search</span>
-                <input
-                  type="text"
-                  placeholder="Search visit title, notes..."
-                  value={visitSearch}
-                  onChange={(e) => setVisitSearch(e.target.value)}
-                  className="w-full pl-8 pr-3 py-1.5 border border-[#E1E1E1] rounded-lg bg-white"
-                />
-              </div>
-
-              {/* PIC Filter */}
-              <div>
-                <select
-                  value={visitPicFilter}
-                  onChange={(e) => setVisitPicFilter(e.target.value)}
-                  className="w-full px-2.5 py-1.5 border border-[#E1E1E1] rounded-lg bg-white font-medium"
-                >
-                  <option value="ALL">All Sales PIC</option>
-                  {tenantUsers.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Status Filter */}
-              <div>
-                <select
-                  value={visitStatusFilter}
-                  onChange={(e) => setVisitStatusFilter(e.target.value)}
-                  className="w-full px-2.5 py-1.5 border border-[#E1E1E1] rounded-lg bg-white font-medium"
-                >
-                  <option value="ALL">All Statuses</option>
-                  <option value="PLANNED">Scheduled / Planned</option>
-                  <option value="COMPLETED">Completed</option>
-                  <option value="RESCHEDULED">Rescheduled</option>
-                  <option value="CANCELLED">Cancelled</option>
-                  <option value="NO_SHOW">No Show</option>
-                </select>
-              </div>
-
-              {/* Purpose Filter */}
-              <div>
-                <select
-                  value={visitPurposeFilter}
-                  onChange={(e) => setVisitPurposeFilter(e.target.value)}
-                  className="w-full px-2.5 py-1.5 border border-[#E1E1E1] rounded-lg bg-white font-medium"
-                >
-                  <option value="ALL">All Purposes</option>
-                  <option value="Product Presentation & Demo">Product Presentation & Demo</option>
-                  <option value="Contract Renewal Negotiation">Contract Renewal Negotiation</option>
-                  <option value="Routine Checking & Relationship">Routine Checking & Relationship</option>
-                  <option value="Price Negotiation">Price Negotiation</option>
-                  <option value="Onsite Technical Audit">Onsite Technical Audit</option>
-                </select>
-              </div>
-
-              {/* Date Range Start & End */}
-              <div className="flex gap-1">
-                <input
-                  type="date"
-                  value={visitStartDate}
-                  onChange={(e) => setVisitStartDate(e.target.value)}
-                  className="w-1/2 px-1.5 py-1.5 border border-[#E1E1E1] rounded-lg text-[11px]"
-                  title="From Date"
-                />
-                <input
-                  type="date"
-                  value={visitEndDate}
-                  onChange={(e) => setVisitEndDate(e.target.value)}
-                  className="w-1/2 px-1.5 py-1.5 border border-[#E1E1E1] rounded-lg text-[11px]"
-                  title="To Date"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* VISITS ENTERPRISE TABLE */}
-          <div className="bg-white rounded-xl border border-[#E1E1E1] shadow-xs overflow-hidden">
-            <div className="p-4 border-b border-[#E1E1E1] flex justify-between items-center bg-[#fcfcfc]">
-              <span className="text-xs font-bold text-[#1a1c1c]">
-                Showing {filteredVisits.length} of {scopedVisits.length} visits
-              </span>
-              <span className="text-[11px] text-[#767587]">
-                Scope: {!hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS') ? 'Own Visits' : hasPermission('VIEW_TEAM_TASKS') && !hasPermission('VIEW_ALL_TASKS') ? 'Team Scope' : 'Organization Scope'}
-              </span>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-[#f9f9f9] border-b border-[#E1E1E1] text-[10px] font-extrabold uppercase text-[#767587]">
-                  <tr>
-                    <th className="py-3 px-4">Visit Date & Time</th>
-                    <th className="py-3 px-4">Sales PIC</th>
-                    <th className="py-3 px-4">Purpose & Subject</th>
-                    <th className="py-3 px-4">Status</th>
-                    <th className="py-3 px-4">Result / Notes</th>
-                    <th className="py-3 px-4">Next Action</th>
-                    <th className="py-3 px-4 text-center">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#E1E1E1]">
-                  {filteredVisits.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="py-8 text-center text-[#767587]">
-                        No visits found matching your filters.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredVisits.map((v) => (
-                      <tr key={v.id} className="hover:bg-[#fcfcfc] transition-colors">
-                        {/* Visit Date & Time */}
-                        <td className="py-3 px-4 whitespace-nowrap">
-                          <span className="font-bold text-[#1a1c1c] block">{v.visitDate}</span>
-                          <span className="text-[11px] text-[#767587] flex items-center gap-1 mt-0.5">
-                            <span className="material-symbols-outlined text-[13px]">schedule</span>
-                            <span>{v.startTime} - {v.endTime}</span>
-                          </span>
-                        </td>
-
-                        {/* PIC */}
-                        <td className="py-3 px-4 whitespace-nowrap">
-                          <div className="flex items-center gap-2">
-                            <div className="w-6 h-6 rounded-full bg-[#4744e5]/10 text-[#4744e5] font-bold text-[10px] flex items-center justify-center">
-                              {(v.picName || "U").charAt(0)}
-                            </div>
-                            <span className="font-semibold text-[#1a1c1c]">{v.picName}</span>
-                          </div>
-                        </td>
-
-                        {/* Purpose & Subject */}
-                        <td className="py-3 px-4">
-                          <span className="font-bold text-[#1a1c1c] block text-xs">{v.title}</span>
-                          <span className="text-[10px] font-bold text-[#4744e5] bg-[#4744e5]/5 px-2 py-0.5 rounded inline-block mt-0.5">
-                            {v.purpose}
-                          </span>
-                          {v.location && (
-                            <span className="text-[11px] text-[#767587] flex items-center gap-1 mt-1">
-                              <span className="material-symbols-outlined text-[12px]">location_on</span>
-                              <span className="truncate max-w-[200px]">{v.location}</span>
-                            </span>
-                          )}
-                        </td>
-
-                        {/* Status */}
-                        <td className="py-3 px-4 whitespace-nowrap">
-                          {renderVisitStatusBadge(v.status)}
-                        </td>
-
-                        {/* Result */}
-                        <td className="py-3 px-4 max-w-[220px]">
-                          {v.result ? (
-                            <p className="text-[11px] text-[#1a1c1c] line-clamp-2">{v.result}</p>
-                          ) : (
-                            <span className="text-[11px] text-[#a0a0a0] italic">No result recorded</span>
-                          )}
-                        </td>
-
-                        {/* Next Action */}
-                        <td className="py-3 px-4 max-w-[180px]">
-                          {v.nextAction ? (
-                            <span className="text-[11px] text-[#008f53] font-medium block bg-[#00C875]/10 px-2 py-1 rounded">
-                              {v.nextAction}
-                            </span>
-                          ) : (
-                            <span className="text-[11px] text-[#a0a0a0] italic">N/A</span>
-                          )}
-                        </td>
-
-                        {/* Actions */}
-                        <td className="py-3 px-4 whitespace-nowrap text-center">
-                          <div className="flex items-center justify-center gap-1">
-                            <button
-                              onClick={() => setViewingVisit(v)}
-                              title="View Visit Details"
-                              className="p-1.5 hover:bg-[#f0f0f0] rounded text-[#464555] hover:text-[#1a1c1c] cursor-pointer"
-                            >
-                              <span className="material-symbols-outlined text-[18px]">visibility</span>
-                            </button>
-
-                            <button
-                              onClick={() => openEditVisitModal(v)}
-                              title="Edit Visit"
-                              className="p-1.5 hover:bg-[#e1dfff] rounded text-[#4744e5] cursor-pointer"
-                            >
-                              <span className="material-symbols-outlined text-[18px]">edit</span>
-                            </button>
-
-                            <button
-                              onClick={() => openRescheduleVisitModal(v)}
-                              title="Reschedule Visit"
-                              className="p-1.5 hover:bg-[#fef3c7] rounded text-[#d97706] cursor-pointer"
-                            >
-                              <span className="material-symbols-outlined text-[18px]">event_repeat</span>
-                            </button>
-
-                            {v.status !== 'CANCELLED' && (
-                              <button
-                                onClick={() => openCancelVisitModal(v)}
-                                title="Cancel Visit"
-                                className="p-1.5 hover:bg-[#fee2e2] rounded text-[#ba1a1a] cursor-pointer"
-                              >
-                                <span className="material-symbols-outlined text-[18px]">block</span>
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
+      {activeTab === 'visits' && (<CustomerVisitsTab customerId={id || ''} tenantUsers={tenantUsers} />)}
 
       {activeTab === 'tasks' && (
         <div className="space-y-6">
@@ -2312,7 +2009,7 @@ const loadAllCustomerData = async () => {
                   ) : (
                     filteredTasks.map((t) => {
                       const picUser = tenantUsers.find((u) => u.id === t.picId);
-                      const relVisit = visits.find((v) => v.id === t.relatedVisitId);
+                      const relVisit = [].find((v) => v.id === t.relatedVisitId);
                       const relOpp = projects.find((o) => o.id === t.relatedProjectId);
                       const isOverdue = t.dueDate < todayISO && t.status !== 'COMPLETED' && t.status !== 'CANCELLED';
 
@@ -2695,7 +2392,7 @@ const loadAllCustomerData = async () => {
                       const statusMeta = getFollowUpStatusMeta(f.status, f.followUpDate);
                       const picUser = tenantUsers.find((u) => u.id === f.picId);
                       const relOpp = projects.find((o) => o.id === f.relatedProjectId);
-                      const relVisit = visits.find((v) => v.id === f.relatedVisitId);
+                      const relVisit = [].find((v) => v.id === f.relatedVisitId);
 
                       return (
                         <tr key={f.id} className="hover:bg-slate-50/70 transition-colors">
@@ -3203,7 +2900,7 @@ const loadAllCustomerData = async () => {
                 const t = tasksList.find(x => x.id === recordId);
                 if (t) { setViewingTask(t); setShowTaskModal(true); }
               } else if (type === 'VISIT') {
-                const v = visitsList.find(x => x.id === recordId);
+                const v = [].find(x => x.id === recordId);
                 if (v) { setViewingVisit(v); setShowVisitModal(true); }
               } else if (type === 'FOLLOW_UP') {
                 const f = followupsList.find(x => x.id === recordId);
@@ -3711,7 +3408,7 @@ const loadAllCustomerData = async () => {
                   <span className="text-[#767587] block text-[10px] font-bold uppercase mb-1">Related Visit</span>
                   {viewingTask.relatedVisitId ? (
                     (() => {
-                      const v = visits.find((item) => item.id === viewingTask.relatedVisitId);
+                      const v = [].find((item) => item.id === viewingTask.relatedVisitId);
                       return (
                         <div className="p-2 bg-[#f3f3f3] rounded border border-[#E1E1E1] font-semibold text-[#4744e5]">
                           {v ? v.title : viewingTask.relatedVisitId}
@@ -4391,7 +4088,7 @@ const loadAllCustomerData = async () => {
                   <span className="text-[10px] font-bold text-[#767587] block mb-1">RELATED VISIT</span>
                   {viewingFollowUp.relatedVisitId ? (
                     <div className="font-semibold text-slate-700 truncate">
-                      {visits.find((v) => v.id === viewingFollowUp.relatedVisitId)?.title || viewingFollowUp.relatedVisitId}
+                      {[].find((v) => v.id === viewingFollowUp.relatedVisitId)?.title || viewingFollowUp.relatedVisitId}
                     </div>
                   ) : (
                     <div className="text-slate-400 italic">None linked</div>

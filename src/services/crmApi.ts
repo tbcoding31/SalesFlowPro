@@ -57,6 +57,7 @@ export const crmApi = {
       if (params.status && params.status !== 'ALL') q.set('status', params.status);
       if (params.picId && params.picId !== 'ALL') q.set('picId', params.picId);
       if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
+      if (params.customerId && params.customerId !== 'ALL') q.set('customerId', params.customerId);
     }
     const url = `${API_BASE}/projects${q.toString() ? '?' + q.toString() : ''}`;
     const res = await fetch(url, { headers: getAuthHeaders() });
@@ -91,6 +92,7 @@ export const crmApi = {
       if (params.status && params.status !== 'ALL') q.set('status', params.status);
       if (params.picId && params.picId !== 'ALL') q.set('picId', params.picId);
       if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
+      if (params.customerId && params.customerId !== 'ALL') q.set('customerId', params.customerId);
     }
     const url = `${API_BASE}/visits${q.toString() ? '?' + q.toString() : ''}`;
     const res = await fetch(url, { headers: getAuthHeaders() });
@@ -109,6 +111,7 @@ export const crmApi = {
       if (params.status && params.status !== 'ALL') q.set('status', params.status);
       if (params.picId && params.picId !== 'ALL') q.set('picId', params.picId);
       if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
+      if (params.customerId && params.customerId !== 'ALL') q.set('customerId', params.customerId);
     }
     const url = `${API_BASE}/follow_ups${q.toString() ? '?' + q.toString() : ''}`;
     const res = await fetch(url, { headers: getAuthHeaders() });
@@ -141,6 +144,7 @@ fetchCustomers: async (params?: QueryPaginationParams): Promise<PaginatedRespons
       if (params.status && params.status !== 'ALL') q.set('status', params.status);
       if (params.picId && params.picId !== 'ALL') q.set('picId', params.picId);
       if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
+      if (params.customerId && params.customerId !== 'ALL') q.set('customerId', params.customerId);
     }
     const url = `${API_BASE}/customers${q.toString() ? '?' + q.toString() : ''}`;
     const res = await fetch(url, { headers: getAuthHeaders() });
@@ -180,6 +184,7 @@ fetchCustomers: async (params?: QueryPaginationParams): Promise<PaginatedRespons
       if (params.userId && params.userId !== 'ALL') q.set('userId', params.userId);
       if (params.typeId && params.typeId !== 'ALL') q.set('typeId', params.typeId);
       if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
+      if (params.customerId && params.customerId !== 'ALL') q.set('customerId', params.customerId);
     }
     const url = `${API_BASE}/activities${q.toString() ? '?' + q.toString() : ''}`;
     const res = await fetch(url, { headers: getAuthHeaders() });
@@ -196,6 +201,7 @@ fetchCustomers: async (params?: QueryPaginationParams): Promise<PaginatedRespons
       if (params.sortBy) q.set('sortBy', params.sortBy);
       if (params.sortOrder) q.set('sortOrder', params.sortOrder);
       if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
+      if (params.customerId && params.customerId !== 'ALL') q.set('customerId', params.customerId);
     }
     const url = `${API_BASE}/audit_logs${q.toString() ? '?' + q.toString() : ''}`;
     const res = await fetch(url, { headers: getAuthHeaders() });
