@@ -9,7 +9,7 @@ import { pool } from './db';
 
 // --- Canonical Tenant Resolver ---
 async function validateTargetTenant(req: any, res: any, pool: any, actorTenant: string | null): Promise<string | false> {
-  const requestedTenant = req.query.tenantId || req.body.tenantId || req.params?.tenantId || null;
+  const requestedTenant = req.query.tenantId || req.body?.tenantId || req.params?.tenantId || null;
   const targetTenant = actorTenant !== null ? actorTenant : (requestedTenant as string | null);
   
   if (!targetTenant) {
@@ -190,13 +190,7 @@ export const resolveUserAccessContext = async (pool: any, userId: string) => {
     tenantUserStatus = membershipRows[0].tenantUserStatus || 'ACTIVE';
     roleId = membershipRows[0].roleId;
     roleName = membershipRows[0].roleName;
-
-
-
-
-
-
-
+  } else {
     // 2. User has no tenant membership: Check for EXPLICIT global role assignment in global_user_roles
     try {
       const [globalUserRoleRows]: any = await pool.query(`
@@ -658,8 +652,14 @@ const tenantSpecificTables = [
 
 const setupEndpoint = (table: string) => {
   // GET all or by tenant
-  app.get(`/api/${table}`, (req, res) => {
+  app.get(`/api/${table}`, async (req, res) => {
     const actorTenant = (req as any).userTenantId;
+    const actorRole = (req as any).userRole;
+    const isPlatformUser = (req as any).isPlatformUser;
+    if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+    const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
     
     // Special handling for users table which links to tenant via tenant_users
     if (table === 'users') {
@@ -680,20 +680,11 @@ const setupEndpoint = (table: string) => {
         LEFT JOIN teams t ON t.id = tm.teamId
       `;
       const params: any[] = [];
-      const tenantForJoin = (actorTenant) ? actorTenant : (req.query.tenantId || null);
-      params.push(tenantForJoin);
+      params.push(targetTenant);
 
       const whereClauses: string[] = [];
-      if (actorTenant !== null) {
-        whereClauses.push('tu.tenantId = ?');
-        params.push(actorTenant);
-      } else {
-        const { tenantId } = req.query;
-        if (tenantId && tenantId !== 'ALL' ) {
-          whereClauses.push('tu.tenantId = ?');
-          params.push(tenantId);
-        }
-      }
+      whereClauses.push('tu.tenantId = ?');
+      params.push(targetTenant);
 
       // If assignable filter is requested (for new team/leader/PIC assignments), return only ACTIVE users with ACTIVE membership
       if (assignable === 'true' || assignable === '1') {
@@ -716,15 +707,9 @@ const setupEndpoint = (table: string) => {
     if (table === 'roles') {
       let query = `SELECT * FROM roles`;
       const params: any[] = [];
-      if (actorTenant) {
+      if (targetTenant) {
         query += ' WHERE tenantId = ? AND scope = "TENANT"';
-        params.push(actorTenant);
-      } else {
-        const { tenantId } = req.query;
-        if (tenantId && tenantId !== 'ALL' ) {
-          query += ' WHERE tenantId = ?';
-          params.push(tenantId);
-        }
+        params.push(targetTenant);
       }
       sendRes(res, pool.query(query, params).then(([rows]) => rows));
       return;
@@ -871,40 +856,32 @@ const setupEndpoint = (table: string) => {
     const params: any[] = [];
 
     if (tenantSpecificTables.includes(table)) {
-      if (actorTenant !== null) {
-        whereClauses.push('tenantId = ?');
-        params.push(actorTenant);
+      whereClauses.push('tenantId = ?');
+      params.push(targetTenant);
 
-        const actorUserId = (req as any).userId;
-        const actorDataScope = (req as any).userDataScope || 'OWN';
-        const actorPermissions = (req as any).userPermissions || [];
-        const perms = getRequiredPermissions(table);
+      const actorUserId = (req as any).userId;
+      const actorDataScope = (req as any).userDataScope || 'OWN';
+      const actorPermissions = (req as any).userPermissions || [];
+      const perms = getRequiredPermissions(table);
 
-        // Check if table has resource ownership (picId / userId)
-        if (perms.ownerCol && !actorPermissions.includes('ALL') && !actorPermissions.includes('MANAGE_TENANT')) {
-          if (actorDataScope === 'OWN') {
-            whereClauses.push(`${perms.ownerCol} = ?`);
-            params.push(actorUserId);
-          } else if (actorDataScope === 'TEAM') {
-            whereClauses.push(`${perms.ownerCol} IN (
-              SELECT tu.userId FROM tenant_users tu
-              JOIN team_members tm ON tm.tenantUserId = tu.id
-              WHERE tm.teamId IN (
-                SELECT tm2.teamId FROM team_members tm2
-                JOIN tenant_users tu2 ON tu2.id = tm2.tenantUserId
-                WHERE tu2.userId = ? AND tu2.tenantId = ? AND tu2.status = 'ACTIVE'
-              ) AND tu.tenantId = ? AND tu.status = 'ACTIVE'
-            )`);
-            params.push(actorUserId, actorTenant, actorTenant);
-          } else if (actorDataScope === 'DEPARTMENT') {
-            whereClauses.push('1 = 0 /* DEPARTMENT_SCOPE_NOT_ACTIVE */');
-          }
-        }
-      } else {
-        const { tenantId } = req.query;
-        if (tenantId && tenantId !== 'ALL' ) {
-          whereClauses.push('tenantId = ?');
-          params.push(tenantId);
+      // Check if table has resource ownership (picId / userId)
+      if (perms.ownerCol && !actorPermissions.includes('ALL') && !actorPermissions.includes('MANAGE_TENANT')) {
+        if (actorDataScope === 'OWN') {
+          whereClauses.push(`${perms.ownerCol} = ?`);
+          params.push(actorUserId);
+        } else if (actorDataScope === 'TEAM') {
+          whereClauses.push(`${perms.ownerCol} IN (
+            SELECT tu.userId FROM tenant_users tu
+            JOIN team_members tm ON tm.tenantUserId = tu.id
+            WHERE tm.teamId IN (
+              SELECT tm2.teamId FROM team_members tm2
+              JOIN tenant_users tu2 ON tu2.id = tm2.tenantUserId
+              WHERE tu2.userId = ? AND tu2.tenantId = ? AND tu2.status = 'ACTIVE'
+            ) AND tu.tenantId = ? AND tu.status = 'ACTIVE'
+          )`);
+          params.push(actorUserId, actorTenant, actorTenant);
+        } else if (actorDataScope === 'DEPARTMENT') {
+          whereClauses.push('1 = 0 /* DEPARTMENT_SCOPE_NOT_ACTIVE */');
         }
       }
     }
