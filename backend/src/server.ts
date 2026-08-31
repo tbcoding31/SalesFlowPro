@@ -6,6 +6,29 @@ import mysql from 'mysql2/promise';
 import { env } from './env';
 import { pool } from './db';
 
+
+// --- Canonical Tenant Resolver ---
+async function validateTargetTenant(req: any, res: any, pool: any, actorTenant: string | null): Promise<string | false> {
+  const requestedTenant = req.query.tenantId || req.body.tenantId || req.params?.tenantId || null;
+  const targetTenant = actorTenant !== null ? actorTenant : (requestedTenant as string | null);
+  
+  if (!targetTenant) {
+    res.status(400).json({ error: 'TARGET_TENANT_REQUIRED' });
+    return false;
+  }
+  
+  if (actorTenant === null) {
+    const [tCheck]: any = await pool.query('SELECT id FROM tenants WHERE id = ?', [targetTenant]);
+    if (tCheck.length === 0) {
+      res.status(404).json({ error: 'TENANT_NOT_FOUND' });
+      return false;
+    }
+  }
+  
+  return targetTenant as string;
+}
+// ---------------------------------
+
 const app = express();
 
 // Phase 5: Authorization Abstractions
@@ -1142,7 +1165,8 @@ const setupEndpoint = (table: string) => {
       
       // Cross-tenant Customer relationship validation & PIC inheritance fallback
       if (data.customerId && tenantSpecificTables.includes(table) && ['projects', 'tasks', 'visits', 'follow_ups', 'customer_contacts'].includes(table)) {
-        const targetTenant = data.tenantId || actorTenant;
+        const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+        if (targetTenant === false) return;
         const [custRows]: any = await pool.query('SELECT id, tenantId, picId, statusId FROM customers WHERE id = ?', [data.customerId]);
         if (custRows.length === 0) {
           return res.status(400).json({ error: 'Referenced customer does not exist.', code: 'CUSTOMER_NOT_FOUND' });
@@ -1164,7 +1188,8 @@ const setupEndpoint = (table: string) => {
 
       // R58R8R: Validate relatedProjectId belongs to the same customer & tenant
       if (data.relatedProjectId && ['tasks', 'visits', 'follow_ups'].includes(table)) {
-        const targetTenant = data.tenantId || actorTenant;
+        const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+        if (targetTenant === false) return;
         const [projRows]: any = await pool.query('SELECT id, tenantId, customerId FROM projects WHERE id = ?', [data.relatedProjectId]);
         if (projRows.length === 0) {
           return res.status(400).json({ error: 'Referenced project does not exist.', code: 'PROJECT_NOT_FOUND' });
@@ -1179,7 +1204,8 @@ const setupEndpoint = (table: string) => {
 
       // Authoritative PIC validation on creation
       if (data.picId) {
-        const targetTenant = data.tenantId || actorTenant;
+        const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+        if (targetTenant === false) return;
         const picCheck = await validateAssignableTenantUser(pool, targetTenant, data.picId);
         if (!picCheck.valid) {
           return res.status(400).json({ error: picCheck.error, code: picCheck.code });
@@ -1194,7 +1220,8 @@ const setupEndpoint = (table: string) => {
 
       // Custom logic for maintenance_cadences creation
       if (table === 'maintenance_cadences') {
-        const targetTenant = data.tenantId || actorTenant;
+        const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+        if (targetTenant === false) return;
         // Exactly one target invariant
         if ((!data.customerId && !data.projectId) || (data.customerId && data.projectId)) {
           return res.status(400).json({ error: 'Maintenance Cadence must target exactly one Customer or Project.', code: 'INVALID_CADENCE_TARGET' });
@@ -1280,7 +1307,8 @@ const setupEndpoint = (table: string) => {
       await pool.query(query, values);
 
       // Automatic Business Activity Event Emission on entity creation
-      const targetTenant = data.tenantId || actorTenant;
+      const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+        if (targetTenant === false) return;
       if (table === 'customers') {
         await recordBusinessActivity(pool, {
           tenantId: targetTenant,
@@ -1492,7 +1520,8 @@ const setupEndpoint = (table: string) => {
         }
 
         // Domain Activity Emission and completion timestamp handling on specific PUT mutations
-        const targetTenant = actorTenant !== null ? actorTenant : (data.tenantId || null);
+        const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
         const nowFormatted = new Date().toISOString().slice(0, 19).replace('T', ' ');
 
         if (table === 'tasks' && (data.statusId === 'COMPLETED' || data.status === 'COMPLETED')) {
@@ -2088,10 +2117,10 @@ app.post('/api/tenant/users', async (req, res) => {
   if (!email || !email.trim()) return res.status(400).json({ error: 'Email is required' });
   
   // Enforce Tenant Isolation (if actor is TENANT scoped, target tenant must be actor's tenant)
-  let targetTenant = req.body.tenantId || actorTenant;
-  if (actorRole !== 'SUPER_ADMIN' && actorTenant && targetTenant !== actorTenant) {
-     return res.status(403).json({ error: 'Cross-tenant user creation forbidden.' });
-  }
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+
 
   const assignable = await getAssignableRoles(pool, actorRole, actorTenant, targetTenant);
   if (!assignable.includes(roleId)) {
@@ -2769,7 +2798,8 @@ app.get('/api/reports/sales', async (req, res) => {
 
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
-  const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
 
   try {
     const { where, params } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'picId');
@@ -2882,7 +2912,8 @@ app.get('/api/reports/pipeline', async (req, res) => {
     return res.status(403).json({ error: 'Access denied. VIEW_REPORTS permission required.' });
   }
 
-  const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
   const todayStr = getBusinessDate(new Date())!;
   const evaluatedAt = new Date().toISOString();
 
@@ -3306,7 +3337,8 @@ app.get('/api/reports/customers', async (req, res) => {
 
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
-  const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
 
   try {
     const { where, params } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'picId');
@@ -3429,7 +3461,8 @@ app.get('/api/sales-targets', async (req, res) => {
 
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
-  const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
 
   try {
     let effectiveScope = actorDataScope;
@@ -3520,7 +3553,8 @@ app.post('/api/sales-targets', async (req, res) => {
     return res.status(403).json({ error: 'Forbidden. Managing sales targets requires management permissions.', code: 'FORBIDDEN_MANAGE_TARGETS' });
   }
 
-  const targetTenant = (actorTenant) ? actorTenant : (req.body.tenantId || null);
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
   const data = { ...req.body, tenantId: targetTenant };
 
   const validation = validateSalesTargetInput(data);
@@ -3759,7 +3793,8 @@ app.get('/api/sales-targets/attainment', async (req, res) => {
 
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
-  const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
   const todayStr = getBusinessDate(new Date())!;
   const evaluatedAt = new Date().toISOString();
 
@@ -4170,7 +4205,8 @@ app.get('/api/sales-targets/coverage', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
   if (actorRole !== 'SUPER_ADMIN' && actorTenant && targetTenant !== actorTenant) {
     return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
   }
@@ -4574,7 +4610,8 @@ app.get('/api/reports/pipeline-velocity', async (req, res) => {
   if (req.query.tenantId && actorRole !== 'SUPER_ADMIN' && actorTenant !== null && req.query.tenantId !== actorTenant) {
     return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
   }
-  const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
 
   const todayStr = getBusinessDate(new Date()) || new Date().toISOString().slice(0, 10);
   const evaluatedAt = new Date().toISOString();
@@ -4958,7 +4995,8 @@ app.get('/api/tenant/analytics-settings', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
   if (actorRole !== 'SUPER_ADMIN' && actorTenant && targetTenant !== actorTenant) {
     return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
   }
@@ -5010,7 +5048,8 @@ app.put('/api/tenant/analytics-settings', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const targetTenant = (actorTenant) ? actorTenant : (req.body.tenantId || null);
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
   if (actorRole !== 'SUPER_ADMIN' && actorTenant && targetTenant !== actorTenant) {
     return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
   }
@@ -5089,7 +5128,8 @@ app.get('/api/tenant/project-intervention-policies', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string);
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
   if (!targetTenant ) {
     return res.status(400).json({ error: 'Target tenantId is required.', code: 'MISSING_TARGET_TENANT' });
   }
@@ -5185,7 +5225,8 @@ app.get('/api/tenant/project-intervention-policies/:id/revisions', async (req, r
   }
 
   const policyId = req.params.id;
-  const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string);
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
 
   try {
     const hasViewPerm = actorRole === 'SUPER_ADMIN' ||
@@ -5285,7 +5326,8 @@ app.post('/api/tenant/project-intervention-policies', async (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const targetTenant = (actorTenant) ? actorTenant : (req.body.tenantId || (req.query.tenantId as string));
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
   if (!targetTenant ) {
     return res.status(400).json({ error: 'Target tenantId is required for policy creation.', code: 'MISSING_TARGET_TENANT' });
   }
@@ -5753,7 +5795,8 @@ app.get('/api/management/project-interventions', async (req, res) => {
   if (req.query.tenantId && actorRole !== 'SUPER_ADMIN' && actorTenant !== null && req.query.tenantId !== actorTenant) {
     return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
   }
-  const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
 
   const todayStr = getBusinessDate(new Date()) || new Date().toISOString().slice(0, 10);
   const evaluatedAt = new Date().toISOString();
@@ -6706,7 +6749,8 @@ app.get('/api/management/project-intervention-history', async (req, res) => {
   if (req.query.tenantId && actorRole !== 'SUPER_ADMIN' && actorTenant !== null && req.query.tenantId !== actorTenant) {
     return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
   }
-  const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
 
   try {
     const hasViewPerm = actorRole === 'SUPER_ADMIN' ||
@@ -6880,7 +6924,8 @@ app.get('/api/reports/intervention-analytics', async (req, res) => {
   if (req.query.tenantId && actorRole !== 'SUPER_ADMIN' && actorTenant !== null && req.query.tenantId !== actorTenant) {
     return res.status(403).json({ error: 'Forbidden: Cross-tenant access denied.' });
   }
-  const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
 
   try {
     const hasViewPerm = actorRole === 'SUPER_ADMIN' ||
@@ -7907,7 +7952,8 @@ app.post('/api/maintenance_cadences/:id/generate-next', async (req, res) => {
   await connection.beginTransaction();
 
   try {
-    const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+    const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
 
     // 1. Row Lock Cadence
     const [cadRows]: any = await connection.query(`
@@ -8328,7 +8374,8 @@ app.get(['/api/sales/agenda', '/api/agenda'], async (req, res) => {
 
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
-  const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
 
   try {
     const todayStr = (req.query.date as string) || getBusinessDate(new Date())!;
@@ -8616,7 +8663,8 @@ app.get('/api/customers/:id/next-action', async (req, res) => {
 
   const customerId = req.params.id;
   try {
-    const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+    const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
     const { where: custWhere, params: custParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'c.picId');
 
     const [custRows]: any = await pool.query(`
@@ -8684,7 +8732,8 @@ app.get('/api/projects/:id/next-action', async (req, res) => {
 
   const projectId = req.params.id;
   try {
-    const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+    const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
     const { where: projWhere, params: projParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'p.picId');
 
     const [projRows]: any = await pool.query(`
@@ -8755,7 +8804,8 @@ app.get('/api/customers/:id/timeline', async (req, res) => {
   const offset = (page - 1) * pageSize;
 
   try {
-    const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+    const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
 
     // Security check: ensure customer belongs to tenant
     const [custRows]: any = await pool.query(`SELECT id FROM customers WHERE id = ? AND tenantId = ?`, [customerId, targetTenant]);
@@ -8816,7 +8866,8 @@ app.get('/api/customers/:id/summary', async (req, res) => {
 
   const customerId = req.params.id;
   try {
-    const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+    const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
     const { where: custWhere, params: custParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'c.picId');
 
     const [custRows]: any = await pool.query(`
@@ -8908,7 +8959,8 @@ app.get('/api/projects/:id/timeline', async (req, res) => {
   const offset = (page - 1) * pageSize;
 
   try {
-    const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+    const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
 
     const [projRows]: any = await pool.query(`SELECT id FROM projects WHERE id = ? AND tenantId = ?`, [projectId, targetTenant]);
     if (projRows.length === 0) return res.status(404).json({ error: 'Not Found' });
@@ -8972,7 +9024,8 @@ app.get('/api/projects/pipeline', async (req, res) => {
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
-    const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+    const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
     const { where: projWhere, params: projParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'picId');
 
     // 1. Aggregate query for complete counts/values
@@ -9021,7 +9074,8 @@ app.get('/api/projects/:id/summary', async (req, res) => {
 
   const projectId = req.params.id;
   try {
-    const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+    const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
     const { where: projWhere, params: projParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'p.picId');
 
     const [projRows]: any = await pool.query(`
@@ -9080,7 +9134,8 @@ app.get('/api/sales/attention', async (req, res) => {
   if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
-    const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+    const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
     const todayStr = req.query.date ? String(req.query.date).trim() : getBusinessDate(new Date())!;
     const evaluatedAt = new Date().toISOString();
 
@@ -9428,7 +9483,8 @@ app.get('/api/management/control-tower', async (req, res) => {
   }
 
   try {
-    const targetTenant = (actorTenant) ? actorTenant : (req.query.tenantId as string || null);
+    const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+    if (targetTenant === false) return;
     const todayStr = req.query.date ? String(req.query.date).trim() : getBusinessDate(new Date())!;
     const evaluatedAt = new Date().toISOString();
 
@@ -10399,10 +10455,10 @@ tables.forEach(table => setupEndpoint(table));
         return res.status(400).json({ error: 'Team name is required.' });
       }
 
-      const targetTenant = isPlatformUser ? (req.body.tenantId || actorTenant) : actorTenant;
-      if (!targetTenant) {
-        return res.status(400).json({ error: 'Tenant context is required.' });
-      }
+      const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+      if (targetTenant === false) return;
+
+
 
       // Check duplicate team name in tenant
       const [existing]: any = await pool.query('SELECT id FROM teams WHERE tenantId = ? AND name = ?', [targetTenant, name.trim()]);
