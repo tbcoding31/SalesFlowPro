@@ -34,7 +34,7 @@ export const ProjectsPage: React.FC = () => {
         if ((pRes as any).data) {
           setProjects((pRes as any).data);
           setTotalItems((pRes as any).pagination.totalItems);
-          setTotalPages((pRes as any).pagination.totalPages);
+          // setTotalPages((pRes as any).pagination.totalPages);
           setCurrentPage((pRes as any).pagination.page);
         }
         setCustomers(cList as any);
