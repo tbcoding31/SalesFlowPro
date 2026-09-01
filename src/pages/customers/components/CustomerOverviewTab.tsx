@@ -1,6 +1,6 @@
 import { API_BASE, getAuthHeaders } from '../../../services/crmApi';
 import { crmApi } from '../../../services/crmApi';
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Customer, Visit, Task, Project, Activity, AttentionSignal, ProjectAttentionSummary } from '../../../types';
 import { CustomerAttentionTab } from './CustomerAttentionTab';
 
@@ -18,10 +18,10 @@ export interface CustomerOverviewTabProps {
   customerNextAction: any;
   summaryMetrics: CustomerOverviewSummaryMetrics;
   primaryContact: any;
-  activities: Activity[];
-  visits: Visit[];
-  tasks: Task[];
-  projects: Project[];
+  
+  
+  
+  
   customerAttentionSignals: AttentionSignal[];
   projectAttentionSummary: ProjectAttentionSummary | null;
   onViewActivities: () => void;
@@ -40,10 +40,7 @@ export const CustomerOverviewTab: React.FC<CustomerOverviewTabProps> = ({
   customerNextAction,
   summaryMetrics,
   primaryContact,
-  activities,
-  visits,
-  tasks,
-  projects,
+  
   customerAttentionSignals,
   projectAttentionSummary,
   onViewActivities,
@@ -56,6 +53,38 @@ export const CustomerOverviewTab: React.FC<CustomerOverviewTabProps> = ({
   onCreateNote,
   onChangePic
 }) => {
+
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [visits, setVisits] = useState<Visit[]>([]);
+
+  useEffect(() => {
+    if (!customer?.id) return;
+    const fetchPreviews = async () => {
+      try {
+        const pRes = await crmApi.fetchProjects({ customerId: customer.id, page: 1, pageSize: 3 });
+        setProjects(pRes.data || []);
+      } catch (e) {}
+      
+      try {
+        const aRes = await crmApi.fetchTimeline(customer.id, 1, 5);
+        setActivities(aRes.data || []);
+      } catch (e) {}
+      
+      try {
+        const tRes = await crmApi.fetchTasks({ customerId: customer.id, status: 'OPEN', page: 1, pageSize: 3 });
+        setTasks(tRes.data || []);
+      } catch (e) {}
+
+      try {
+        const vRes = await crmApi.fetchVisits({ customerId: customer.id, upcoming: true, page: 1, pageSize: 3 });
+        setVisits(vRes.data || []);
+      } catch (e) {}
+    };
+    fetchPreviews();
+  }, [customer?.id]);
+
     const [localVisits, setLocalVisits] = React.useState<any[]>([]);
   const [localTasks, setLocalTasks] = React.useState<any[]>([]);
   const [tasksError, setTasksError] = React.useState(false);

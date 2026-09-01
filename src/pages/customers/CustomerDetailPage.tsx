@@ -351,7 +351,7 @@ const loadAllCustomerData = async () => {
         crmApi.fetchCustomerSummary(id),
         Promise.resolve([]), /* visits moved to tab */
         
-        crmApi.fetchCollection<Project>('projects', tenantId),
+        Promise.resolve([]),
         Promise.resolve([]),
         crmApi.fetchCollection<CustomerContact>('customer_contacts', tenantId),
         usersApi.fetchUsers(tenantId),
@@ -406,8 +406,8 @@ const loadAllCustomerData = async () => {
   
   const tasks: Task[] = []; // tasks are now handled in CustomerTasksTab
   const followups: FollowUp[] = followupsList;
-  const projects: Project[] = oppsList;
-  const activities: Activity[] = activitiesList;
+  const projects: Project[] = [];
+  const activities: Activity[] = [];
 
   // Compute Unified Customer Activity Timeline
   const rawActivities: ActivityTimelineItem[] = [];
@@ -1284,43 +1284,9 @@ const loadAllCustomerData = async () => {
     });
   };
 
-  const handleCreateVisit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const newVisit: Visit = {
-      id: `VIS-${Date.now().toString().slice(-4)}`,
-      tenantId,
-      customerId: customer.id,
-      customerName: customer.name,
-      customerCode: customer.code,
-      picId: currentUser?.id || 'USR-005',
-      picName: currentUser?.name || 'Budi Santoso',
-      picAvatar: currentUser?.avatarUrl,
-      title: visitTitle,
-      purpose: visitPurpose,
-      visitDate,
-      startTime,
-      endTime,
-      location,
-      status: 'PLANNED',
-      createdAt: new Date().toISOString().split('T')[0],
-    };
+  
 
-    crmApi.createRecord('visits', newVisit).then(() => {
-      refreshVisits();
-      setShowVisitModal(false);
-      setVisitTitle('');
-    });
-  };
-
-  const openEditVisitModal = (v: Visit) => {
-    setEditingVisit(v);
-    setEditVisitTitle(v.title);
-    setEditVisitPurpose(v.purpose);
-    setEditVisitLocation(v.location);
-    setEditVisitStatus(v.status);
-    setEditVisitResult(v.result || '');
-    setEditVisitNextAction(v.nextAction || '');
-  };
+  
 
   const handleSaveEditVisit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1576,10 +1542,10 @@ const loadAllCustomerData = async () => {
               pipelineValue
             }}
             primaryContact={primaryContact}
-            activities={activitiesList}
-            visits={[]}
-            tasks={[]}
-            projects={oppsList}
+            
+            
+            
+            
             customerAttentionSignals={customerAttentionSignals}
             projectAttentionSummary={projectAttentionSummary}
             onViewActivities={() => setActiveTab('activities')}
@@ -1598,9 +1564,9 @@ const loadAllCustomerData = async () => {
       {activeTab === 'visits' && (<CustomerVisitsTab customerId={id || ''} tenantUsers={tenantUsers} />)}
 
       {activeTab === 'tasks' && (
-        <CustomerTasksTab customerId={id} tenantUsers={tenantUsers} projects={projects} />
+        <CustomerTasksTab customerId={id} tenantUsers={tenantUsers}  />
       )}
-      {activeTab === 'followups' && (<CustomerFollowUpsTab customerId={id || ''} tenantUsers={tenantUsers} projects={projects} />)}
+      {activeTab === 'followups' && (<CustomerFollowUpsTab customerId={id || ''} tenantUsers={tenantUsers}  />)}
         {activeTab === 'projects' && (
         <CustomerProjectsTab customerId={id || ''} tenantUsers={tenantUsers} customer={customer} />
       )}
@@ -2215,64 +2181,6 @@ const loadAllCustomerData = async () => {
         </div>
       )}
 
-      {/* MODAL 3: CREATE VISIT */}
-      {showVisitModal && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl border border-[#E1E1E1] shadow-lg max-w-md w-full p-6 space-y-4">
-            <div className="flex justify-between items-center border-b border-[#E1E1E1] pb-3">
-              <h2 className="text-base font-bold text-[#1a1c1c]">Schedule Sales Visit</h2>
-              <button onClick={() => setShowVisitModal(false)} className="text-[#767587]">
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </div>
-            <form onSubmit={handleCreateVisit} className="space-y-3 text-xs">
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Visit Subject *</label>
-                <input
-                  type="text"
-                  required
-                  value={visitTitle}
-                  onChange={(e) => setVisitTitle(e.target.value)}
-                  placeholder="e.g. Commercial Proposal Presentation"
-                  className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block font-bold text-[#1a1c1c] mb-1">Visit Date</label>
-                  <input
-                    type="date"
-                    value={visitDate}
-                    onChange={(e) => setVisitDate(e.target.value)}
-                    className="w-full px-2 py-1.5 border border-[#E1E1E1] rounded"
-                  />
-                </div>
-                <div>
-                  <label className="block font-bold text-[#1a1c1c] mb-1">Start Time</label>
-                  <input
-                    type="time"
-                    value={startTime}
-                    onChange={(e) => setStartTime(e.target.value)}
-                    className="w-full px-2 py-1.5 border border-[#E1E1E1] rounded"
-                  />
-                </div>
-              </div>
-              <div className="flex justify-end gap-2 pt-3 border-t border-[#E1E1E1]">
-                <button
-                  type="button"
-                  onClick={() => setShowVisitModal(false)}
-                  className="px-4 py-2 border border-[#E1E1E1] rounded"
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="px-4 py-2 bg-[#4744e5] text-white rounded font-bold">
-                  Confirm Schedule
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {/* MODAL: CREATE TASK */}
       
@@ -2916,320 +2824,9 @@ const loadAllCustomerData = async () => {
         </div>
       )}
 
-      {/* MODAL: VIEW VISIT DETAILS */}
-      {viewingVisit && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl border border-[#E1E1E1] shadow-lg max-w-lg w-full p-6 space-y-4">
-            <div className="flex justify-between items-center border-b border-[#E1E1E1] pb-3">
-              <div>
-                <span className="text-[10px] font-bold text-[#4744e5] uppercase tracking-wider block">Visit Record #{viewingVisit.id}</span>
-                <h2 className="text-base font-bold text-[#1a1c1c]">{viewingVisit.title}</h2>
-              </div>
-              <button onClick={() => setViewingVisit(null)} className="text-[#767587] hover:text-[#1a1c1c]">
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </div>
 
-            <div className="space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-3 bg-[#f9f9f9] p-3 rounded-lg border border-[#E1E1E1]">
-                <div>
-                  <span className="text-[#767587] block text-[10px] uppercase font-bold">Visit Date & Time</span>
-                  <span className="font-bold text-[#1a1c1c] mt-0.5 block">{viewingVisit.visitDate} ({viewingVisit.startTime} - {viewingVisit.endTime})</span>
-                </div>
-                <div>
-                  <span className="text-[#767587] block text-[10px] uppercase font-bold">Assigned Sales PIC</span>
-                  <span className="font-bold text-[#1a1c1c] mt-0.5 block">{viewingVisit.picName}</span>
-                </div>
-                <div>
-                  <span className="text-[#767587] block text-[10px] uppercase font-bold">Purpose</span>
-                  <span className="font-bold text-[#4744e5] mt-0.5 block">{viewingVisit.purpose}</span>
-                </div>
-                <div>
-                  <span className="text-[#767587] block text-[10px] uppercase font-bold">Current Status</span>
-                  <span className="mt-0.5 block">{renderVisitStatusBadge(viewingVisit.status)}</span>
-                </div>
-              </div>
 
-              <div>
-                <span className="text-[#767587] block text-[11px] font-bold uppercase mb-1">Visit Location</span>
-                <p className="p-2.5 bg-[#f3f3f3] rounded border border-[#E1E1E1] text-[#1a1c1c] font-medium flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-[16px] text-[#4744e5]">location_on</span>
-                  <span>{viewingVisit.location || customer.address}</span>
-                </p>
-              </div>
 
-              <div>
-                <span className="text-[#767587] block text-[11px] font-bold uppercase mb-1">Visit Result / Meeting Notes</span>
-                <div className="p-3 bg-[#f9f9f9] rounded border border-[#E1E1E1] text-[#1a1c1c] min-h-[60px]">
-                  {viewingVisit.result || 'No result summary recorded yet for this visit.'}
-                </div>
-              </div>
-
-              <div>
-                <span className="text-[#767587] block text-[11px] font-bold uppercase mb-1">Next Agreed Action</span>
-                <div className="p-3 bg-[#00C875]/5 rounded border border-[#00C875]/30 text-[#008f53] font-semibold">
-                  {viewingVisit.nextAction || 'No explicit next action assigned.'}
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-between items-center pt-3 border-t border-[#E1E1E1]">
-              <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    const v = viewingVisit;
-                    setViewingVisit(null);
-                    openEditVisitModal(v);
-                  }}
-                  className="px-3 py-1.5 bg-[#4744e5]/10 text-[#4744e5] rounded text-xs font-bold hover:bg-[#4744e5]/20"
-                >
-                  Edit Visit
-                </button>
-                <button
-                  onClick={() => {
-                    const v = viewingVisit;
-                    setViewingVisit(null);
-                    openRescheduleVisitModal(v);
-                  }}
-                  className="px-3 py-1.5 bg-[#f59e0b]/10 text-[#d97706] rounded text-xs font-bold hover:bg-[#f59e0b]/20"
-                >
-                  Reschedule
-                </button>
-              </div>
-              <button
-                onClick={() => setViewingVisit(null)}
-                className="px-4 py-1.5 border border-[#E1E1E1] text-[#1a1c1c] rounded text-xs font-bold"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: EDIT VISIT */}
-      {editingVisit && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl border border-[#E1E1E1] shadow-lg max-w-md w-full p-6 space-y-4">
-            <div className="flex justify-between items-center border-b border-[#E1E1E1] pb-3">
-              <h2 className="text-base font-bold text-[#1a1c1c]">Edit Visit Record</h2>
-              <button onClick={() => setEditingVisit(null)} className="text-[#767587]">
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </div>
-            <form onSubmit={handleSaveEditVisit} className="space-y-3 text-xs">
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Subject / Title *</label>
-                <input
-                  type="text"
-                  required
-                  value={editVisitTitle}
-                  onChange={(e) => setEditVisitTitle(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Visit Purpose</label>
-                <select
-                  value={editVisitPurpose}
-                  onChange={(e) => setEditVisitPurpose(e.target.value)}
-                  className="w-full px-2 py-1.5 border border-[#E1E1E1] rounded bg-white font-medium"
-                >
-                  <option value="Product Presentation & Demo">Product Presentation & Demo</option>
-                  <option value="Contract Renewal Negotiation">Contract Renewal Negotiation</option>
-                  <option value="Routine Checking & Relationship">Routine Checking & Relationship</option>
-                  <option value="Price Negotiation">Price Negotiation</option>
-                  <option value="Onsite Technical Audit">Onsite Technical Audit</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Status</label>
-                <select
-                  value={editVisitStatus}
-                  onChange={(e) => setEditVisitStatus(e.target.value as any)}
-                  className="w-full px-2 py-1.5 border border-[#E1E1E1] rounded bg-white font-bold"
-                >
-                  <option value="PLANNED">Scheduled / Planned</option>
-                  <option value="COMPLETED">Completed</option>
-                  <option value="RESCHEDULED">Rescheduled</option>
-                  <option value="CANCELLED">Cancelled</option>
-                  <option value="NO_SHOW">No Show</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Location</label>
-                <input
-                  type="text"
-                  value={editVisitLocation}
-                  onChange={(e) => setEditVisitLocation(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Visit Result / Summary</label>
-                <textarea
-                  rows={2}
-                  value={editVisitResult}
-                  onChange={(e) => setEditVisitResult(e.target.value)}
-                  placeholder="Record key meeting outcomes..."
-                  className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Next Action</label>
-                <input
-                  type="text"
-                  value={editVisitNextAction}
-                  onChange={(e) => setEditVisitNextAction(e.target.value)}
-                  placeholder="e.g. Send revised contract quote by Friday"
-                  className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-[#E1E1E1]">
-                <button
-                  type="button"
-                  onClick={() => setEditingVisit(null)}
-                  className="px-4 py-2 border border-[#E1E1E1] rounded"
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="px-4 py-2 bg-[#4744e5] text-white rounded font-bold">
-                  Save Changes
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: RESCHEDULE VISIT */}
-      {reschedulingVisit && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl border border-[#E1E1E1] shadow-lg max-w-md w-full p-6 space-y-4">
-            <div className="flex justify-between items-center border-b border-[#E1E1E1] pb-3">
-              <div>
-                <h2 className="text-base font-bold text-[#1a1c1c]">Reschedule Sales Visit</h2>
-                <span className="text-[11px] text-[#767587]">{reschedulingVisit.title}</span>
-              </div>
-              <button onClick={() => setReschedulingVisit(null)} className="text-[#767587]">
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </div>
-            <form onSubmit={handleConfirmReschedule} className="space-y-3 text-xs">
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">New Visit Date *</label>
-                <input
-                  type="date"
-                  required
-                  value={rescheduleDate}
-                  onChange={(e) => setRescheduleDate(e.target.value)}
-                  className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block font-bold text-[#1a1c1c] mb-1">Start Time</label>
-                  <input
-                    type="time"
-                    value={rescheduleStartTime}
-                    onChange={(e) => setRescheduleStartTime(e.target.value)}
-                    className="w-full px-2 py-1.5 border border-[#E1E1E1] rounded"
-                  />
-                </div>
-                <div>
-                  <label className="block font-bold text-[#1a1c1c] mb-1">End Time</label>
-                  <input
-                    type="time"
-                    value={rescheduleEndTime}
-                    onChange={(e) => setRescheduleEndTime(e.target.value)}
-                    className="w-full px-2 py-1.5 border border-[#E1E1E1] rounded"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Reschedule Reason / Notes</label>
-                <textarea
-                  rows={2}
-                  value={rescheduleReason}
-                  onChange={(e) => setRescheduleReason(e.target.value)}
-                  placeholder="e.g. Requested by client due to executive schedule overlap"
-                  className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-[#E1E1E1]">
-                <button
-                  type="button"
-                  onClick={() => setReschedulingVisit(null)}
-                  className="px-4 py-2 border border-[#E1E1E1] rounded"
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="px-4 py-2 bg-[#d97706] text-white rounded font-bold">
-                  Confirm Reschedule
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: CANCEL VISIT */}
-      {cancellingVisit && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-xl border border-[#E1E1E1] shadow-lg max-w-md w-full p-6 space-y-4">
-            <div className="flex justify-between items-center border-b border-[#E1E1E1] pb-3">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-[#ba1a1a]">warning</span>
-                <h2 className="text-base font-bold text-[#1a1c1c]">Cancel Visit Confirmation</h2>
-              </div>
-              <button onClick={() => setCancellingVisit(null)} className="text-[#767587]">
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </div>
-
-            <div className="text-xs space-y-2">
-              <p className="text-[#464555]">
-                Are you sure you want to cancel the scheduled visit <strong className="text-[#1a1c1c]">{cancellingVisit.title}</strong>?
-              </p>
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1 mt-3">Reason for Cancellation</label>
-                <textarea
-                  rows={2}
-                  value={cancelReason}
-                  onChange={(e) => setCancelReason(e.target.value)}
-                  placeholder="e.g. Client requested cancellation or project put on hold"
-                  className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-3 border-t border-[#E1E1E1]">
-              <button
-                type="button"
-                onClick={() => setCancellingVisit(null)}
-                className="px-4 py-2 border border-[#E1E1E1] rounded text-xs"
-              >
-                Keep Scheduled
-              </button>
-              <button
-                onClick={handleConfirmCancel}
-                className="px-4 py-2 bg-[#ba1a1a] text-white rounded font-bold text-xs"
-              >
-                Confirm Cancel Visit
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
