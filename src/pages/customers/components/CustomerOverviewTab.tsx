@@ -63,7 +63,7 @@ export const CustomerOverviewTab: React.FC<CustomerOverviewTabProps> = ({
     if (!customer?.id) return;
     const fetchPreviews = async () => {
       try {
-        const pRes = await crmApi.fetchProjects({ customerId: customer.id, status: 'OPEN', page: 1, pageSize: 3 });
+        const pRes = await crmApi.fetchProjects({ customerId: customer.id, status: 'OPEN', sortBy: 'createdAt', sortOrder: 'DESC', page: 1, pageSize: 3 });
         setProjects(pRes.data || []);
       } catch (e) {}
       
@@ -73,12 +73,12 @@ export const CustomerOverviewTab: React.FC<CustomerOverviewTabProps> = ({
       } catch (e) {}
       
       try {
-        const tRes = await crmApi.fetchTasks({ customerId: customer.id, status: 'OPEN', page: 1, pageSize: 3 });
+        const tRes = await crmApi.fetchTasks({ customerId: customer.id, status: 'OPEN', upcoming: true, sortBy: 'dueDate', sortOrder: 'ASC', page: 1, pageSize: 3 });
         setTasks(tRes.data || []);
       } catch (e) {}
 
       try {
-        const vRes = await crmApi.fetchVisits({ customerId: customer.id, upcoming: true, page: 1, pageSize: 3 });
+        const vRes = await crmApi.fetchVisits({ customerId: customer.id, status: 'OPEN', upcoming: true, sortBy: 'visitDate', sortOrder: 'ASC', page: 1, pageSize: 3 });
         setVisits(vRes.data || []);
       } catch (e) {}
     };
