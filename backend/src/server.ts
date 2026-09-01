@@ -908,8 +908,8 @@ const setupEndpoint = (table: string) => {
     }
 
     if (req.query.status && req.query.status !== 'ALL') {
-      const statusCol = table === 'follow_ups' ? 'status' : 'statusId';
-      if (req.query.status === 'OPEN' && ['tasks', 'visits', 'follow_ups'].includes(table)) {
+      const statusCol = table === 'follow_ups' ? 'status' : table === 'projects' ? 'stageId' : 'statusId';
+      if (req.query.status === 'OPEN' && ['tasks', 'visits', 'follow_ups', 'projects'].includes(table)) {
         whereClauses.push(`${statusCol} NOT IN ('COMPLETED', 'CANCELLED')`);
         
         // UPCOMING SEMANTICS

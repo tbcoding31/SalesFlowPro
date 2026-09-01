@@ -63,7 +63,7 @@ export const CustomerOverviewTab: React.FC<CustomerOverviewTabProps> = ({
     if (!customer?.id) return;
     const fetchPreviews = async () => {
       try {
-        const pRes = await crmApi.fetchProjects({ customerId: customer.id, page: 1, pageSize: 3 });
+        const pRes = await crmApi.fetchProjects({ customerId: customer.id, status: 'OPEN', page: 1, pageSize: 3 });
         setProjects(pRes.data || []);
       } catch (e) {}
       
@@ -385,13 +385,13 @@ export const CustomerOverviewTab: React.FC<CustomerOverviewTabProps> = ({
               </div>
             </div>
 
-            {projects.filter(o => o.stage !== 'LOST' && o.stage !== 'WON').length === 0 ? (
+            {projects.length === 0 ? (
               <div className="py-6 text-center">
                 <p className="text-xs text-[#767587]">No active projects.</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {projects.filter(o => o.stage !== 'LOST' && o.stage !== 'WON').slice(0, 3).map((opp) => (
+                {projects.map((opp) => (
                   <div key={opp.id} className="p-4 bg-white rounded-xl border border-[#E1E1E1] hover:border-[#4744e5] transition-all group">
                     <div className="flex justify-between items-start mb-2">
                       <span className="text-[10px] font-bold text-[#767587] uppercase tracking-wider">{opp.stage}</span>

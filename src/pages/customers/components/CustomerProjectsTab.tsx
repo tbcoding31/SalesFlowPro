@@ -39,6 +39,7 @@ export const CustomerProjectsTab: React.FC<{ customerId: string, tenantUsers: an
   const [oppNameInput, setOppNameInput] = useState('');
   const [oppValueInput, setOppValueInput] = useState<number>(0);
   const [oppStageInput, setOppStageInput] = useState<ProjectStage>('QUALIFICATION');
+  const [availableStages, setAvailableStages] = useState<any[]>([]);
   const [oppProbInput, setOppProbInput] = useState<number>(20);
   const [oppCloseDateInput, setOppCloseDateInput] = useState<string>('');
   
@@ -217,12 +218,7 @@ export const CustomerProjectsTab: React.FC<{ customerId: string, tenantUsers: an
             className="px-3 py-2 border rounded-lg text-xs"
           >
             <option value="ALL">All Stages</option>
-            <option value="LEAD">Lead</option>
-            <option value="QUALIFICATION">Qualification</option>
-            <option value="PROPOSAL">Proposal</option>
-            <option value="NEGOTIATION">Negotiation</option>
-            <option value="WON">Closed Won</option>
-            <option value="LOST">Closed Lost</option>
+            {availableStages.map(s => <option key={s.code} value={s.code}>{s.name}</option>)}
           </select>
         </div>
 

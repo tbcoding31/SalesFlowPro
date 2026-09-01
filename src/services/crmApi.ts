@@ -32,6 +32,19 @@ export interface QueryPaginationParams {
 
 export const crmApi = {
   // Generic collection fetcher (bounded / full)
+  
+  fetchCustomerContacts: async (customerId: string) => {
+    try {
+      const url = `${API_BASE}/customer_contacts?customerId=${customerId}`;
+      const res = await fetch(url, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error('Failed to fetch customer contacts');
+      const data = await res.json();
+      return Array.isArray(data) ? data : (data.data || []);
+    } catch(err) {
+      console.error(err);
+      return [];
+    }
+  },
   fetchCollection: async <T>(table: string, tenantId?: string): Promise<T[]> => {
     try {
       const params = new URLSearchParams();

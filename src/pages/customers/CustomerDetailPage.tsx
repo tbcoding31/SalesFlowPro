@@ -353,7 +353,7 @@ const loadAllCustomerData = async () => {
         
         Promise.resolve([]),
         Promise.resolve([]),
-        crmApi.fetchCollection<CustomerContact>('customer_contacts', tenantId),
+        crmApi.fetchCustomerContacts(id),
         usersApi.fetchUsers(tenantId),
         crmApi.fetchCustomerNextAction(id)
       ]);
@@ -382,7 +382,7 @@ const loadAllCustomerData = async () => {
       
       setOppsList(pList.filter((p: any) => p.customerId === id));
       setActivitiesList(aList.filter((a: any) => a.customerId === id || a.entityId === id));
-      setContactsList(cList.filter((c: any) => c.customerId === id));
+      setContactsList(cList);
       setTenantUsers(uList || []);
       if (naRes && naRes.nextAction) {
         setCustomerNextAction(naRes.nextAction);
