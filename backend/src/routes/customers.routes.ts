@@ -1,1 +1,3 @@
-// customers routes
+import { Router } from 'express';
+export const customersRoutes = Router();
+

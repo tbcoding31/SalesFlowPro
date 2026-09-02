@@ -1,1 +1,3 @@
-// tasks routes
+import { Router } from 'express';
+export const tasksRoutes = Router();
+
