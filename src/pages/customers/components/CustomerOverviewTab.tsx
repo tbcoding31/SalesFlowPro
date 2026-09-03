@@ -68,17 +68,17 @@ export const CustomerOverviewTab: React.FC<CustomerOverviewTabProps> = ({
       } catch (e) {}
       
       try {
-        const aRes = await crmApi.fetchTimeline(customer.id, 1, 5);
-        setActivities(aRes.data || []);
+        const aRes = await crmApi.fetchCustomerTimeline(customer.id, 1, 5);
+        setActivities(aRes.data as any);
       } catch (e) {}
       
       try {
-        const tRes = await crmApi.fetchTasks({ customerId: customer.id, status: 'OPEN', upcoming: true, sortBy: 'dueDate', sortOrder: 'ASC', page: 1, pageSize: 3 });
+        const tRes = await crmApi.fetchTasks({ customerId: customer.id, status: 'OPEN', upcoming: 'true', sortBy: 'dueDate', sortOrder: 'ASC', page: 1, pageSize: 3 });
         setTasks(tRes.data || []);
       } catch (e) {}
 
       try {
-        const vRes = await crmApi.fetchVisits({ customerId: customer.id, status: 'OPEN', upcoming: true, sortBy: 'visitDate', sortOrder: 'ASC', page: 1, pageSize: 3 });
+        const vRes = await crmApi.fetchVisits({ customerId: customer.id, status: 'OPEN', upcoming: 'true', sortBy: 'visitDate', sortOrder: 'ASC', page: 1, pageSize: 3 });
         setVisits(vRes.data || []);
       } catch (e) {}
     };

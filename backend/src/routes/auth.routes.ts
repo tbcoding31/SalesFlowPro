@@ -64,13 +64,19 @@ authRoutes.post('/login', async (req: any, res: any) => {
       [sessionId, user.id, token, req.ip, req.headers['user-agent'] || '', expiresAt]
     );
 
-    user.role = userContext.roleId;
-    user.roleName = userContext.roleName;
-    user.tenantId = userContext.tenantId;
-    user.permissions = userContext.permissions;
-    user.dataScope = userContext.dataScope;
+    const userDto = {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      avatarUrl: user.avatar,
+      role: userContext.roleId,
+      roleName: userContext.roleName,
+      tenantId: userContext.tenantId,
+      permissions: userContext.permissions,
+      dataScope: userContext.dataScope
+    };
 
-    res.json({ success: true, user: { id: user.id, role: user.role, tenantId: user.tenantId, email: user.email }, token });
+    res.json({ success: true, user: userDto, token });
   } catch (err: any) {
     console.error('Login error:', err);
     res.status(500).json({ success: false, error: 'Internal Server Error' });
@@ -121,13 +127,19 @@ authRoutes.get('/me', async (req: any, res: any) => {
         return res.status(403).json({ error: 'Invalid platform principal', code: 'INVALID_PLATFORM_PRINCIPAL' });
     }
 
-    user.role = userContext.roleId;
-    user.roleName = userContext.roleName;
-    user.tenantId = userContext.tenantId;
-    user.permissions = userContext.permissions;
-    user.dataScope = userContext.dataScope;
+    const userDto = {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      avatarUrl: user.avatar,
+      role: userContext.roleId,
+      roleName: userContext.roleName,
+      tenantId: userContext.tenantId,
+      permissions: userContext.permissions,
+      dataScope: userContext.dataScope
+    };
 
-    res.json({ success: true, user: { id: user.id, role: user.role, tenantId: user.tenantId, email: user.email } });
+    res.json({ success: true, user: userDto });
   } catch (err: any) {
     console.error('Session verify error:', err);
     res.status(500).json({ error: 'Internal Server Error' });

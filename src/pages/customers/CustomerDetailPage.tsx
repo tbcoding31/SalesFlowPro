@@ -1564,9 +1564,9 @@ const loadAllCustomerData = async () => {
       {activeTab === 'visits' && (<CustomerVisitsTab customerId={id || ''} tenantUsers={tenantUsers} />)}
 
       {activeTab === 'tasks' && (
-        <CustomerTasksTab customerId={id} tenantUsers={tenantUsers}  />
+        <CustomerTasksTab customerId={id} tenantUsers={tenantUsers} projects={[]} />
       )}
-      {activeTab === 'followups' && (<CustomerFollowUpsTab customerId={id || ''} tenantUsers={tenantUsers}  />)}
+      {activeTab === 'followups' && (<CustomerFollowUpsTab customerId={id || ''} tenantUsers={tenantUsers} projects={[]} />)}
         {activeTab === 'projects' && (
         <CustomerProjectsTab customerId={id || ''} tenantUsers={tenantUsers} customer={customer} />
       )}
