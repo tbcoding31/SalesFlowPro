@@ -21,7 +21,7 @@ export const CreateTenantPage: React.FC = () => {
   const [adminFirstName, setAdminFirstName] = useState('');
   const [adminLastName, setAdminLastName] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
-  const [adminPassword, setAdminPassword] = useState('InitialPass123!');
+  const [adminPassword, setAdminPassword] = useState('');
   const [adminPhone, setAdminPhone] = useState('');
 
   const [isLoading, setIsLoading] = useState(false);
@@ -30,52 +30,29 @@ export const CreateTenantPage: React.FC = () => {
     e.preventDefault();
     setIsLoading(true);
 
-    const adminId = `USR-${Date.now().toString().slice(-4)}`;
-    const newAdmin: User = {
-        id: adminId,
-        tenantId: tenantCode,
-        firstName: adminFirstName,
-        lastName: adminLastName,
-        name: `${adminFirstName} ${adminLastName}`,
-        email: adminEmail,
-        username: adminEmail.split('@')[0],
-        phone: adminPhone,
-        avatarUrl: `https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80`,
-        role: 'TENANT_ADMIN',
-        roleName: 'Tenant Administrator',
-        department: 'Executive',
-        position: 'VP of Operations',
-        status: 'ACTIVE',
-        createdAt: new Date().toISOString().split('T')[0],
-      };
-
-      const todayDate = new Date();
-      const trialEndDateObj = new Date(todayDate);
-      trialEndDateObj.setMonth(trialEndDateObj.getMonth() + 3);
-      const trialEndDateStr = trialEndDateObj.toISOString().split('T')[0];
-
-      const newTenant: Tenant = {
-        id: tenantCode,
-        code: tenantCode,
-        name: tenantName,
-        email: tenantEmail,
-        phone: tenantPhone,
-        industry,
-        region,
-        address,
-        description,
-        type,
-        status: 'ACTIVE',
-        trialEndDate: type === 'Trial 3 Bulan' ? (simulateTrialExpired ? '2026-08-01' : trialEndDateStr) : undefined,
-        isTrialExpired: type === 'Trial 3 Bulan' ? simulateTrialExpired : false,
-        primaryAdminId: adminId,
-        primaryAdminName: newAdmin.name,
-        primaryAdminEmail: newAdmin.email,
-        createdAt: new Date().toISOString().split('T')[0],
-        updatedAt: new Date().toISOString().split('T')[0],
-        lastActivityAt: 'Just now',
-        userCount: 1,
-        activeUserCount: 1,
+    
+      const intentPayload = {
+        organization: {
+          name: tenantName,
+          requestedCode: tenantCode,
+          email: tenantEmail,
+          phone: tenantPhone,
+          industry,
+          region,
+          address,
+          description,
+          type
+        },
+        primaryAdmin: {
+          firstName: adminFirstName,
+          lastName: adminLastName,
+          email: adminEmail,
+          phone: adminPhone,
+          temporaryPassword: adminPassword
+        },
+        testOptions: {
+          simulateTrialExpired
+        }
       };
 
       try {
@@ -88,11 +65,7 @@ export const CreateTenantPage: React.FC = () => {
         const res = await fetch('/api/onboarding/tenant', {
           method: 'POST',
           headers,
-          body: JSON.stringify({
-            tenant: newTenant,
-            user: newAdmin,
-            adminPassword
-          })
+          body: JSON.stringify(intentPayload)
         });
 
         if (!res.ok) {
@@ -100,7 +73,8 @@ export const CreateTenantPage: React.FC = () => {
         }
 
         setIsLoading(false);
-        navigate(`/admin/tenants/${newTenant.id}`);
+        const data = await res.json();
+          navigate(`/admin/tenants/${data.tenant.id}`);
       } catch (e) {
         console.error('Error saving tenant & admin', e);
         setIsLoading(false);
