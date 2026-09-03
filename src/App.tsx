@@ -58,9 +58,7 @@ import { SystemSettingsPage } from './pages/settings/SystemSettingsPage';
 
 // Dynamic Dashboard Resolver component based on user role
 const DashboardResolver: React.FC = () => {
-  const { currentUser, isLoading, hasPermission } = useAuth();
-  const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN' || hasPermission('MANAGE_TENANT');
-  const isManagerOrSupervisor = hasPermission('VIEW_TEAM_TASKS');
+  const { currentUser, isLoading } = useAuth();
 
   if (isLoading) {
     return (
@@ -75,15 +73,31 @@ const DashboardResolver: React.FC = () => {
     );
   }
 
-  if (isSuperAdmin) {
-    return <SuperAdminDashboard />;
+  if (!currentUser) {
+    return <Navigate to="/login" replace />;
   }
 
-  if (isManagerOrSupervisor) {
-    return <TeamDashboard />;
+  switch (currentUser.role) {
+    case 'SUPER_ADMIN':
+      return <SuperAdminDashboard />;
+    case 'TENANT_ADMIN':
+    case 'SALES_MANAGER':
+    case 'SUPERVISOR':
+      return <TeamDashboard />;
+    case 'SALES_REP':
+    case 'SALES_REPRESENTATIVE':
+      return <SalesDashboard />;
+    default:
+      return (
+        <div className="min-h-[400px] flex items-center justify-center">
+          <div className="text-center text-rose-600">
+            <span className="material-symbols-outlined text-4xl mb-2">block</span>
+            <p className="font-semibold">Unsupported Role</p>
+            <p className="text-xs mt-1 text-gray-500">Your role '{currentUser.role}' does not have a designated dashboard.</p>
+          </div>
+        </div>
+      );
   }
-
-  return <SalesDashboard />;
 };
 
 // Protected Route Guard Wrapper
