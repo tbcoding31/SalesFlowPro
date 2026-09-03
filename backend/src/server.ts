@@ -13,6 +13,7 @@ import { followupsRoutes } from './routes/followups.routes';
 import { timelineRoutes } from './routes/timeline.routes';
 import { syncRoutes } from './routes/sync.routes';
 import { genericRoutes } from './routes/generic.routes';
+import { salesRoutes } from './routes/sales.routes';
 
 import { authMiddleware } from './middleware/auth';
 import { tenantMiddleware } from './middleware/tenant';
@@ -34,6 +35,7 @@ app.use('/api/visits', authMiddleware, tenantMiddleware, visitsRoutes);
 app.use('/api/followups', authMiddleware, tenantMiddleware, followupsRoutes);
 app.use('/api/timeline', authMiddleware, tenantMiddleware, timelineRoutes);
 app.use('/api/sync', authMiddleware, tenantMiddleware, syncRoutes);
+app.use('/api/sales', authMiddleware, tenantMiddleware, salesRoutes);
 app.use('/api', authMiddleware, genericRoutes);
 
 if (require.main === module) {
