@@ -15,6 +15,7 @@ import { syncRoutes } from './routes/sync.routes';
 import { genericRoutes } from './routes/generic.routes';
 import { salesRoutes } from './routes/sales.routes';
 import { managementRoutes } from './routes/management.routes';
+import { tenantsRoutes } from './routes/tenants.routes';
 
 import { authMiddleware } from './middleware/auth';
 import { tenantMiddleware } from './middleware/tenant';
@@ -38,7 +39,15 @@ app.use('/api/timeline', authMiddleware, tenantMiddleware, timelineRoutes);
 app.use('/api/sync', authMiddleware, tenantMiddleware, syncRoutes);
 app.use('/api/sales', authMiddleware, tenantMiddleware, salesRoutes);
 app.use('/api/management', authMiddleware, tenantMiddleware, managementRoutes);
+app.use('/api/tenants', authMiddleware, tenantsRoutes);
 app.use('/api', authMiddleware, genericRoutes);
+
+app.use('/api', (req, res) => res.status(404).json({ error: 'Endpoint Not Found', path: req.originalUrl }));
+
+app.use((err: any, req: any, res: any, next: any) => {
+  console.error('Unhandled Server Error:', err);
+  res.status(500).json({ error: 'Internal Server Error' });
+});
 
 if (require.main === module) {
   const port = env.PORT || 5000;
