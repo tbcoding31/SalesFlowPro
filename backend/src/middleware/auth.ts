@@ -22,19 +22,29 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
 
     const userContext = await resolveUserAccessContext(pool, session.userId);
 
-    if (userContext.userGlobalStatus === 'SUSPENDED') {
-      return res.status(403).json({ error: 'User identity is suspended', code: 'USER_SUSPENDED' });
+    if (!userContext.exists) {
+      return res.status(403).json({ error: 'Principal missing', code: 'USER_MISSING' });
+    }
+
+    if (userContext.userGlobalStatus !== 'ACTIVE') {
+      return res.status(403).json({ error: 'User identity is suspended or inactive', code: 'USER_SUSPENDED' });
+    }
+
+    if (userContext.isOrphan) {
+      return res.status(403).json({ error: 'Orphan principal denied', code: 'ORPHAN_DENIED' });
     }
 
     if (userContext.tenantId) {
-      if (userContext.tenantUserStatus === 'SUSPENDED') {
-        return res.status(403).json({ error: 'Tenant membership is suspended', code: 'MEMBERSHIP_SUSPENDED' });
+      if (userContext.tenantUserStatus !== 'ACTIVE') {
+        return res.status(403).json({ error: 'Tenant membership is suspended or inactive', code: 'MEMBERSHIP_SUSPENDED' });
       }
 
       const [tenantRows]: any = await pool.query('SELECT status FROM tenants WHERE id = ?', [userContext.tenantId]);
-      if (tenantRows.length > 0 && tenantRows[0].status === 'SUSPENDED') {
-        return res.status(403).json({ error: 'Tenant is suspended', code: 'TENANT_SUSPENDED' });
+      if (tenantRows.length === 0 || tenantRows[0].status !== 'ACTIVE') {
+        return res.status(403).json({ error: 'Tenant is suspended or inactive', code: 'TENANT_SUSPENDED' });
       }
+    } else if (!userContext.isPlatformUser) {
+        return res.status(403).json({ error: 'Invalid platform principal', code: 'INVALID_PLATFORM_PRINCIPAL' });
     }
 
     (req as any).userId = session.userId;

@@ -19,4 +19,5 @@ export const env = {
   DB_USER: process.env.DB_USER || 'root',
   DB_PASSWORD: process.env.DB_PASSWORD || '',
   DB_NAME: dbName,
+  AUTH_SESSION_TTL_HOURS: Number(process.env.AUTH_SESSION_TTL_HOURS) || 24,
 };
