@@ -16,7 +16,7 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
     }
 
     const session = sessions[0];
-    if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
+    if (!session.expiresAt || new Date(session.expiresAt) < new Date()) {
       return res.status(401).json({ error: 'Unauthorized: Session has expired', code: 'SESSION_REVOKED' });
     }
 

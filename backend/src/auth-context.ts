@@ -41,8 +41,8 @@ export const resolveUserAccessContext = async (pool: any, userId: string) => {
     tenantUserStatus = membershipRows[0].tenantUserStatus;
     roleId = membershipRows[0].roleId;
     roleName = membershipRows[0].roleName;
-    if (tenantUserStatus === 'ACTIVE') {
-      isOrphan = false; // Has active membership
+    if (tenantUserStatus === 'ACTIVE' && roleId !== null && roleName !== null) {
+      isOrphan = false; // Has active membership AND valid role assignment
     }
   } else {
     // Check for explicit platform/system role
@@ -50,17 +50,15 @@ export const resolveUserAccessContext = async (pool: any, userId: string) => {
       SELECT gur.roleId, r.name as roleName, r.scope
       FROM global_user_roles gur
       JOIN roles r ON r.id = gur.roleId
-      WHERE gur.userId = ?
+      WHERE gur.userId = ? AND r.scope = 'SYSTEM'
       LIMIT 1
     `, [userId]);
     
     if (globalUserRoleRows.length > 0) {
       roleId = globalUserRoleRows[0].roleId;
       roleName = globalUserRoleRows[0].roleName;
-      if (globalUserRoleRows[0].scope === 'SYSTEM') {
-        isPlatformUser = true;
-        isOrphan = false; // Is explicit SYSTEM user
-      }
+      isPlatformUser = true;
+      isOrphan = false; // Is explicit SYSTEM user
     }
   }
 

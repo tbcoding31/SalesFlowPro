@@ -56,7 +56,7 @@ authRoutes.post('/login', async (req: any, res: any) => {
     const token = crypto.randomBytes(32).toString('hex');
     const sessionId = 'SESS-' + Date.now() + '-' + crypto.randomBytes(8).toString('hex');
     
-    const ttlHours = (env as any).AUTH_SESSION_TTL_HOURS || 24;
+    const ttlHours = (env as any).AUTH_SESSION_TTL_HOURS;
     const expiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000);
     
     await pool.query(
@@ -87,7 +87,7 @@ authRoutes.get('/me', async (req: any, res: any) => {
     if (sessions.length === 0) return res.status(401).json({ error: 'Unauthorized: Invalid session', code: 'SESSION_REVOKED' });
 
     const session = sessions[0];
-    if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
+    if (!session.expiresAt || new Date(session.expiresAt) < new Date()) {
       return res.status(401).json({ error: 'Unauthorized: Session expired', code: 'SESSION_REVOKED' });
     }
 

@@ -12,6 +12,9 @@ if (!dbName || dbName !== 'db_salesflow_pro' && dbName !== 'db_salesflow_pro_tes
   process.exit(1);
 }
 
+const rawTtl = Number(process.env.AUTH_SESSION_TTL_HOURS);
+const parsedTtl = (!isNaN(rawTtl) && rawTtl > 0 && Number.isInteger(rawTtl)) ? rawTtl : 24;
+
 export const env = {
   PORT: process.env.PORT || 5000,
   DB_HOST: process.env.DB_HOST || '127.0.0.1',
@@ -19,5 +22,5 @@ export const env = {
   DB_USER: process.env.DB_USER || 'root',
   DB_PASSWORD: process.env.DB_PASSWORD || '',
   DB_NAME: dbName,
-  AUTH_SESSION_TTL_HOURS: Number(process.env.AUTH_SESSION_TTL_HOURS) || 24,
+  AUTH_SESSION_TTL_HOURS: parsedTtl,
 };
