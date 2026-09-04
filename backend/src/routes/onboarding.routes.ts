@@ -145,7 +145,21 @@ onboardingRoutes.post('/tenant', async (req, res) => {
       [`TUR-${Date.now()}-${randomUUID().substring(0,6)}`, tuId, adminRoleId]
     );
 
-    // Audit Log (without credentials)
+    
+      // 6. Clone Master Data Blueprints (Departments and Positions)
+      const [blueprintDepts]: any = await connection.query("SELECT * FROM departments WHERE tenantId IS NULL");
+      for (const dept of blueprintDepts) {
+        const newDeptId = `DEPT-${Date.now()}-${Math.random().toString(36).substring(2,8)}`;
+        await connection.query("INSERT INTO departments (id, tenantId, name, description) VALUES (?, ?, ?, ?)", [newDeptId, tenantId, dept.name, dept.description]);
+      }
+
+      const [blueprintPos]: any = await connection.query("SELECT * FROM positions WHERE tenantId IS NULL");
+      for (const pos of blueprintPos) {
+        const newPosId = `POS-${Date.now()}-${Math.random().toString(36).substring(2,8)}`;
+        await connection.query("INSERT INTO positions (id, tenantId, name, level) VALUES (?, ?, ?, ?)", [newPosId, tenantId, pos.name, pos.level]);
+      }
+
+      // Audit Log (without credentials)
     await connection.query(
       `INSERT INTO audit_logs (id, tenantId, userId, action, entity, entityId, description, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
       [`LOG-${Date.now()}`, null, (req as any).userId, 'CREATE', 'Tenant', tenantId, `Created tenant ${tenantId} via onboarding`]

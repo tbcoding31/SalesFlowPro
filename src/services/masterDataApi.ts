@@ -2,14 +2,12 @@ import { MasterDataItem } from '../types';
 
 const API_BASE = '/api';
 
-// Map frontend category to database table name
 export const getTableName = (category: MasterDataItem['category']): string => {
   if (category === 'task_types') return 'activity_types';
   if (category === 'customer_status') return 'customer_statuses';
   return category;
 };
 
-// Map DB row to MasterDataItem
 const mapFromDb = (category: MasterDataItem['category'], row: any): MasterDataItem => {
   return {
     id: row.id,
@@ -22,7 +20,6 @@ const mapFromDb = (category: MasterDataItem['category'], row: any): MasterDataIt
   };
 };
 
-// Map MasterDataItem to DB row
 const mapToDb = (category: MasterDataItem['category'], item: MasterDataItem, tenantId: string): any => {
   const base = {
     id: item.id,
@@ -38,11 +35,11 @@ const mapToDb = (category: MasterDataItem['category'], item: MasterDataItem, ten
     case 'customer_status':
       return { ...base, color: item.indicator };
     case 'project_stages':
-      return { ...base, displayOrder: item.displayOrder, probability: 50 }; // default probability if missing
+      return { ...base, displayOrder: item.displayOrder, probability: 50 };
     case 'departments':
-      return { id: item.id, tenantId, name: item.label, description: item.codeValue };
+      return { id: item.id, tenantId: tenantId === 'platform' ? null : tenantId, name: item.label, description: item.codeValue };
     case 'positions':
-      return { id: item.id, tenantId, name: item.label, level: item.displayOrder };
+      return { id: item.id, tenantId: tenantId === 'platform' ? null : tenantId, name: item.label, level: item.displayOrder };
     default:
       return base;
   }
@@ -52,7 +49,12 @@ export const masterDataApi = {
   fetchMasterData: async (category: MasterDataItem['category'], tenantId: string): Promise<MasterDataItem[]> => {
     const table = getTableName(category);
     try {
-      const res = await fetch(`${API_BASE}/${table}?tenantId=${tenantId}`);
+      const url = tenantId === 'platform' 
+        ? `${API_BASE}/master-data/platform/${table}` 
+        : `${API_BASE}/${table}?tenantId=${tenantId}`;
+      const res = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('sfp_auth_token')}` }
+      });
       if (!res.ok) throw new Error(`Failed to fetch ${table}`);
       const rows = await res.json();
       return rows.map((row: any) => mapFromDb(category, row));
@@ -66,12 +68,15 @@ export const masterDataApi = {
     const table = getTableName(item.category);
     const dbRow = mapToDb(item.category, item, tenantId);
     try {
-      const url = isNew ? `${API_BASE}/${table}` : `${API_BASE}/${table}/${item.id}`;
+      let url = isNew ? `${API_BASE}/${table}` : `${API_BASE}/${table}/${item.id}`;
+      if (tenantId === 'platform') {
+        url = isNew ? `${API_BASE}/master-data/platform/${table}` : `${API_BASE}/master-data/platform/${table}/${item.id}`;
+      }
       const method = isNew ? 'POST' : 'PUT';
       
       const res = await fetch(url, {
         method,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('sfp_auth_token')}` },
         body: JSON.stringify(dbRow)
       });
       return res.ok;
@@ -81,11 +86,16 @@ export const masterDataApi = {
     }
   },
 
-  deleteMasterDataItem: async (category: MasterDataItem['category'], id: string): Promise<boolean> => {
+  deleteMasterDataItem: async (category: MasterDataItem['category'], id: string, tenantId?: string): Promise<boolean> => {
     const table = getTableName(category);
     try {
-      const res = await fetch(`${API_BASE}/${table}/${id}`, {
+      let url = `${API_BASE}/${table}/${id}`;
+      if (tenantId === 'platform') {
+        url = `${API_BASE}/master-data/platform/${table}/${id}`;
+      }
+      const res = await fetch(url, {
         method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('sfp_auth_token')}` }
       });
       return res.ok;
     } catch (err) {

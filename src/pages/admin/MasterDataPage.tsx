@@ -4,8 +4,10 @@ import { masterDataApi } from '../../services/masterDataApi';
 import { MasterDataItem } from '../../types';
 
 export const MasterDataPage: React.FC = () => {
-  const { currentTenant } = useAuth();
-  const tenantId = currentTenant?.id ;
+  const { currentTenant, currentUser } = useAuth();
+  const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
+  const effectiveTenantId = isSuperAdmin ? 'platform' : currentTenant?.id || '';
+  
 
   const [selectedCategory, setSelectedCategory] = useState<MasterDataItem['category']>('task_priorities');
   const [items, setItems] = useState<MasterDataItem[]>([]);
@@ -34,14 +36,14 @@ export const MasterDataPage: React.FC = () => {
 
   const loadData = async (cat: MasterDataItem['category']) => {
     setIsLoading(true);
-    const data = await masterDataApi.fetchMasterData(cat, tenantId);
+    const data = await masterDataApi.fetchMasterData(cat, effectiveTenantId);
     setItems(data);
     setIsLoading(false);
   };
 
   useEffect(() => {
     loadData(selectedCategory);
-  }, [selectedCategory, tenantId]);
+  }, [selectedCategory, effectiveTenantId]);
 
   const handleSelectCategory = (cat: MasterDataItem['category']) => {
     setSelectedCategory(cat);
@@ -78,7 +80,7 @@ export const MasterDataPage: React.FC = () => {
       displayOrder: editingItem ? editingItem.displayOrder : items.length + 1,
     };
 
-    const success = await masterDataApi.saveMasterDataItem(itemToSave, tenantId, isNew);
+    const success = await masterDataApi.saveMasterDataItem(itemToSave, effectiveTenantId, isNew);
     if (success) {
       await loadData(selectedCategory);
       setShowModal(false);
@@ -92,7 +94,7 @@ export const MasterDataPage: React.FC = () => {
 
   const handleConfirmDelete = async () => {
     if (!deletingItem) return;
-    const success = await masterDataApi.deleteMasterDataItem(selectedCategory, deletingItem.id);
+    const success = await masterDataApi.deleteMasterDataItem(selectedCategory, deletingItem.id, effectiveTenantId);
     if (success) {
       await loadData(selectedCategory);
       setDeletingItem(null);
