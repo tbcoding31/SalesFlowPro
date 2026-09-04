@@ -22,6 +22,48 @@ export const TenantDetailPage: React.FC = () => {
 
   const [isSuspending, setIsSuspending] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [showSuspendModal, setShowSuspendModal] = useState(false);
+  const [suspendError, setSuspendError] = useState<string | null>(null);
+
+  const confirmSuspend = async () => {
+    setIsSuspending(true);
+    setSuspendError(null);
+    try {
+      const token = localStorage.getItem('sfp_auth_token') || '';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch(`/api/tenants/${tenant?.id}/status`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ status: 'SUSPENDED' })
+      });
+      if (!res.ok) throw new Error();
+      
+      const getRes = await fetch(`/api/tenants/${tenant?.id}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const getJson = await getRes.json();
+      setTenant(getJson);
+      setShowSuspendModal(false);
+    } catch (err: any) {
+      setSuspendError("Unable to suspend organization. Please try again.");
+    } finally {
+      setIsSuspending(false);
+    }
+  };
+
+  const handleSuspendClick = () => {
+    if (tenant?.status === 'ACTIVE') {
+      setShowSuspendModal(true);
+      setSuspendError(null);
+    }
+    // reactivate is not fully supported in policy
+  };
+
+  const toggleTenantStatus = async () => {
+    // Legacy removed. Use handleSuspendClick
+  };
 
   useEffect(() => {
     if (!id) return;
@@ -129,48 +171,6 @@ export const TenantDetailPage: React.FC = () => {
   });
 
   
-  const [showSuspendModal, setShowSuspendModal] = useState(false);
-  const [suspendError, setSuspendError] = useState<string | null>(null);
-
-  const confirmSuspend = async () => {
-    setIsSuspending(true);
-    setSuspendError(null);
-    try {
-      const token = localStorage.getItem('sfp_auth_token') || '';
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-
-      const res = await fetch(`/api/tenants/${tenant.id}/status`, {
-        method: 'PUT',
-        headers,
-        body: JSON.stringify({ status: 'SUSPENDED' })
-      });
-      if (!res.ok) throw new Error();
-      
-      const getRes = await fetch(`/api/tenants/${tenant.id}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const getJson = await getRes.json();
-      setTenant(getJson);
-      setShowSuspendModal(false);
-    } catch (err: any) {
-      setSuspendError("Unable to suspend organization. Please try again.");
-    } finally {
-      setIsSuspending(false);
-    }
-  };
-
-  const handleSuspendClick = () => {
-    if (tenant.status === 'ACTIVE') {
-      setShowSuspendModal(true);
-      setSuspendError(null);
-    }
-    // reactivate is not fully supported in policy
-  };
-
-  const toggleTenantStatus = async () => {
-    // Legacy removed. Use handleSuspendClick
-  };
 
   const toggleTrialStatus = () => {
     const updated: Tenant = {
@@ -189,7 +189,7 @@ export const TenantDetailPage: React.FC = () => {
         <span>/</span>
         <Link to="/admin/tenants" className="hover:text-[#1a1c1c]">Tenants</Link>
         <span>/</span>
-        <span className="text-[#1a1c1c] font-bold">{tenant.name}</span>
+        <span className="text-[#1a1c1c] font-bold">{tenant?.name}</span>
       </div>
 
       {/* Header Info Block */}
@@ -197,7 +197,7 @@ export const TenantDetailPage: React.FC = () => {
         <div>
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-2xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk'] tracking-tight">
-              {tenant.name}
+              {tenant?.name}
             </h1>
             <span className="px-2.5 py-0.5 bg-[#4744e5]/10 text-[#4744e5] text-[10px] font-bold rounded-full uppercase">
               {tenant.type}
@@ -314,11 +314,11 @@ export const TenantDetailPage: React.FC = () => {
               <div className="grid grid-cols-2 gap-y-4 gap-x-6 text-xs">
                 <div>
                   <span className="text-[#767587] font-semibold uppercase text-[10px] block">TENANT NAME</span>
-                  <span className="text-[#1a1c1c] font-bold text-sm mt-0.5 block">{tenant.name}</span>
+                  <span className="text-[#1a1c1c] font-bold text-sm mt-0.5 block">{tenant?.name}</span>
                 </div>
                 <div>
                   <span className="text-[#767587] font-semibold uppercase text-[10px] block">TENANT CODE</span>
-                  <span className="text-[#1a1c1c] font-mono font-bold text-sm mt-0.5 block">{tenant.code}</span>
+                  <span className="text-[#1a1c1c] font-mono font-bold text-sm mt-0.5 block">{tenant?.code}</span>
                 </div>
                 <div>
                   <span className="text-[#767587] font-semibold uppercase text-[10px] block">TYPE</span>
@@ -479,7 +479,7 @@ export const TenantDetailPage: React.FC = () => {
                   <h2 className="text-base font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">
                     Recent Activity
                   </h2>
-                  <Link to={`/admin/audit-logs?tenantId=${tenant.id}`} className="text-xs text-[#4744e5] font-bold hover:underline">View All</Link>
+                  <Link to={`/admin/audit-logs?tenantId=${tenant?.id}`} className="text-xs text-[#4744e5] font-bold hover:underline">View All</Link>
                 </div>
 
                 <div className="space-y-3 text-xs">
@@ -515,7 +515,7 @@ export const TenantDetailPage: React.FC = () => {
             </div>
 
             <Link
-              to={`/admin/tenant-users/create?tenantId=${tenant.id}`}
+              to={`/admin/tenant-users/create?tenantId=${tenant?.id}`}
               className="px-4 py-2 bg-[#4744e5] hover:bg-[#2c24ce] text-white text-xs font-bold rounded-lg shadow-2xs transition-colors flex items-center gap-1.5"
             >
               <span className="material-symbols-outlined text-[18px]">add</span>
@@ -712,7 +712,7 @@ export const TenantDetailPage: React.FC = () => {
                 description: formData.get('description'),
               };
               try {
-                const res = await fetch(`/api/tenants/${tenant.id}`, {
+                const res = await fetch(`/api/tenants/${tenant?.id}`, {
                   method: 'PUT',
                   headers: {
                     'Content-Type': 'application/json',
@@ -725,7 +725,7 @@ export const TenantDetailPage: React.FC = () => {
                   throw new Error(data.error || 'Failed to update tenant');
                 }
                 // Refresh
-                const getRes = await fetch(`/api/tenants/${tenant.id}`, {
+                const getRes = await fetch(`/api/tenants/${tenant?.id}`, {
                   headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('sfp_auth_token') || '') }
                 });
                 const getJson = await getRes.json();
@@ -746,7 +746,7 @@ export const TenantDetailPage: React.FC = () => {
                       <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
                         Organization Name *
                       </label>
-                      <input name="name" defaultValue={tenant.name} required className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs focus:outline-none focus:border-[#4744e5]" />
+                      <input name="name" defaultValue={tenant?.name} required className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs focus:outline-none focus:border-[#4744e5]" />
                     </div>
 
                     <div>
@@ -754,7 +754,7 @@ export const TenantDetailPage: React.FC = () => {
                         Tenant Identification Code
                       </label>
                       <div className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs font-mono bg-gray-50 text-gray-500 cursor-not-allowed">
-                        {tenant.code}
+                        {tenant?.code}
                       </div>
                       <p className="text-[10px] text-[#767587] mt-1">Immutable system identifier.</p>
                     </div>
