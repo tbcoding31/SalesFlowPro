@@ -81,3 +81,76 @@ rolesRoutes.get('/assignable', async (req: any, res: any) => {
     res.status(500).json({ error: 'Database error' });
   }
 });
+
+rolesRoutes.get('/platform', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  if (actorRole !== 'SUPER_ADMIN') {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+
+  try {
+    const [rows]: any = await pool.query(`
+      SELECT r.id, r.name, r.description, r.scope, r.isSystem,
+        (SELECT COUNT(*) FROM role_permissions rp WHERE rp.roleId = r.id) as permissionCount,
+        rds.scope as dataScope,
+        (SELECT COUNT(*) FROM global_user_roles gur WHERE gur.roleId = r.id) as assignedUserCount
+      FROM roles r
+      LEFT JOIN role_data_scopes rds ON r.id = rds.roleId
+      WHERE r.scope IN ('PLATFORM', 'SYSTEM')
+    `);
+    
+    // Fetch permissions array for each role
+    for (let role of rows) {
+      const [perms]: any = await pool.query(`
+        SELECT p.name 
+        FROM role_permissions rp 
+        JOIN permissions p ON p.id = rp.permissionId 
+        WHERE rp.roleId = ?
+      `, [role.id]);
+      role.permissions = perms.map((p: any) => p.name);
+    }
+    
+    res.json({ success: true, items: rows });
+  } catch (err: any) {
+    console.error(err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+rolesRoutes.get('/templates', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  if (actorRole !== 'SUPER_ADMIN') {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+
+  try {
+    const [rows]: any = await pool.query(`
+      SELECT r.id, r.name, r.description, r.scope, r.isSystem,
+        (SELECT COUNT(*) FROM role_permissions rp WHERE rp.roleId = r.id) as permissionCount,
+        rds.scope as dataScope
+      FROM roles r
+      LEFT JOIN role_data_scopes rds ON r.id = rds.roleId
+      WHERE r.scope = 'TEMPLATE'
+    `);
+    
+    for (let role of rows) {
+      const [perms]: any = await pool.query(`
+        SELECT p.name 
+        FROM role_permissions rp 
+        JOIN permissions p ON p.id = rp.permissionId 
+        WHERE rp.roleId = ?
+      `, [role.id]);
+      role.permissions = perms.map((p: any) => p.name);
+      
+      const [policyRows]: any = await pool.query(`
+        SELECT assignableRoleId FROM role_assignment_policies WHERE assignerRoleId = ?
+      `, [role.id]);
+      role.assignmentPolicy = policyRows.map((p: any) => p.assignableRoleId);
+    }
+    
+    res.json(rows);
+  } catch (err: any) {
+    console.error(err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});

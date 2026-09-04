@@ -3,9 +3,56 @@ import { RolePermissions } from '../types';
 const API_BASE = '/api';
 
 export const rolesApi = {
+  fetchPlatformRoles: async (): Promise<any[]> => {
+    try {
+      const token = localStorage.getItem('sfp_auth_token') || '';
+      const res = await fetch(`${API_BASE}/roles/platform`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Failed to fetch platform roles');
+      const data = await res.json();
+      return data.items || [];
+    } catch (err) {
+      console.error(err);
+      return [];
+    }
+  },
+
+  fetchRoleTemplates: async (): Promise<any[]> => {
+    try {
+      const token = localStorage.getItem('sfp_auth_token') || '';
+      const res = await fetch(`${API_BASE}/roles/templates`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Failed to fetch role templates');
+      return await res.json();
+    } catch (err) {
+      console.error(err);
+      return [];
+    }
+  },
+
+  fetchPermissionCatalog: async (): Promise<any[]> => {
+    try {
+      const token = localStorage.getItem('sfp_auth_token') || '';
+      const res = await fetch(`${API_BASE}/permissions/catalog`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Failed to fetch permission catalog');
+      return await res.json();
+    } catch (err) {
+      console.error(err);
+      return [];
+    }
+  },
+
+  // Keeping original methods for other pages if needed.
   fetchRoles: async (tenantId: string): Promise<any[]> => {
     try {
-      const res = await fetch(`${API_BASE}/roles?tenantId=${tenantId}`);
+      const token = localStorage.getItem('sfp_auth_token') || '';
+      const res = await fetch(`${API_BASE}/roles?tenantId=${tenantId}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
       if (!res.ok) throw new Error('Failed to fetch roles');
       return await res.json();
     } catch (err) {
@@ -16,7 +63,10 @@ export const rolesApi = {
 
   fetchPermissions: async (): Promise<any[]> => {
     try {
-      const res = await fetch(`${API_BASE}/permissions`);
+      const token = localStorage.getItem('sfp_auth_token') || '';
+      const res = await fetch(`${API_BASE}/permissions`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
       if (!res.ok) throw new Error('Failed to fetch permissions');
       return await res.json();
     } catch (err) {
@@ -27,7 +77,10 @@ export const rolesApi = {
 
   fetchRolePermissions: async (): Promise<any[]> => {
     try {
-      const res = await fetch(`${API_BASE}/role_permissions`);
+      const token = localStorage.getItem('sfp_auth_token') || '';
+      const res = await fetch(`${API_BASE}/role_permissions`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
       if (!res.ok) throw new Error('Failed to fetch role_permissions');
       return await res.json();
     } catch (err) {
@@ -38,7 +91,10 @@ export const rolesApi = {
 
   fetchRoleDataScopes: async (): Promise<any[]> => {
     try {
-      const res = await fetch(`${API_BASE}/role_data_scopes`);
+      const token = localStorage.getItem('sfp_auth_token') || '';
+      const res = await fetch(`${API_BASE}/role_data_scopes`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
       if (!res.ok) throw new Error('Failed to fetch role_data_scopes');
       return await res.json();
     } catch (err) {
@@ -48,12 +104,13 @@ export const rolesApi = {
   },
 
   getAggregatedRolePermissions: async (tenantId: string): Promise<RolePermissions[]> => {
+    const token = localStorage.getItem('sfp_auth_token') || '';
     const [roles, permissions, rolePerms, dataScopes, tenantUsers] = await Promise.all([
       rolesApi.fetchRoles(tenantId),
       rolesApi.fetchPermissions(),
       rolesApi.fetchRolePermissions(),
       rolesApi.fetchRoleDataScopes(),
-      fetch(`${API_BASE}/tenant_user_roles`).then(r => r.ok ? r.json() : []).catch(() => [])
+      fetch(`${API_BASE}/tenant_user_roles`, { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.ok ? r.json() : []).catch(() => [])
     ]);
 
     const moduleNames = ['Customers', 'Visits', 'Tasks', 'Projects', 'Reports', 'Settings'];
@@ -96,9 +153,10 @@ export const rolesApi = {
 
   updateRoleDirectPermissions: async (roleId: string, permissions: string[], dataScope: string): Promise<boolean> => {
     try {
+      const token = localStorage.getItem('sfp_auth_token') || '';
       const res = await fetch(`${API_BASE}/roles/${roleId}/permissions_scopes`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ permissions, dataScope })
       });
       return res.ok;
@@ -110,7 +168,6 @@ export const rolesApi = {
 
   updateRolePermissions: async (roleId: string, permissionsState: RolePermissions): Promise<boolean> => {
     try {
-      // If assignedPermissions is explicitly provided, send that directly
       if (permissionsState.assignedPermissions && Array.isArray(permissionsState.assignedPermissions)) {
         return await rolesApi.updateRoleDirectPermissions(roleId, permissionsState.assignedPermissions, permissionsState.dataScope);
       }
@@ -129,9 +186,10 @@ export const rolesApi = {
         if (p.moveStage) dbPermissions.push(`${prefix}_MOVESTAGE`);
       });
 
+      const token = localStorage.getItem('sfp_auth_token') || '';
       const res = await fetch(`${API_BASE}/roles/${roleId}/permissions_scopes`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ permissions: dbPermissions, dataScope: permissionsState.dataScope })
       });
       return res.ok;

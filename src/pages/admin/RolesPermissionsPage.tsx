@@ -54,10 +54,40 @@ export const RolesPermissionsPage: React.FC = () => {
   const loadAllData = async () => {
     setIsLoading(true);
     try {
-      const [aggregatedRoles, catalog] = await Promise.all([
-        rolesApi.getAggregatedRolePermissions(tenantId),
-        rolesApi.fetchPermissions()
-      ]);
+      let aggregatedRoles: any[] = [];
+        let catalog: any[] = [];
+        
+        if (isSuperAdmin) {
+          const [platformRoles, templateRoles, cat] = await Promise.all([
+            rolesApi.fetchPlatformRoles(),
+            rolesApi.fetchRoleTemplates(),
+            rolesApi.fetchPermissionCatalog()
+          ]);
+          catalog = cat;
+          const formatRole = (r: any) => ({
+            role: r.id,
+            roleName: r.name,
+            description: r.description,
+            scope: r.scope,
+            isSystem: r.isSystem,
+            tenantId: 'null',
+            memberCount: r.assignedUserCount || 0,
+            assignedPermissions: r.permissions || [],
+            permissions: [] as any,
+            dataScope: r.dataScope || 'SYSTEM'
+          });
+          aggregatedRoles = [
+            ...platformRoles.map(formatRole),
+            ...templateRoles.map(formatRole)
+          ];
+        } else {
+          const [roles, cat] = await Promise.all([
+            rolesApi.getAggregatedRolePermissions(tenantId || ''),
+            rolesApi.fetchPermissions()
+          ]);
+          catalog = cat;
+          aggregatedRoles = roles;
+        }
       setRolesList(aggregatedRoles);
       setPermissionCatalog(catalog);
 
