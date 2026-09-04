@@ -16,6 +16,7 @@ import { genericRoutes } from './routes/generic.routes';
 import { salesRoutes } from './routes/sales.routes';
 import { managementRoutes } from './routes/management.routes';
 import { tenantsRoutes } from './routes/tenants.routes';
+import { usersRoutes } from './routes/users.routes';
 import { onboardingRoutes } from './routes/onboarding.routes';
 
 import { authMiddleware } from './middleware/auth';
@@ -41,6 +42,7 @@ app.use('/api/sync', authMiddleware, tenantMiddleware, syncRoutes);
 app.use('/api/sales', authMiddleware, tenantMiddleware, salesRoutes);
 app.use('/api/management', authMiddleware, tenantMiddleware, managementRoutes);
 app.use('/api/onboarding', authMiddleware, onboardingRoutes);
+app.use('/api/users', authMiddleware, usersRoutes);
 app.use('/api/tenants', authMiddleware, tenantsRoutes);
 app.use('/api', authMiddleware, genericRoutes);
 
