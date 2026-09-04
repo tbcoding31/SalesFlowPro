@@ -276,11 +276,9 @@ tenantsRoutes.get('/:id', async (req, res) => {
 
     // Last activity timestamp
     if (recentActivity.length > 0 && recentActivity[0].timestamp) {
-      tenantRecord.lastActivityAt = new Date(recentActivity[0].timestamp).toLocaleString('en-US', {
-        month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit'
-      });
+      tenantRecord.lastActivityAt = recentActivity[0].timestamp;
     } else {
-      tenantRecord.lastActivityAt = 'No recent activity';
+      tenantRecord.lastActivityAt = null;
     }
 
     tenantRecord.userStats = userStats;

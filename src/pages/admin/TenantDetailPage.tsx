@@ -34,6 +34,30 @@ function deriveTrialUiState(tenant: any | null, now: Date = new Date()): TrialUi
   return { state: 'TRIAL_ACTIVE', canExpire: true, canReactivate: false, isExpired: false };
 }
 
+
+export function formatDateTime(val: any, nullLabel: string = 'Never logged in'): string {
+  if (!val) return nullLabel;
+  try {
+    const d = new Date(val);
+    if (isNaN(d.getTime())) return nullLabel;
+    
+    let formatted = new Intl.DateTimeFormat('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: 'Asia/Jakarta'
+    }).format(d);
+    
+    formatted = formatted.replace('Sept', 'Sep'); 
+    return `${formatted} WIB`;
+  } catch(err) {
+    return nullLabel;
+  }
+}
+
 export const TenantDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
@@ -554,7 +578,7 @@ export const TenantDetailPage: React.FC = () => {
                       <div className="flex justify-between">
                         <span className="text-[#767587]">Last Login:</span>
                         <span className="font-semibold text-[#1a1c1c]">
-                          {tenant.primaryAdmin?.lastLoginAt ? new Date(tenant.primaryAdmin.lastLoginAt).toLocaleDateString() : 'Never logged in'}
+                          {formatDateTime(tenant.primaryAdmin?.lastLoginAt)}
                         </span>
                       </div>
                     </div>
@@ -591,7 +615,7 @@ export const TenantDetailPage: React.FC = () => {
                         </div>
                         <div>
                           <div className="font-semibold text-[#1a1c1c]">{log.action} {log.entity || ''}</div>
-                          <div className="text-[11px] text-[#767587]">{log.userName || 'System'} • {(log.timestamp || log.createdAt)?.substring(0, 10) || ''}</div>
+                          <div className="text-[11px] text-[#767587]">{log.userName || 'System'} • {formatDateTime(log.timestamp || log.createdAt, 'No recent activity')}</div>
                         </div>
                       </div>
                     ))
@@ -752,7 +776,7 @@ export const TenantDetailPage: React.FC = () => {
                         <td className="px-6 py-3.5 font-bold text-[#1a1c1c]">{u.taskCount || 0}</td>
 
                         <td className="px-6 py-3.5 text-[#767587] font-medium">
-{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).replace(',', '') : 'Never'}
+{formatDateTime(u.lastLoginAt)}
 </td>
 
                         <td className="px-6 py-3.5 text-right">
