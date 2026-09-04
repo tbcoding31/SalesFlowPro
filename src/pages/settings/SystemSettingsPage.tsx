@@ -24,7 +24,7 @@ export const SystemSettingsPage: React.FC = () => {
   const [testResult, setTestResult] = useState<any>(null);
 
   useEffect(() => {
-    fetch('/api/integrations', { headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` } })
+    fetch('/api/system/integrations', { headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` } })
       .then(res => res.json())
       .then(data => {
         if (data.success && data.integrations) {
@@ -49,14 +49,14 @@ export const SystemSettingsPage: React.FC = () => {
   const handleSaveIntegration = async () => {
     try {
       setIsSaving(true);
-      await fetch(`/api/integrations/${integrationForm.provider}`, {
+      await fetch(`/api/system/integrations/${integrationForm.provider}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` },
         body: JSON.stringify(integrationForm)
       });
       
       // Reload
-      const res = await fetch('/api/integrations', { headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` } });
+      const res = await fetch('/api/system/integrations', { headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` } });
       const data = await res.json();
       if (data.success) setIntegrations(data.integrations);
       
@@ -71,7 +71,7 @@ export const SystemSettingsPage: React.FC = () => {
   const handleTestIntegration = async () => {
     try {
       setIsTesting(true);
-      const res = await fetch(`/api/integrations/${integrationForm.provider}/test`, {
+      const res = await fetch(`/api/system/integrations/${integrationForm.provider}/test`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` }
       });
@@ -79,7 +79,7 @@ export const SystemSettingsPage: React.FC = () => {
       setTestResult(data);
       
       // Reload to see updated status
-      const res2 = await fetch('/api/integrations', { headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` } });
+      const res2 = await fetch('/api/system/integrations', { headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` } });
       const data2 = await res2.json();
       if (data2.success) setIntegrations(data2.integrations);
     } catch(e) {
@@ -92,13 +92,13 @@ export const SystemSettingsPage: React.FC = () => {
   const handleDisconnectIntegration = async () => {
     try {
       setIsSaving(true);
-      await fetch(`/api/integrations/${integrationForm.provider}/disconnect`, {
+      await fetch(`/api/system/integrations/${integrationForm.provider}/disconnect`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` }
       });
       
       // Reload
-      const res = await fetch('/api/integrations', { headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` } });
+      const res = await fetch('/api/system/integrations', { headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` } });
       const data = await res.json();
       if (data.success) setIntegrations(data.integrations);
       
@@ -608,7 +608,7 @@ export const SystemSettingsPage: React.FC = () => {
                       <div>
                         <h3 className="text-sm font-bold text-slate-900">Email SMTP Provider</h3>
                         <p className="text-xs font-medium text-slate-500 mt-0.5">
-                          {integrations.smtp?.status === 'CONNECTED' ? <span className="text-emerald-600">Connected</span> : (integrations.smtp?.status === 'CONFIGURED' ? <span className="text-blue-600">Configured</span> : 'Not connected')}
+                          {integrations.smtp?.status === 'CONNECTED' ? <span className="text-emerald-600 font-bold">Connected</span> : (integrations.smtp?.status === 'CONFIGURED' ? <span className="text-blue-600">Configured � live connection not yet verified</span> : 'Not connected')}
                         </p>
                       </div>
                     </div>
@@ -626,7 +626,7 @@ export const SystemSettingsPage: React.FC = () => {
                       <div>
                         <h3 className="text-sm font-bold text-slate-900">Calendar Sync (Google/Outlook)</h3>
                         <p className="text-xs font-medium text-slate-500 mt-0.5">
-                          {integrations.calendar?.status === 'CONNECTED' ? <span className="text-emerald-600">Connected</span> : (integrations.calendar?.status === 'CONFIGURED' ? <span className="text-blue-600">Configured</span> : 'Not connected')}
+                          {integrations.calendar?.status === 'CONNECTED' ? <span className="text-emerald-600 font-bold">Connected</span> : (integrations.calendar?.status === 'CONFIGURED' ? <span className="text-blue-600">Configured � live connection not yet verified</span> : 'Not connected')}
                         </p>
                       </div>
                     </div>
@@ -644,7 +644,7 @@ export const SystemSettingsPage: React.FC = () => {
                       <div>
                         <h3 className="text-sm font-bold text-slate-900">Slack / Teams Notifications</h3>
                         <p className="text-xs font-medium text-slate-500 mt-0.5">
-                          {integrations.messaging?.status === 'CONNECTED' ? <span className="text-emerald-600">Connected</span> : (integrations.messaging?.status === 'CONFIGURED' ? <span className="text-blue-600">Configured</span> : 'Not connected')}
+                          {integrations.messaging?.status === 'CONNECTED' ? <span className="text-emerald-600 font-bold">Connected</span> : (integrations.messaging?.status === 'CONFIGURED' ? <span className="text-blue-600">Configured � live connection not yet verified</span> : 'Not connected')}
                         </p>
                       </div>
                     </div>
@@ -777,7 +777,7 @@ export const SystemSettingsPage: React.FC = () => {
 
                     {testResult && (
                       <div className={"p-3 rounded-lg text-sm " + (testResult.success ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200')}>
-                        {testResult.success ? testResult.message : testResult.error}
+                        {testResult.success ? testResult.message : (testResult.error || testResult.message)}
                       </div>
                     )}
                   </div>

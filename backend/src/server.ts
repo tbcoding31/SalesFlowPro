@@ -62,6 +62,7 @@ app.use('/api/tenant/users', authMiddleware, tenantUsersRoutes);
 app.use('/api/tenants', authMiddleware, tenantsRoutes);
 app.use('/api', authMiddleware, genericRoutes);
 app.use('/api/master-data', authMiddleware, masterDataRoutes);
+app.use('/api/system/integrations', authMiddleware, integrationsRoutes);
 app.use('/api/system', authMiddleware, systemRoutes);
 app.use('/api/notifications', authMiddleware, notificationsRoutes);
 

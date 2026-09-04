@@ -125,24 +125,21 @@ integrationsRoutes.post('/:provider/test', async (req: any, res: any) => {
     const [rows]: any = await pool.query('SELECT * FROM integration_configs WHERE provider = ?', [provider]);
     if (!rows.length) return res.status(404).json({ error: 'Integration not configured' });
     
-    // In a real app we would decrypt and test:
-    // const secrets = rows[0].encryptedSecrets ? JSON.parse(decryptSecret(rows[0].encryptedSecrets)) : {};
-    
-    // Mark as connected/tested successfully since we don't have real providers to hit
+    // We do NOT have a real transport implemented for any provider yet
     await pool.query(
-      'UPDATE integration_configs SET status = ?, lastTestedAt = NOW(), lastSuccessAt = NOW(), lastErrorCode = NULL WHERE provider = ?',
-      ['CONNECTED', provider]
+      'UPDATE integration_configs SET lastTestedAt = NOW(), lastErrorCode = ? WHERE provider = ?',
+      ['PROVIDER_RUNTIME_NOT_IMPLEMENTED', provider]
     );
 
-    await logAudit(null, req.userId, 'INTEGRATION_TEST_SUCCEEDED', 'Integration', provider, `Integration ${provider} tested successfully`, req.ip, req.get('User-Agent'), 'SYSTEM');
-
-    res.json({ success: true, message: 'Test connection succeeded' });
+    res.status(501).json({
+      success: false,
+      code: 'PROVIDER_RUNTIME_NOT_IMPLEMENTED',
+      message: 'Live provider connectivity testing is not implemented yet.'
+    });
   } catch (error: any) {
-    await logAudit(null, req.userId, 'INTEGRATION_TEST_FAILED', 'Integration', provider, `Integration ${provider} test failed`, req.ip, req.get('User-Agent'), 'SYSTEM');
     res.status(500).json({ error: 'Integration test failed', message: error.message });
   }
 });
-
 // POST disconnect integration
 integrationsRoutes.post('/:provider/disconnect', async (req: any, res: any) => {
   const { provider } = req.params;
