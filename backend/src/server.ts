@@ -15,6 +15,7 @@ import { syncRoutes } from './routes/sync.routes';
 import { genericRoutes } from './routes/generic.routes';
 import { masterDataRoutes } from './routes/master_data.routes';
 import { systemRoutes } from './routes/system.routes';
+import { integrationsRoutes } from './routes/integrations.routes';
 import { notificationsRoutes } from './routes/notifications.routes';
 import { salesRoutes } from './routes/sales.routes';
 import { managementRoutes } from './routes/management.routes';

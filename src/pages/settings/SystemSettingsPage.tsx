@@ -16,6 +16,100 @@ const Toggle: React.FC<{ enabled: boolean; onChange: () => void }> = ({ enabled,
 );
 
 export const SystemSettingsPage: React.FC = () => {
+
+  const [integrations, setIntegrations] = useState<any>({});
+  const [activeModal, setActiveModal] = useState<string | null>(null);
+  const [integrationForm, setIntegrationForm] = useState<any>({});
+  const [isTesting, setIsTesting] = useState(false);
+  const [testResult, setTestResult] = useState<any>(null);
+
+  useEffect(() => {
+    fetch('/api/integrations', { headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` } })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.integrations) {
+          setIntegrations(data.integrations);
+        }
+      }).catch(console.error);
+  }, []);
+
+  const openIntegrationModal = (provider: string) => {
+    const existing = integrations[provider] || {};
+    setIntegrationForm({
+      provider,
+      displayName: existing.displayName || provider,
+      enabled: existing.enabled || false,
+      config: existing.config || {},
+      secrets: {} // don't load secrets
+    });
+    setTestResult(null);
+    setActiveModal(provider);
+  };
+
+  const handleSaveIntegration = async () => {
+    try {
+      setIsSaving(true);
+      await fetch(`/api/integrations/${integrationForm.provider}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` },
+        body: JSON.stringify(integrationForm)
+      });
+      
+      // Reload
+      const res = await fetch('/api/integrations', { headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` } });
+      const data = await res.json();
+      if (data.success) setIntegrations(data.integrations);
+      
+      setActiveModal(null);
+    } catch(e) {
+      console.error(e);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleTestIntegration = async () => {
+    try {
+      setIsTesting(true);
+      const res = await fetch(`/api/integrations/${integrationForm.provider}/test`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` }
+      });
+      const data = await res.json();
+      setTestResult(data);
+      
+      // Reload to see updated status
+      const res2 = await fetch('/api/integrations', { headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` } });
+      const data2 = await res2.json();
+      if (data2.success) setIntegrations(data2.integrations);
+    } catch(e) {
+      setTestResult({ success: false, error: 'Network error' });
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  const handleDisconnectIntegration = async () => {
+    try {
+      setIsSaving(true);
+      await fetch(`/api/integrations/${integrationForm.provider}/disconnect`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` }
+      });
+      
+      // Reload
+      const res = await fetch('/api/integrations', { headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` } });
+      const data = await res.json();
+      if (data.success) setIntegrations(data.integrations);
+      
+      setActiveModal(null);
+    } catch(e) {
+      console.error(e);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const [activeTab, setActiveTab] = useState('general');
   const [isSaving, setIsSaving] = useState(false);
 
@@ -496,65 +590,230 @@ export const SystemSettingsPage: React.FC = () => {
             </div>
           )}
 
+          
           {activeTab === 'integrations' && (
-            <div className="space-y-8 animate-in fade-in duration-300">
-              <div>
-                <h2 className="text-lg font-extrabold text-slate-900 font-['Hanken_Grotesk']">External Integrations</h2>
-                <p className="text-xs font-medium text-slate-500 mt-1">Connect SalesFlow Pro to third-party services.</p>
-              </div>
-              
-              <div className="grid grid-cols-1 gap-4">
-                <div className="border border-slate-200 rounded-xl p-5 flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
-                      <span className="material-symbols-outlined text-[24px] text-blue-600">mail</span>
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-900">Email SMTP Provider</h3>
-                      <p className="text-xs font-medium text-slate-500 mt-0.5">Not connected</p>
-                    </div>
-                  </div>
-                  <button className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors">
-                    Configure
-                  </button>
+              <div className="space-y-8 animate-in fade-in duration-300">
+                <div>
+                  <h2 className="text-lg font-extrabold text-slate-900 font-['Hanken_Grotesk']">External Integrations</h2>
+                  <p className="text-xs font-medium text-slate-500 mt-1">Connect SalesFlow Pro to third-party services.</p>
                 </div>
                 
-                <div className="border border-slate-200 rounded-xl p-5 flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0">
-                      <span className="material-symbols-outlined text-[24px] text-emerald-600">calendar_month</span>
+                <div className="grid grid-cols-1 gap-4">
+                  {/* SMTP */}
+                  <div className="border border-slate-200 rounded-xl p-5 flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
+                        <span className="material-symbols-outlined text-[24px] text-blue-600">mail</span>
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900">Email SMTP Provider</h3>
+                        <p className="text-xs font-medium text-slate-500 mt-0.5">
+                          {integrations.smtp?.status === 'CONNECTED' ? <span className="text-emerald-600">Connected</span> : (integrations.smtp?.status === 'CONFIGURED' ? <span className="text-blue-600">Configured</span> : 'Not connected')}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-900">Calendar Sync (Google/Outlook)</h3>
-                      <p className="text-xs font-medium text-slate-500 mt-0.5">Not connected</p>
-                    </div>
+                    <button onClick={() => openIntegrationModal('smtp')} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors">
+                      Configure
+                    </button>
                   </div>
-                  <button className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors">
-                    Configure
-                  </button>
-                </div>
-                
-                <div className="border border-slate-200 rounded-xl p-5 flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center shrink-0">
-                      <span className="material-symbols-outlined text-[24px] text-amber-600">chat</span>
+                  
+                  {/* CALENDAR */}
+                  <div className="border border-slate-200 rounded-xl p-5 flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className="w-10 h-10 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0">
+                        <span className="material-symbols-outlined text-[24px] text-emerald-600">calendar_month</span>
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900">Calendar Sync (Google/Outlook)</h3>
+                        <p className="text-xs font-medium text-slate-500 mt-0.5">
+                          {integrations.calendar?.status === 'CONNECTED' ? <span className="text-emerald-600">Connected</span> : (integrations.calendar?.status === 'CONFIGURED' ? <span className="text-blue-600">Configured</span> : 'Not connected')}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="text-sm font-bold text-slate-900">Slack / Teams Notifications</h3>
-                      <p className="text-xs font-medium text-slate-500 mt-0.5">Not connected</p>
-                    </div>
+                    <button onClick={() => openIntegrationModal('calendar')} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors">
+                      Configure
+                    </button>
                   </div>
-                  <button className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors">
-                    Configure
-                  </button>
+                  
+                  {/* SLACK/TEAMS */}
+                  <div className="border border-slate-200 rounded-xl p-5 flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center shrink-0">
+                        <span className="material-symbols-outlined text-[24px] text-amber-600">chat</span>
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900">Slack / Teams Notifications</h3>
+                        <p className="text-xs font-medium text-slate-500 mt-0.5">
+                          {integrations.messaging?.status === 'CONNECTED' ? <span className="text-emerald-600">Connected</span> : (integrations.messaging?.status === 'CONFIGURED' ? <span className="text-blue-600">Configured</span> : 'Not connected')}
+                        </p>
+                      </div>
+                    </div>
+                    <button onClick={() => openIntegrationModal('messaging')} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition-colors">
+                      Configure
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
+            
+            {activeModal && (
+              <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50">
+                <div className="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+                  <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
+                    <h3 className="font-bold text-lg text-slate-900 font-['Hanken_Grotesk']">
+                      Configure {activeModal === 'smtp' ? 'SMTP' : activeModal === 'calendar' ? 'Calendar Sync' : 'Messaging'}
+                    </h3>
+                    <button onClick={() => setActiveModal(null)} className="text-slate-400 hover:text-slate-600">
+                      <span className="material-symbols-outlined">close</span>
+                    </button>
+                  </div>
+                  
+                  <div className="p-6 overflow-y-auto flex-1 space-y-4">
+                    {activeModal === 'smtp' && (
+                      <>
+                        <div className="flex items-center gap-3 mb-4">
+                          <label className="text-sm font-bold text-slate-700 w-24">Enable</label>
+                          <Toggle enabled={integrationForm.enabled} onChange={() => setIntegrationForm({...integrationForm, enabled: !integrationForm.enabled})} />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-1">SMTP Host</label>
+                          <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
+                            value={integrationForm.config.host || ''} 
+                            onChange={e => setIntegrationForm({...integrationForm, config: {...integrationForm.config, host: e.target.value}})} 
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-1">SMTP Port</label>
+                          <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
+                            value={integrationForm.config.port || ''} 
+                            onChange={e => setIntegrationForm({...integrationForm, config: {...integrationForm.config, port: e.target.value}})} 
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-1">From Email</label>
+                          <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
+                            value={integrationForm.config.fromEmail || ''} 
+                            onChange={e => setIntegrationForm({...integrationForm, config: {...integrationForm.config, fromEmail: e.target.value}})} 
+                          />
+                        </div>
+                        <div className="pt-2 border-t border-slate-100">
+                          <label className="block text-sm font-bold text-slate-700 mb-1">Username (Secret)</label>
+                          <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
+                            placeholder={integrations.smtp?.status && integrations.smtp?.status !== 'NOT_CONNECTED' ? '******** (Leave blank to keep existing)' : ''}
+                            value={integrationForm.secrets.username || ''} 
+                            onChange={e => setIntegrationForm({...integrationForm, secrets: {...integrationForm.secrets, username: e.target.value}})} 
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-1">Password (Secret)</label>
+                          <input type="password" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
+                            placeholder={integrations.smtp?.status && integrations.smtp?.status !== 'NOT_CONNECTED' ? '******** (Leave blank to keep existing)' : ''}
+                            value={integrationForm.secrets.password || ''} 
+                            onChange={e => setIntegrationForm({...integrationForm, secrets: {...integrationForm.secrets, password: e.target.value}})} 
+                          />
+                        </div>
+                      </>
+                    )}
 
+                    {activeModal === 'calendar' && (
+                      <>
+                        <div className="flex items-center gap-3 mb-4">
+                          <label className="text-sm font-bold text-slate-700 w-24">Enable Sync</label>
+                          <Toggle enabled={integrationForm.enabled} onChange={() => setIntegrationForm({...integrationForm, enabled: !integrationForm.enabled})} />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-1">Provider</label>
+                          <select className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                            value={integrationForm.config.calendarProvider || 'google'}
+                            onChange={e => setIntegrationForm({...integrationForm, config: {...integrationForm.config, calendarProvider: e.target.value}})}>
+                            <option value="google">Google Calendar (OAuth)</option>
+                            <option value="outlook">Microsoft Outlook 365 (OAuth)</option>
+                          </select>
+                        </div>
+                        <div className="pt-2 border-t border-slate-100">
+                          <label className="block text-sm font-bold text-slate-700 mb-1">OAuth Client ID (Secret)</label>
+                          <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
+                            placeholder={integrations.calendar?.status && integrations.calendar?.status !== 'NOT_CONNECTED' ? '******** (Leave blank to keep existing)' : ''}
+                            value={integrationForm.secrets.clientId || ''} 
+                            onChange={e => setIntegrationForm({...integrationForm, secrets: {...integrationForm.secrets, clientId: e.target.value}})} 
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-1">OAuth Client Secret (Secret)</label>
+                          <input type="password" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
+                            placeholder={integrations.calendar?.status && integrations.calendar?.status !== 'NOT_CONNECTED' ? '******** (Leave blank to keep existing)' : ''}
+                            value={integrationForm.secrets.clientSecret || ''} 
+                            onChange={e => setIntegrationForm({...integrationForm, secrets: {...integrationForm.secrets, clientSecret: e.target.value}})} 
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {activeModal === 'messaging' && (
+                      <>
+                        <div className="flex items-center gap-3 mb-4">
+                          <label className="text-sm font-bold text-slate-700 w-24">Enable</label>
+                          <Toggle enabled={integrationForm.enabled} onChange={() => setIntegrationForm({...integrationForm, enabled: !integrationForm.enabled})} />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-1">Provider</label>
+                          <select className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                            value={integrationForm.config.messagingProvider || 'slack'}
+                            onChange={e => setIntegrationForm({...integrationForm, config: {...integrationForm.config, messagingProvider: e.target.value}})}>
+                            <option value="slack">Slack</option>
+                            <option value="teams">Microsoft Teams</option>
+                          </select>
+                        </div>
+                        <div className="pt-2 border-t border-slate-100">
+                          <label className="block text-sm font-bold text-slate-700 mb-1">Webhook URL (Secret)</label>
+                          <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
+                            placeholder={integrations.messaging?.status && integrations.messaging?.status !== 'NOT_CONNECTED' ? '******** (Leave blank to keep existing)' : ''}
+                            value={integrationForm.secrets.webhookUrl || ''} 
+                            onChange={e => setIntegrationForm({...integrationForm, secrets: {...integrationForm.secrets, webhookUrl: e.target.value}})} 
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {testResult && (
+                      <div className={"p-3 rounded-lg text-sm " + (testResult.success ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200')}>
+                        {testResult.success ? testResult.message : testResult.error}
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="px-6 py-4 border-t border-slate-200 flex justify-between bg-slate-50">
+                    <button 
+                      onClick={handleDisconnectIntegration}
+                      className="px-4 py-2 text-red-600 hover:bg-red-50 font-bold rounded-lg text-sm transition-colors"
+                    >
+                      Disconnect
+                    </button>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={handleTestIntegration}
+                        disabled={isTesting}
+                        className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold rounded-lg text-sm transition-colors"
+                      >
+                        {isTesting ? 'Testing...' : 'Test Connection'}
+                      </button>
+                      <button 
+                        onClick={handleSaveIntegration}
+                        disabled={isSaving}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-sm transition-colors"
+                      >
+                        {isSaving ? 'Saving...' : 'Save Configuration'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+
+
+          </div>
         </div>
       </div>
-
-    </div>
-  );
+    );
 };
