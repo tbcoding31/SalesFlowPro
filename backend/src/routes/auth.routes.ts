@@ -74,6 +74,7 @@ authRoutes.post('/login', async (req: any, res: any) => {
       'INSERT INTO auth_sessions (id, userId, token, ipAddress, userAgent, expiresAt) VALUES (?, ?, ?, ?, ?, ?)',
       [sessionId, user.id, token, req.ip, req.headers['user-agent'] || '', expiresAt]
     );
+      await pool.query('UPDATE users SET lastLoginAt = NOW() WHERE id = ?', [user.id]);
 
     const userDto = {
       id: user.id,

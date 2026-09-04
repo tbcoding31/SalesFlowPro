@@ -33,7 +33,15 @@ usersRoutes.get('/', async (req: any, res: any) => {
         COALESCE(tu.status, u.status, 'ACTIVE') AS status,
         COALESCE(tu.status, u.status, 'ACTIVE') AS membershipStatus,
         tu.id AS tenantUserId, 
-        tu.tenantId, 
+          tu.tenantId, 
+          (
+            SELECT COUNT(tasks.id) 
+            FROM tasks 
+            LEFT JOIN task_statuses ts ON ts.id = tasks.statusId
+            WHERE tasks.tenantId = tu.tenantId 
+            AND tasks.picId = u.id 
+            AND (ts.code NOT IN ('TSK_COMPLETED', 'TSK_CANCELLED') OR ts.code IS NULL)
+          ) AS taskCount, 
         tu.isPrimary,
         r.id AS role, 
         r.name AS roleName,

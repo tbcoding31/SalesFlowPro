@@ -692,11 +692,11 @@ export const TenantDetailPage: React.FC = () => {
                           </span>
                         </td>
 
-                        <td className="px-6 py-3.5 font-bold text-[#1a1c1c]">14</td>
+                        <td className="px-6 py-3.5 font-bold text-[#1a1c1c]">{u.taskCount || 0}</td>
 
                         <td className="px-6 py-3.5 text-[#767587] font-medium">
-                          2023-10-24 09:12
-                        </td>
+{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).replace(',', '') : 'Never'}
+</td>
 
                         <td className="px-6 py-3.5 text-right">
                           <button className="p-1 text-[#767587] hover:text-[#1a1c1c]">

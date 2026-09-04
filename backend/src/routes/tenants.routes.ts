@@ -1,3 +1,4 @@
+import { logAudit } from '../utils/audit';
 import { Router } from 'express';
 import { pool } from '../db';
 import { buildReportScopeWhere, validateTargetTenant } from '../utils/scope';
@@ -326,6 +327,7 @@ tenantsRoutes.put('/:id', async (req, res) => {
       'UPDATE tenants SET name = ?, email = ?, phone = ?, industry = ?, region = ?, address = ?, description = ? WHERE id = ?',
       [name, email || null, phone || null, industry || null, region || null, address || null, description || null, targetTenantId]
     );
+      await logAudit(targetTenantId, (req as any).userId || 'SYSTEM', 'TENANT_UPDATED', 'Tenant', targetTenantId, 'Tenant details updated.', req.ip);
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'Tenant not found.' });
@@ -377,6 +379,9 @@ tenantsRoutes.put('/:id/status', async (req, res) => {
       );
     }
 
+      const action = status === 'SUSPENDED' ? 'TENANT_SUSPENDED' : 'TENANT_REACTIVATED';
+      await logAudit(targetTenantId, (req as any).userId || 'SYSTEM', action, 'Tenant', targetTenantId, `Tenant status changed to ${status}.`, req.ip);
+
     res.json({ success: true, status });
   } catch (err: any) {
     console.error('Error updating tenant status:', err.message);
@@ -385,26 +390,61 @@ tenantsRoutes.put('/:id/status', async (req, res) => {
 });
 
 tenantsRoutes.put('/:id/trial', async (req, res) => {
-  const actorRole = (req as any).userRole;
-  const actorPermissions = (req as any).userPermissions || [];
-  
-  if (actorRole !== 'SUPER_ADMIN' && !actorPermissions.includes('ALL')) {
-    return res.status(403).json({ error: 'Access denied.' });
-  }
-
-  const targetTenantId = req.params.id;
-  const { isTrialExpired } = req.body;
-
-  try {
-    const trialEndDate = isTrialExpired ? '2020-01-01 00:00:00' : '2030-01-01 00:00:00';
+    const actorRole = (req as any).userRole;
+    const actorPermissions = (req as any).userPermissions || [];
     
-    await pool.query(
-      'UPDATE tenants SET trialEndDate = ? WHERE id = ?',
-      [trialEndDate, targetTenantId]
-    );
+    if (actorRole !== 'SUPER_ADMIN' && !actorPermissions.includes('ALL')) {
+      return res.status(403).json({ error: 'Access denied.' });
+    }
+  
+    const targetTenantId = req.params.id;
+    const { action } = req.body; // 'EXPIRE' or 'REACTIVATE'
+  
+    try {
+      const [rows]: any = await pool.query('SELECT createdAt, trialEndDate FROM tenants WHERE id = ?', [targetTenantId]);
+      if (rows.length === 0) return res.status(404).json({ error: 'Tenant not found.' });
+      
+      const tenant = rows[0];
+      const now = new Date();
+      
+      const createdAt = new Date(tenant.createdAt);
+      // Scheduled Trial End: createdAt + 3 calendar months
+      const scheduledTrialEndDate = new Date(createdAt);
+      scheduledTrialEndDate.setMonth(scheduledTrialEndDate.getMonth() + 3);
 
-    res.json({ success: true, trialEndDate });
-  } catch (err: any) {
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
+      if (action === 'EXPIRE') {
+        // Set effective end date to now
+        const trialEndDate = now.toISOString().slice(0, 19).replace('T', ' ');
+        await pool.query('UPDATE tenants SET trialEndDate = ? WHERE id = ?', [trialEndDate, targetTenantId]);
+        
+        // Revoke active sessions
+        await pool.query(
+          `DELETE FROM auth_sessions 
+           WHERE userId IN (
+             SELECT userId FROM tenant_users WHERE tenantId = ?
+           )`,
+          [targetTenantId]
+        );
+        
+        await logAudit(targetTenantId, (req as any).userId || 'SYSTEM', 'TRIAL_MANUALLY_EXPIRED', 'Tenant', targetTenantId, 'Tenant trial manually expired.', req.ip);
+        
+        return res.json({ success: true, trialEndDate });
+      } else if (action === 'REACTIVATE') {
+        if (now >= scheduledTrialEndDate) {
+          return res.status(409).json({ success: false, code: 'TRIAL_PERIOD_ALREADY_ELAPSED', error: 'The original trial period has already elapsed.' });
+        }
+        
+        const trialEndDate = scheduledTrialEndDate.toISOString().slice(0, 19).replace('T', ' ');
+        await pool.query('UPDATE tenants SET trialEndDate = ? WHERE id = ?', [trialEndDate, targetTenantId]);
+        
+        await logAudit(targetTenantId, (req as any).userId || 'SYSTEM', 'TRIAL_REACTIVATED', 'Tenant', targetTenantId, 'Tenant trial manually reactivated.', req.ip);
+        
+        return res.json({ success: true, trialEndDate });
+      } else {
+        return res.status(400).json({ error: 'Invalid action.' });
+      }
+    } catch (err: any) {
+      console.error(err);
+      res.status(500).json({ error: 'Internal Server Error' });
+    }
+  });
