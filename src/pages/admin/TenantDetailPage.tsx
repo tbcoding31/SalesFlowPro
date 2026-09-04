@@ -272,18 +272,22 @@ export const TenantDetailPage: React.FC = () => {
         {/* Action Controls */}
         <div className="flex items-center gap-2.5 flex-wrap">
           {tenant.type === 'Trial 3 Bulan' && (
-            <button
-              onClick={toggleTrialStatus}
-              className={`px-3.5 py-2 rounded-lg text-xs font-bold border transition-colors flex items-center gap-1 ${
-                (tenant?.trialEndDate ? new Date(tenant.trialEndDate) < new Date() : false)
-                  ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-                  : 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
-              }`}
-              title="Set Trial Status"
-            >
-              <span className="material-symbols-outlined text-[16px]">timer</span>
-              <span>{(tenant?.trialEndDate ? new Date(tenant.trialEndDate) < new Date() : false) ? 'Set Trial Active' : 'Set Trial Expired'}</span>
-            </button>
+            
+              <button
+                onClick={toggleTrialStatus}
+                disabled={getTrialState().state === 'TRIAL_EXPIRED_NATURAL'}
+                title={getTrialState().state === 'TRIAL_EXPIRED_NATURAL' ? 'The original 3-month trial period has already ended.' : 'Set Trial Status'}
+                className={`px-3.5 py-2 rounded-lg text-xs font-bold border transition-colors flex items-center gap-1 ${
+                  getTrialState().state === 'TRIAL_EXPIRED_NATURAL'
+                    ? 'border-gray-300 bg-gray-100 text-gray-400 cursor-not-allowed'
+                    : !isTrialActiveState()
+                    ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                    : 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[16px]">timer</span>
+                <span>{!isTrialActiveState() ? 'Set Trial Active' : 'Set Trial Expired'}</span>
+              </button>
           )}
           <button 
             onClick={() => setIsEditModalOpen(true)}
