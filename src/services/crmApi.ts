@@ -255,28 +255,18 @@ fetchCustomers: async (params?: QueryPaginationParams): Promise<PaginatedRespons
     }
     const token = localStorage.getItem('sfp_auth_token');
     
-    // Check if super admin
-    let userRole = '';
-    try {
-      if (token) {
-        const payload = JSON.parse(atob(token.split('.')[1]));
-        userRole = payload.role;
-      }
-    } catch(e) {}
-    
-    const url = userRole === 'SUPER_ADMIN' 
-      ? `${API_BASE}/system/audit-logs${q.toString() ? '?' + q.toString() : ''}`
-      : `${API_BASE}/audit_logs${q.toString() ? '?' + q.toString() : ''}`; // Fallback for tenant admins if needed, though they don't have access to platform logs
+    // Always use the platform endpoint for Audit Logs page
+    const url = `${API_BASE}/system/audit-logs${q.toString() ? '?' + q.toString() : ''}`;
 
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch audit logs`);
     
-    // Convert to PaginatedResponse format if the API returns items/totalCount
     const data = await res.json();
     if (data.items) {
       return {
-        data: data.items, pagination: { totalItems: data.totalCount || data.total, totalPages: data.totalPages }
-      } as any; // Cast because 'data' doesn't exactly match 'Activity' model everywhere, but it's close enough for the UI
+        data: data.items,
+        pagination: { totalItems: data.totalCount || data.total, totalPages: data.totalPages }
+      } as any;
     }
     return data;
   },
