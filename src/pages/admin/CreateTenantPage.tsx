@@ -7,7 +7,7 @@ export const CreateTenantPage: React.FC = () => {
 
   // Section 1: Tenant Info
   const [tenantName, setTenantName] = useState('');
-  const [tenantCode, setTenantCode] = useState(`TEN-${Math.floor(10000 + Math.random() * 90000)}`);
+  // Tenant code is now backend generated
   const [tenantEmail, setTenantEmail] = useState('');
   const [tenantPhone, setTenantPhone] = useState('');
   const [industry, setIndustry] = useState('Manufacturing & Distribution');
@@ -34,7 +34,7 @@ export const CreateTenantPage: React.FC = () => {
       const intentPayload = {
         organization: {
           name: tenantName,
-          requestedCode: tenantCode,
+          // requestedCode is backend authoritative now
           email: tenantEmail,
           phone: tenantPhone,
           industry,
@@ -130,15 +130,11 @@ export const CreateTenantPage: React.FC = () => {
 
             <div>
               <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
-                Tenant Identification Code *
-              </label>
-              <input
-                type="text"
-                required
-                value={tenantCode}
-                onChange={(e) => setTenantCode(e.target.value)}
-                className="w-full px-3 py-2 border border-[#E1E1E1] rounded-lg text-xs font-mono bg-[#f9f9f9] text-[#1a1c1c]"
-              />
+                  Tenant Identification Code *
+                </label>
+                <div className="w-full px-3 py-2 border border-[#E1E1E1] rounded-lg text-xs font-mono bg-gray-100 text-gray-500 cursor-not-allowed">
+                  Generated automatically after creation
+                </div>
             </div>
 
             <div>

@@ -26,15 +26,30 @@ onboardingRoutes.post('/tenant', async (req, res) => {
 
   try {
     // 1. Tenant ID and Code
+    
     const tenantId = `TEN-${Date.now()}-${randomUUID().substring(0,6)}`;
-    const tenantCode = organization.requestedCode || tenantId;
-
-    // Check Duplicate Code
-    const [existingTenants]: any = await connection.query('SELECT id FROM tenants WHERE code = ?', [tenantCode]);
-    if (existingTenants.length > 0) {
-      await connection.rollback();
-      return res.status(409).json({ error: 'Tenant code already exists.' });
+    
+    // BACKEND AUTHORITATIVE COLLISION-SAFE TENANT CODE GENERATION
+    let tenantCode = '';
+    let codeIsUnique = false;
+    let attempts = 0;
+    
+    while (!codeIsUnique && attempts < 5) {
+      // Generate candidate
+      const candidateCode = 'TEN-' + Math.floor(10000 + Math.random() * 90000).toString();
+      const [existingTenants]: any = await connection.query('SELECT id FROM tenants WHERE code = ?', [candidateCode]);
+      if (existingTenants.length === 0) {
+        tenantCode = candidateCode;
+        codeIsUnique = true;
+      }
+      attempts++;
     }
+    
+    if (!codeIsUnique) {
+      await connection.rollback();
+      return res.status(500).json({ error: 'Failed to generate a unique tenant code. Please try again.' });
+    }
+
 
     // Trial Policy Calculation
     const type = organization.type || 'Professional';
@@ -50,8 +65,8 @@ onboardingRoutes.post('/tenant', async (req, res) => {
 
     // Insert Tenant
     await connection.query(
-      `INSERT INTO tenants (id, name, code, status, createdAt, type, trialEndDate, email, industry, phone) VALUES (?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?)`,
-      [tenantId, organization.name, tenantCode, 'ACTIVE', type, trialEndDate, organization.email || null, organization.industry || null, organization.phone || null]
+      `INSERT INTO tenants (id, name, code, status, createdAt, type, trialEndDate, email, industry, phone, region, address, description) VALUES (?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [tenantId, organization.name, tenantCode, 'ACTIVE', type, trialEndDate, organization.email || null, organization.industry || null, organization.phone || null, organization.region || null, organization.address || null, organization.description || null]
     );
 
     // 2. User Identity Policy

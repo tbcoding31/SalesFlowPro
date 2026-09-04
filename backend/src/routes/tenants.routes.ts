@@ -294,3 +294,46 @@ tenantsRoutes.get('/:id', async (req, res) => {
   }
 });
 
+
+tenantsRoutes.put('/:id', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+  
+  const targetTenantId = req.params.id;
+
+  if (!actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  // Authorization: Super Admin OR (Tenant Admin of their own tenant)
+  if (actorRole !== 'SUPER_ADMIN' && !actorPermissions.includes('ALL')) {
+    if (actorRole !== 'TENANT_ADMIN' || actorTenant !== targetTenantId) {
+      return res.status(403).json({ error: 'Access denied to edit this tenant configuration.' });
+    }
+  }
+
+  // Editable whitelist (no ID, code, status, dates allowed)
+  const { name, email, phone, industry, region, address, description, type } = req.body;
+
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Organization name is required.' });
+
+  try {
+    // Note: 'type' is not updated here based on the requirement 'trial-related fields backend authoritative'
+    // Actually the prompt says: "If existing product policy does not support subscription changes yet, keep the field read-only and report: SUBSCRIPTION_EDIT_POLICY = NOT_IMPLEMENTED"
+    // I will let it be read-only on the frontend and backend will ignore it.
+
+    const [result]: any = await pool.query(
+      'UPDATE tenants SET name = ?, email = ?, phone = ?, industry = ?, region = ?, address = ?, description = ? WHERE id = ?',
+      [name, email || null, phone || null, industry || null, region || null, address || null, description || null, targetTenantId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Tenant not found.' });
+    }
+
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('Error updating tenant:', err.message);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});

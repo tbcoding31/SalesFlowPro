@@ -671,65 +671,177 @@ export const TenantDetailPage: React.FC = () => {
       )}
       
       {/* Edit Tenant Modal */}
+      
       {isEditModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-4">
-          <div className="bg-white rounded-xl shadow-lg p-6 max-w-md w-full">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold">Edit Tenant</h2>
-              <button onClick={() => setIsEditModalOpen(false)} className="text-gray-500 hover:text-black">
-                <span className="material-symbols-outlined">close</span>
+        <div className="fixed inset-0 bg-[#1a1c1c]/40 backdrop-blur-sm flex items-center justify-center z-[9999] p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-xl max-w-3xl w-full my-8">
+            <div className="px-6 py-4 border-b border-[#E1E1E1] flex justify-between items-center bg-[#F8F8F9] rounded-t-2xl">
+              <div>
+                <h2 className="text-xl font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">Edit Tenant Configuration</h2>
+                <p className="text-xs text-[#767587]">Update organizational details and configuration.</p>
+              </div>
+              <button onClick={() => setIsEditModalOpen(false)} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-200 text-[#767587]">
+                <span className="material-symbols-outlined text-[20px]">close</span>
               </button>
             </div>
+            
             <form onSubmit={async (e) => {
               e.preventDefault();
               const formData = new FormData(e.currentTarget);
               const payload = {
                 name: formData.get('name'),
-                industry: formData.get('industry'),
+                email: formData.get('email'),
                 phone: formData.get('phone'),
+                industry: formData.get('industry'),
+                region: formData.get('region'),
+                address: formData.get('address'),
                 description: formData.get('description'),
               };
-              
               try {
-                const token = localStorage.getItem('sfp_auth_token') || '';
-                const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-                if (token) headers['Authorization'] = `Bearer ${token}`;
-
                 const res = await fetch(`/api/tenants/${tenant.id}`, {
                   method: 'PUT',
-                  headers,
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + (localStorage.getItem('sfp_auth_token') || '')
+                  },
                   body: JSON.stringify(payload)
                 });
-                if (!res.ok) throw new Error('Failed to update tenant');
-                
-                const updated = { ...tenant, ...payload } as any;
-                setTenant(updated);
+                if (!res.ok) {
+                  const data = await res.json();
+                  throw new Error(data.error || 'Failed to update tenant');
+                }
+                // Refresh
+                const getRes = await fetch(`/api/tenants/${tenant.id}`, {
+                  headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('sfp_auth_token') || '') }
+                });
+                const getJson = await getRes.json();
+                setTenant(getJson);
                 setIsEditModalOpen(false);
               } catch (err: any) {
                 alert('Error updating tenant: ' + err.message);
               }
             }}>
-              <div className="space-y-4">
+              <div className="p-6 sm:p-8 space-y-6">
+                
+                {/* SECTION: Organization Details */}
                 <div>
-                  <label className="block text-xs font-bold text-gray-700 mb-1">Tenant Name</label>
-                  <input name="name" defaultValue={tenant.name} required className="w-full px-3 py-2 border rounded-lg text-sm" />
+                  <h3 className="text-sm font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-4 uppercase tracking-wider text-[#4744e5]">Organization Details</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    
+                    <div className="col-span-1 md:col-span-2">
+                      <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
+                        Organization Name *
+                      </label>
+                      <input name="name" defaultValue={tenant.name} required className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs focus:outline-none focus:border-[#4744e5]" />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
+                        Tenant Identification Code
+                      </label>
+                      <div className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs font-mono bg-gray-50 text-gray-500 cursor-not-allowed">
+                        {tenant.code}
+                      </div>
+                      <p className="text-[10px] text-[#767587] mt-1">Immutable system identifier.</p>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
+                        Official Email *
+                      </label>
+                      <input type="email" name="email" defaultValue={tenant.email || ''} required className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs focus:outline-none focus:border-[#4744e5]" />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
+                        Phone Number
+                      </label>
+                      <input type="tel" name="phone" defaultValue={tenant.phone || ''} className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs focus:outline-none focus:border-[#4744e5]" />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
+                        Industry Sector
+                      </label>
+                      <div className="relative">
+                        <select name="industry" defaultValue={tenant.industry || 'Manufacturing & Distribution'} className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs focus:outline-none focus:border-[#4744e5] appearance-none bg-white">
+                          <option value="Manufacturing & Distribution">Manufacturing & Distribution</option>
+                          <option value="Retail & FMCG">Retail & FMCG</option>
+                          <option value="Professional Services">Professional Services</option>
+                          <option value="Technology & Software">Technology & Software</option>
+                          <option value="Financial Services">Financial Services</option>
+                          <option value="Healthcare">Healthcare</option>
+                          <option value="Other">Other</option>
+                        </select>
+                        <div className="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none text-[#767587]">
+                          <span className="material-symbols-outlined text-[18px]">expand_more</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
+                        Subscription Tier Plan
+                      </label>
+                      <div className="relative">
+                        <select name="type" defaultValue={tenant.type || 'Professional'} disabled className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs focus:outline-none appearance-none bg-gray-50 text-gray-500 cursor-not-allowed">
+                          <option value="Professional">Professional (Monthly)</option>
+                          <option value="Enterprise">Enterprise (Annual)</option>
+                          <option value="Trial 3 Bulan">Trial 3 Bulan</option>
+                        </select>
+                        <div className="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none text-gray-400">
+                          <span className="material-symbols-outlined text-[18px]">lock</span>
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-[#767587] mt-1">Changes must be requested via Billing Support.</p>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
+                        Operating Region
+                      </label>
+                      <div className="relative">
+                        <select name="region" defaultValue={tenant.region || 'DKI Jakarta'} className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs focus:outline-none focus:border-[#4744e5] appearance-none bg-white">
+                          <option value="DKI Jakarta">DKI Jakarta</option>
+                          <option value="Jawa Barat">Jawa Barat</option>
+                          <option value="Jawa Tengah">Jawa Tengah</option>
+                          <option value="Jawa Timur">Jawa Timur</option>
+                          <option value="Banten">Banten</option>
+                          <option value="Bali">Bali</option>
+                          <option value="Other">Other</option>
+                        </select>
+                        <div className="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none text-[#767587]">
+                          <span className="material-symbols-outlined text-[18px]">expand_more</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="col-span-1 md:col-span-2">
+                      <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
+                        Headquarters Address
+                      </label>
+                      <textarea name="address" defaultValue={tenant.address || ''} rows={2} className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs focus:outline-none focus:border-[#4744e5] resize-none"></textarea>
+                    </div>
+
+                    <div className="col-span-1 md:col-span-2">
+                      <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
+                        Organization Description
+                      </label>
+                      <textarea name="description" defaultValue={tenant.description || ''} rows={2} className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs focus:outline-none focus:border-[#4744e5] resize-none"></textarea>
+                    </div>
+
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-gray-700 mb-1">Industry</label>
-                  <input name="industry" defaultValue={tenant.industry} className="w-full px-3 py-2 border rounded-lg text-sm" />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-gray-700 mb-1">Phone</label>
-                  <input name="phone" defaultValue={tenant.phone} className="w-full px-3 py-2 border rounded-lg text-sm" />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-gray-700 mb-1">Description</label>
-                  <textarea name="description" defaultValue={tenant.description} rows={3} className="w-full px-3 py-2 border rounded-lg text-sm"></textarea>
-                </div>
+
               </div>
-              <div className="mt-6 flex justify-end gap-3">
-                <button type="button" onClick={() => setIsEditModalOpen(false)} className="px-4 py-2 border rounded-lg text-sm font-bold hover:bg-gray-50">Cancel</button>
-                <button type="submit" className="px-4 py-2 bg-[#4744e5] text-white rounded-lg text-sm font-bold hover:bg-[#2c24ce]">Save Changes</button>
+              <div className="px-6 py-4 bg-[#F8F8F9] border-t border-[#E1E1E1] rounded-b-2xl flex justify-end gap-3">
+                <button type="button" onClick={() => setIsEditModalOpen(false)} className="px-5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs font-bold text-[#464555] hover:bg-white transition-colors">
+                  Cancel
+                </button>
+                <button type="submit" className="px-5 py-2.5 bg-[#4744e5] text-white rounded-lg text-xs font-bold hover:bg-[#2c24ce] transition-colors flex items-center gap-2">
+                  <span className="material-symbols-outlined text-[18px]">save</span>
+                  Save Changes
+                </button>
               </div>
             </form>
           </div>
