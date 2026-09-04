@@ -24,6 +24,10 @@ export const TenantDetailPage: React.FC = () => {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [showSuspendModal, setShowSuspendModal] = useState(false);
   const [suspendError, setSuspendError] = useState<string | null>(null);
+  const [showReactivateModal, setShowReactivateModal] = useState(false);
+  const [isReactivating, setIsReactivating] = useState(false);
+  const [reactivateError, setReactivateError] = useState<string | null>(null);
+
 
   const confirmSuspend = async () => {
     setIsSuspending(true);
@@ -50,6 +54,42 @@ export const TenantDetailPage: React.FC = () => {
       setSuspendError("Unable to suspend organization. Please try again.");
     } finally {
       setIsSuspending(false);
+    }
+  };
+
+  
+  const confirmReactivate = async () => {
+    setIsReactivating(true);
+    setReactivateError(null);
+    try {
+      const token = localStorage.getItem('sfp_auth_token') || '';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch(`/api/tenants/${tenant?.id}/status`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ status: 'ACTIVE' })
+      });
+      if (!res.ok) throw new Error();
+      
+      const getRes = await fetch(`/api/tenants/${tenant?.id}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const getJson = await getRes.json();
+      setTenant(getJson);
+      setShowReactivateModal(false);
+    } catch (err: any) {
+      setReactivateError("Unable to reactivate organization. Please try again.");
+    } finally {
+      setIsReactivating(false);
+    }
+  };
+
+  const handleReactivateClick = () => {
+    if (tenant?.status === 'SUSPENDED') {
+      setShowReactivateModal(true);
+      setReactivateError(null);
     }
   };
 
@@ -261,10 +301,11 @@ export const TenantDetailPage: React.FC = () => {
             )}
             {tenant.status === 'SUSPENDED' && (
               <button
-                disabled
-                className="px-3.5 py-2 rounded-lg text-xs font-bold border border-gray-300 text-gray-400 cursor-not-allowed"
+                onClick={handleReactivateClick}
+                disabled={isReactivating}
+                className="px-3.5 py-2 rounded-lg text-xs font-bold border transition-colors border-[#00C875]/30 text-[#008f53] hover:bg-[#00C875]/10"
               >
-                Suspended
+                Reactivate Tenant
               </button>
             )}
 
@@ -917,6 +958,67 @@ export const TenantDetailPage: React.FC = () => {
                 className="px-5 py-2.5 bg-[#ba1a1a] text-white rounded-lg text-xs font-bold hover:bg-[#a01616] transition-colors w-1/2 flex justify-center items-center"
               >
                 {isSuspending ? 'Suspending...' : 'Suspend Organization'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reactivate Confirmation Modal */}
+      {showReactivateModal && (
+        <div 
+          role="dialog" 
+          aria-modal="true" 
+          aria-labelledby="reactivate-modal-title"
+          className="fixed inset-0 bg-[#1a1c1c]/40 backdrop-blur-sm flex items-center justify-center z-[9999] p-4 overflow-y-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isReactivating) {
+              setShowReactivateModal(false);
+            }
+          }}
+        >
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full my-8 flex flex-col p-6">
+            <div className="flex justify-center mb-4 text-[#008f53]">
+              <span className="material-symbols-outlined text-[48px]">check_circle</span>
+            </div>
+            
+            <h2 id="reactivate-modal-title" className="text-xl font-bold text-center text-[#1a1c1c] font-['Hanken_Grotesk'] mb-2">
+              Reactivate Organization?
+            </h2>
+            
+            <p className="text-sm text-center text-[#1a1c1c] font-bold mb-4">
+              {tenant?.name} ({tenant?.code})
+            </p>
+            
+            <p className="text-sm text-center text-[#767587] mb-2">
+              Users in this organization will be allowed to sign in again.
+            </p>
+            <p className="text-xs text-center text-[#767587] mb-6 px-4">
+              Previously revoked sessions will remain invalid and users must authenticate again.
+            </p>
+
+            {reactivateError && (
+              <div className="mb-4 p-3 bg-[#ba1a1a]/10 text-[#ba1a1a] text-xs rounded-lg text-center font-bold">
+                {reactivateError}
+              </div>
+            )}
+
+            <div className="flex gap-3 justify-center">
+              <button 
+                type="button" 
+                onClick={() => setShowReactivateModal(false)} 
+                disabled={isReactivating}
+                className="px-5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs font-bold text-[#464555] hover:bg-[#F8F8F9] transition-colors w-1/2"
+              >
+                Cancel
+              </button>
+              <button 
+                type="button" 
+                onClick={confirmReactivate}
+                disabled={isReactivating}
+                className="px-5 py-2.5 bg-[#00C875] text-white rounded-lg text-xs font-bold hover:bg-[#00a863] transition-colors w-1/2 flex justify-center items-center"
+              >
+                {isReactivating ? 'Reactivating...' : 'Reactivate Tenant'}
               </button>
             </div>
           </div>
