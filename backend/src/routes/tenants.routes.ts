@@ -337,3 +337,49 @@ tenantsRoutes.put('/:id', async (req, res) => {
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+
+tenantsRoutes.put('/:id/status', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorPermissions = (req as any).userPermissions || [];
+  
+  const targetTenantId = req.params.id;
+
+  if (!actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  // ONLY SUPER_ADMIN or ALL can suspend a tenant (tenant admins cannot suspend their own tenant)
+  if (actorRole !== 'SUPER_ADMIN' && !actorPermissions.includes('ALL')) {
+    return res.status(403).json({ error: 'Access denied. Only Super Admin can suspend organizations.' });
+  }
+
+  const { status } = req.body;
+  if (!['ACTIVE', 'SUSPENDED'].includes(status)) {
+    return res.status(400).json({ error: 'Invalid status.' });
+  }
+
+  try {
+    const [result]: any = await pool.query(
+      'UPDATE tenants SET status = ? WHERE id = ?',
+      [status, targetTenantId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Tenant not found.' });
+    }
+
+    // Session Revocation on SUSPENDED
+    if (status === 'SUSPENDED') {
+      await pool.query(
+        `DELETE FROM auth_sessions 
+         WHERE userId IN (
+           SELECT userId FROM tenant_users WHERE tenantId = ?
+         )`,
+        [targetTenantId]
+      );
+    }
+
+    res.json({ success: true, status });
+  } catch (err: any) {
+    console.error('Error updating tenant status:', err.message);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});

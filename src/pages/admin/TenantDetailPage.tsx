@@ -128,41 +128,48 @@ export const TenantDetailPage: React.FC = () => {
     return matchesSearch && matchesRole && matchesDept && matchesStatus;
   });
 
-  const toggleTenantStatus = async () => {
-    const newStatus = tenant.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
-    
-    if (newStatus === 'SUSPENDED') {
-      const confirmed = window.confirm(
-        "Are you sure you want to suspend this organization?\n\nThis will immediately revoke all active sessions for its users, preventing them from accessing the application."
-      );
-      if (!confirmed) return;
-    }
+  
+  const [showSuspendModal, setShowSuspendModal] = useState(false);
+  const [suspendError, setSuspendError] = useState<string | null>(null);
 
+  const confirmSuspend = async () => {
     setIsSuspending(true);
+    setSuspendError(null);
     try {
       const token = localStorage.getItem('sfp_auth_token') || '';
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      // Direct API call to update status authoritatively
-      const res = await fetch(`/api/tenants/${tenant.id}`, {
+      const res = await fetch(`/api/tenants/${tenant.id}/status`, {
         method: 'PUT',
         headers,
-        body: JSON.stringify({ status: newStatus })
+        body: JSON.stringify({ status: 'SUSPENDED' })
       });
+      if (!res.ok) throw new Error();
       
-      if (!res.ok) {
-        throw new Error('Failed to update tenant status');
-      }
-      
-      // Update local state ONLY on success
-      const updated = { ...tenant, status: newStatus as any };
-      setTenant(updated);
+      const getRes = await fetch(`/api/tenants/${tenant.id}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const getJson = await getRes.json();
+      setTenant(getJson);
+      setShowSuspendModal(false);
     } catch (err: any) {
-      alert("Error updating tenant status: " + err.message);
+      setSuspendError("Unable to suspend organization. Please try again.");
     } finally {
       setIsSuspending(false);
     }
+  };
+
+  const handleSuspendClick = () => {
+    if (tenant.status === 'ACTIVE') {
+      setShowSuspendModal(true);
+      setSuspendError(null);
+    }
+    // reactivate is not fully supported in policy
+  };
+
+  const toggleTenantStatus = async () => {
+    // Legacy removed. Use handleSuspendClick
   };
 
   const toggleTrialStatus = () => {
@@ -243,17 +250,24 @@ export const TenantDetailPage: React.FC = () => {
             className="px-3.5 py-2 border border-[#E1E1E1] rounded-lg text-xs text-[#1a1c1c] font-bold bg-white hover:bg-[#f3f3f3]">
             Edit Tenant
           </button>
-          <button
-            onClick={toggleTenantStatus}
-            disabled={isSuspending}
-            className={`px-3.5 py-2 rounded-lg text-xs font-bold border transition-colors ${
-              tenant.status === 'ACTIVE'
-                ? 'border-[#ba1a1a]/30 text-[#ba1a1a] hover:bg-[#ba1a1a]/10'
-                : 'border-[#00C875]/30 text-[#008f53] hover:bg-[#00C875]/10'
-            } ${isSuspending ? 'opacity-50 cursor-not-allowed' : ''}`}
-          >
-            {isSuspending ? 'Processing...' : (tenant.status === 'ACTIVE' ? 'Suspend' : 'Activate')}
-          </button>
+          {tenant.status === 'ACTIVE' && (
+              <button
+                onClick={handleSuspendClick}
+                disabled={isSuspending}
+                className="px-3.5 py-2 rounded-lg text-xs font-bold border transition-colors border-[#ba1a1a]/30 text-[#ba1a1a] hover:bg-[#ba1a1a]/10"
+              >
+                Suspend
+              </button>
+            )}
+            {tenant.status === 'SUSPENDED' && (
+              <button
+                disabled
+                className="px-3.5 py-2 rounded-lg text-xs font-bold border border-gray-300 text-gray-400 cursor-not-allowed"
+              >
+                Suspended
+              </button>
+            )}
+
         </div>
       </div>
 
@@ -847,6 +861,67 @@ export const TenantDetailPage: React.FC = () => {
           </div>
         </div>
       )}
-    </div>
+    
+      {/* Suspend Confirmation Modal */}
+      {showSuspendModal && (
+        <div 
+          role="dialog" 
+          aria-modal="true" 
+          aria-labelledby="suspend-modal-title"
+          className="fixed inset-0 bg-[#1a1c1c]/40 backdrop-blur-sm flex items-center justify-center z-[9999] p-4 overflow-y-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isSuspending) {
+              setShowSuspendModal(false);
+            }
+          }}
+        >
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full my-8 flex flex-col p-6">
+            <div className="flex justify-center mb-4 text-[#ba1a1a]">
+              <span className="material-symbols-outlined text-[48px]">warning</span>
+            </div>
+            
+            <h2 id="suspend-modal-title" className="text-xl font-bold text-center text-[#1a1c1c] font-['Hanken_Grotesk'] mb-2">
+              Suspend Organization?
+            </h2>
+            
+            <p className="text-sm text-center text-[#1a1c1c] font-bold mb-4">
+              {tenant?.name} ({tenant?.code})
+            </p>
+            
+            <p className="text-sm text-center text-[#767587] mb-2">
+              Are you sure you want to suspend this organization?
+            </p>
+            <p className="text-xs text-center text-[#767587] mb-6 px-4">
+              Suspending this organization will prevent its users from accessing SalesFlow Pro. All active sessions for users in this organization will be revoked.
+            </p>
+
+            {suspendError && (
+              <div className="mb-4 p-3 bg-[#ba1a1a]/10 text-[#ba1a1a] text-xs rounded-lg text-center font-bold">
+                {suspendError}
+              </div>
+            )}
+
+            <div className="flex gap-3 justify-center">
+              <button 
+                type="button" 
+                onClick={() => setShowSuspendModal(false)} 
+                disabled={isSuspending}
+                className="px-5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs font-bold text-[#464555] hover:bg-[#F8F8F9] transition-colors w-1/2"
+              >
+                Cancel
+              </button>
+              <button 
+                type="button" 
+                onClick={confirmSuspend}
+                disabled={isSuspending}
+                className="px-5 py-2.5 bg-[#ba1a1a] text-white rounded-lg text-xs font-bold hover:bg-[#a01616] transition-colors w-1/2 flex justify-center items-center"
+              >
+                {isSuspending ? 'Suspending...' : 'Suspend Organization'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+</div>
   );
 };
