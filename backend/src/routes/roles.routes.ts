@@ -27,9 +27,9 @@ const getAssignableRoles = async (pool: any, actorRoleId: string, actorTenantId?
     // 2. If actor is Tenant Admin (or has MANAGE_ROLES / MANAGE_USERS capability in tenant), they can assign all TENANT scoped roles in their tenant
     // We get their permissions first
     const [permRows]: any = await pool.query(`
-      SELECT p.name 
-      FROM role_permissions rp
-      JOIN permissions p ON p.id = rp.permissionId
+      SELECT p.code as name 
+          FROM role_permissions rp
+      JOIN permissions p ON p.code = rp.permission
       WHERE rp.roleId = ?
     `, [actorRoleId]);
     
@@ -102,9 +102,9 @@ rolesRoutes.get('/platform', async (req: any, res: any) => {
     // Fetch permissions array for each role
     for (let role of rows) {
       const [perms]: any = await pool.query(`
-        SELECT p.name 
-        FROM role_permissions rp 
-        JOIN permissions p ON p.id = rp.permissionId 
+        SELECT p.code as name 
+          FROM role_permissions rp 
+        JOIN permissions p ON p.code = rp.permission 
         WHERE rp.roleId = ?
       `, [role.id]);
       role.permissions = perms.map((p: any) => p.name);
@@ -135,9 +135,9 @@ rolesRoutes.get('/templates', async (req: any, res: any) => {
     
     for (let role of rows) {
       const [perms]: any = await pool.query(`
-        SELECT p.name 
-        FROM role_permissions rp 
-        JOIN permissions p ON p.id = rp.permissionId 
+        SELECT p.code as name 
+          FROM role_permissions rp 
+        JOIN permissions p ON p.code = rp.permission 
         WHERE rp.roleId = ?
       `, [role.id]);
       role.permissions = perms.map((p: any) => p.name);
