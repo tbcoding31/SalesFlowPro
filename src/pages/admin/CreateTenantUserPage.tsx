@@ -15,7 +15,7 @@ export const CreateTenantUserPage: React.FC = () => {
   const [selectedTenantId, setSelectedTenantId] = useState<string>(paramTenantId || authTenant?.id );
 
   useEffect(() => {
-    fetch('/api/roles/assignable', {
+    fetch(`/api/roles/assignable?tenantId=${selectedTenantId}`, {
       headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('sfp_auth_token') || '') }
     }).then(r => r.json()).then(data => {
       if (Array.isArray(data)) setRoleOptions(data);
@@ -27,7 +27,7 @@ export const CreateTenantUserPage: React.FC = () => {
       if (Array.isArray(data)) setTenants(data);
       else if (data && Array.isArray(data.items)) setTenants(data.items);
     }).catch(e => console.error(e));
-  }, []);
+  }, [selectedTenantId]);
 
   const activeTenant = tenants.find((t) => t.id === selectedTenantId) || authTenant || {
     id: selectedTenantId,
