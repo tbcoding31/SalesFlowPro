@@ -3,6 +3,37 @@ import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { usersApi } from '../../services/usersApi';
 import { Tenant, User } from '../../types';
 
+
+type TrialUiState =
+  | {
+      state: 'NOT_TRIAL';
+      canExpire: false;
+      canReactivate: false;
+      isExpired: false;
+    }
+  | {
+      state: 'TRIAL_ACTIVE' | 'TRIAL_EXPIRED_MANUAL' | 'TRIAL_EXPIRED_NATURAL';
+      canExpire: boolean;
+      canReactivate: boolean;
+      isExpired: boolean;
+    };
+
+function deriveTrialUiState(tenant: any | null, now: Date = new Date()): TrialUiState {
+  if (!tenant || tenant.type !== 'Trial 3 Bulan' || !tenant.createdAt) {
+    return { state: 'NOT_TRIAL', canExpire: false, canReactivate: false, isExpired: false };
+  }
+  const createdAt = new Date(tenant.createdAt);
+  const scheduledEnd = new Date(createdAt);
+  scheduledEnd.setMonth(scheduledEnd.getMonth() + 3);
+  if (now >= scheduledEnd) {
+    return { state: 'TRIAL_EXPIRED_NATURAL', canExpire: false, canReactivate: false, isExpired: true };
+  }
+  if (tenant.trialEndDate && new Date(tenant.trialEndDate) <= now) {
+    return { state: 'TRIAL_EXPIRED_MANUAL', canExpire: false, canReactivate: true, isExpired: true };
+  }
+  return { state: 'TRIAL_ACTIVE', canExpire: true, canReactivate: false, isExpired: false };
+}
+
 export const TenantDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
@@ -212,14 +243,36 @@ export const TenantDetailPage: React.FC = () => {
 
   
 
-  const toggleTrialStatus = () => {
-    const updated: Tenant = {
-      ...tenant,
-      isTrialExpired: !(tenant?.trialEndDate ? new Date(tenant.trialEndDate) < new Date() : false),
-      trialEndDate: !(tenant?.trialEndDate ? new Date(tenant.trialEndDate) < new Date() : false) ? '2026-08-01' : '2026-11-12'
-    };
-    setTenant({ ...updated });
+  const toggleTrialStatus = async () => {
+    try {
+      if (trialUiState.state === 'NOT_TRIAL' || trialUiState.state === 'TRIAL_EXPIRED_NATURAL') return;
+      const action = trialUiState.state === 'TRIAL_ACTIVE' ? 'EXPIRE' : 'REACTIVATE';
+      const token = localStorage.getItem('sfp_auth_token') || '';
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch(`/api/tenants/${tenant?.id}/trial`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ action })
+      });
+      if (res.ok) {
+        const getRes = await fetch(`/api/tenants/${tenant?.id}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const getJson = await getRes.json();
+        setTenant(getJson);
+      } else {
+        const errJson = await res.json();
+        console.error(errJson.error || 'Failed to update trial status.');
+      }
+    } catch (err) {
+      console.error(err);
+    }
   };
+
+
+  const trialUiState = deriveTrialUiState(tenant);
 
   return (
     <div className="space-y-6 font-['Inter',sans-serif] bg-[#f8f9fc] min-h-screen p-2 sm:p-4">
@@ -275,18 +328,18 @@ export const TenantDetailPage: React.FC = () => {
             
               <button
                 onClick={toggleTrialStatus}
-                disabled={getTrialState().state === 'TRIAL_EXPIRED_NATURAL'}
-                title={getTrialState().state === 'TRIAL_EXPIRED_NATURAL' ? 'The original 3-month trial period has already ended.' : 'Set Trial Status'}
+                disabled={trialUiState.state === 'TRIAL_EXPIRED_NATURAL'}
+                title={trialUiState.state === 'TRIAL_EXPIRED_NATURAL' ? 'The original 3-month trial period has already ended.' : 'Set Trial Status'}
                 className={`px-3.5 py-2 rounded-lg text-xs font-bold border transition-colors flex items-center gap-1 ${
-                  getTrialState().state === 'TRIAL_EXPIRED_NATURAL'
+                  trialUiState.state === 'TRIAL_EXPIRED_NATURAL'
                     ? 'border-gray-300 bg-gray-100 text-gray-400 cursor-not-allowed'
-                    : !isTrialActiveState()
+                    : trialUiState.isExpired
                     ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
                     : 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
                 }`}
               >
                 <span className="material-symbols-outlined text-[16px]">timer</span>
-                <span>{!isTrialActiveState() ? 'Set Trial Active' : 'Set Trial Expired'}</span>
+                <span>{trialUiState.isExpired ? 'Set Trial Active' : 'Set Trial Expired'}</span>
               </button>
           )}
           <button 
@@ -1031,3 +1084,5 @@ export const TenantDetailPage: React.FC = () => {
 </div>
   );
 };
+
+
