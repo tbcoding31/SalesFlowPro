@@ -264,7 +264,7 @@ export const CreateTenantUserPage: React.FC = () => {
                 <span>&rsaquo;</span>
               </>
             )}
-            <Link to="/admin/tenant-users" className="hover:text-[#4744e5] transition-colors">
+            <Link to={`/admin/tenants/${activeTenant.id}?tab=users`} className="hover:text-[#4744e5] transition-colors">
               Users
             </Link>
             <span>&rsaquo;</span>
@@ -596,7 +596,7 @@ export const CreateTenantUserPage: React.FC = () => {
         <div className="pt-6 border-t border-[#E1E1E1] flex items-center justify-end gap-3">
           <button
             type="button"
-            onClick={() => navigate(-1)}
+            onClick={() => navigate(`/admin/tenants/${activeTenant.id}?tab=users`)}
             className="px-5 py-2.5 border border-[#E1E1E1] rounded-lg text-[#464555] text-xs font-bold hover:bg-[#F8F8F9] transition-colors"
             disabled={isSubmitting}
           >
@@ -653,7 +653,7 @@ export const CreateTenantUserPage: React.FC = () => {
               
               <div className="flex flex-col gap-2">
                 <button
-                  onClick={() => navigate(`/admin/tenant-users`)}
+                  onClick={() => navigate(`/admin/tenants/${activeTenant.id}?tab=users`)}
                   className="w-full py-2.5 bg-[#4744e5] text-white rounded-lg text-sm font-bold hover:bg-[#2c24ce] transition-colors"
                 >
                   Done
