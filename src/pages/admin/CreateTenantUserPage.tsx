@@ -9,43 +9,70 @@ export const CreateTenantUserPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const { currentTenant: authTenant, currentUser } = useAuth();
 
-  const [roleOptions, setRoleOptions] = useState<{id: string, name: string, scope: string}[]>([]);
-  const [tenants, setTenants] = useState<Tenant[]>([]);
   const paramTenantId = searchParams.get('tenantId');
-  const [selectedTenantId, setSelectedTenantId] = useState<string>(paramTenantId || authTenant?.id );
+  const [selectedTenantId] = useState<string | null>(paramTenantId);
+  const [activeTenant, setActiveTenant] = useState<Tenant | null>(null);
 
-  useEffect(() => {
-    fetch(`/api/roles/assignable?tenantId=${selectedTenantId}`, {
-      headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('sfp_auth_token') || '') }
-    }).then(r => r.json()).then(data => {
-      if (Array.isArray(data)) setRoleOptions(data);
-    }).catch(e => console.error(e));
+  const [isLoadingContext, setIsLoadingContext] = useState(true);
+  const [contextError, setContextError] = useState<string | null>(null);
 
-    fetch('/api/tenants?pageSize=500', {
-      headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('sfp_auth_token') || '') }
-    }).then(r => r.json()).then(data => {
-      if (Array.isArray(data)) setTenants(data);
-      else if (data && Array.isArray(data.items)) setTenants(data.items);
-    }).catch(e => console.error(e));
-  }, [selectedTenantId]);
-
-  const activeTenant = tenants.find((t) => t.id === selectedTenantId) || authTenant || {
-    id: selectedTenantId,
-    code: selectedTenantId,
-    name: 'Selected Tenant',
-    email: 'contact@tenant.co.id',
-  };
-
+  const [roleOptions, setRoleOptions] = useState<{id: string, name: string, scope: string}[]>([]);
   const [teamsList, setTeamsList] = useState<{id: string, name: string}[]>([]);
   const [selectedTeamId, setSelectedTeamId] = useState<string>('');
 
   useEffect(() => {
-    fetch(`/api/teams?tenantId=${selectedTenantId}`, {
-      headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('sfp_auth_token') || '') }
-    }).then(r => r.json()).then(data => {
-      if (Array.isArray(data)) setTeamsList(data);
-    }).catch(e => console.error(e));
+    if (!selectedTenantId) {
+      setContextError('Tenant context is required.');
+      setIsLoadingContext(false);
+      return;
+    }
+
+    const loadContext = async () => {
+      try {
+        const headers = { 'Authorization': 'Bearer ' + (localStorage.getItem('sfp_auth_token') || '') };
+        
+        // Load Tenant
+        const tenantRes = await fetch(`/api/tenants/${selectedTenantId}`, { headers });
+        if (tenantRes.status === 404) {
+          setContextError('Tenant not found.');
+          setIsLoadingContext(false);
+          return;
+        } else if (tenantRes.status === 403 || tenantRes.status === 401) {
+          setContextError('Access denied.');
+          setIsLoadingContext(false);
+          return;
+        } else if (!tenantRes.ok) {
+          setContextError('Failed to load tenant context.');
+          setIsLoadingContext(false);
+          return;
+        }
+        const tenantData = await tenantRes.json();
+        setActiveTenant(tenantData);
+
+        // Load Roles
+        const rolesRes = await fetch(`/api/roles/assignable?tenantId=${selectedTenantId}`, { headers });
+        if (rolesRes.ok) {
+          const rolesData = await rolesRes.json();
+          if (Array.isArray(rolesData)) setRoleOptions(rolesData);
+        }
+
+        // Load Teams
+        const teamsRes = await fetch(`/api/teams?tenantId=${selectedTenantId}`, { headers });
+        if (teamsRes.ok) {
+          const teamsData = await teamsRes.json();
+          if (Array.isArray(teamsData)) setTeamsList(teamsData);
+        }
+
+      } catch (err: any) {
+        setContextError(err.message || 'Network error loading context.');
+      } finally {
+        setIsLoadingContext(false);
+      }
+    };
+
+    loadContext();
   }, [selectedTenantId]);
+
 
   // Form State - User Information
   const [firstName, setFirstName] = useState('');
@@ -110,6 +137,8 @@ export const CreateTenantUserPage: React.FC = () => {
     e.preventDefault();
     setErrorMsg('');
 
+    if (!activeTenant) return;
+
     if (!firstName.trim()) {
       setErrorMsg('First Name is required.');
       return;
@@ -173,11 +202,7 @@ export const CreateTenantUserPage: React.FC = () => {
           createdAt: new Date().toISOString().split('T')[0],
         };
 
-        if (securityMethod === 'TEMP_PASSWORD') {
-          setSuccessModal(createdUser);
-        } else {
-          navigate('/admin/tenant-users');
-        }
+        setSuccessModal(createdUser);
       } else {
         if (res.code === 'USER_ALREADY_MEMBER') {
           setErrorMsg('This user already belongs to this organization.');
@@ -194,6 +219,29 @@ export const CreateTenantUserPage: React.FC = () => {
   };
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  if (isLoadingContext) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <span className="material-symbols-outlined animate-spin text-[#4744e5] text-4xl">autorenew</span>
+      </div>
+    );
+  }
+
+  if (contextError || !activeTenant) {
+    return (
+      <div className="bg-white p-8 rounded-xl border border-[#E1E1E1] text-center max-w-lg mx-auto my-12 shadow-sm">
+        <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mx-auto mb-3">
+          <span className="material-symbols-outlined text-2xl">error</span>
+        </div>
+        <h2 className="text-xl font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">Cannot Add User</h2>
+        <p className="text-sm text-[#767587] mt-2 mb-6">{contextError}</p>
+        <Link to="/admin/tenants" className="inline-block px-5 py-2.5 bg-[#4744e5] text-white text-sm font-bold rounded-lg hover:bg-[#2c24ce] transition-colors">
+          Back to Tenants
+        </Link>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 font-['Inter',sans-serif] pb-12 max-w-[1200px] mx-auto">
@@ -231,30 +279,17 @@ export const CreateTenantUserPage: React.FC = () => {
           </p>
         </div>
 
-        {/* Top Right Tenant Badge Card */}
-        <div className="bg-white border border-[#E1E1E1] rounded-xl p-3 shadow-sm flex items-center gap-3 shrink-0">
-          <div className="w-10 h-10 rounded-lg bg-[#4744e5]/10 border border-[#4744e5]/20 flex items-center justify-center text-[#4744e5]">
-            <span className="material-symbols-outlined text-[22px]">apartment</span>
+        {/* Top Right Tenant Badge Card (Locked) */}
+        <div className="bg-gray-50 border border-[#E1E1E1] rounded-xl p-3 shadow-sm flex items-center gap-3 shrink-0 opacity-80 cursor-not-allowed">
+          <div className="w-10 h-10 rounded-lg bg-gray-200 flex items-center justify-center text-gray-500">
+            <span className="material-symbols-outlined text-[22px]">domain</span>
           </div>
           <div>
-            {currentUser?.role === 'SUPER_ADMIN' && tenants.length > 1 ? (
-              <select
-                value={selectedTenantId}
-                onChange={(e) => setSelectedTenantId(e.target.value)}
-                className="font-bold text-xs text-[#1a1c1c] bg-transparent border-b border-[#E1E1E1] pb-0.5 focus:outline-none focus:border-[#4744e5] cursor-pointer"
-              >
-                {tenants.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name} ({t.code})
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <div className="font-bold text-xs text-[#1a1c1c] font-['Hanken_Grotesk']">
-                {activeTenant.name}
-              </div>
-            )}
-            <div className="text-[11px] font-mono text-[#767587] font-semibold">{activeTenant.code}</div>
+            <div className="flex items-center gap-1">
+              <span className="font-bold text-xs text-gray-700 font-['Hanken_Grotesk']">{activeTenant.name}</span>
+              <span className="material-symbols-outlined text-[14px] text-gray-400">lock</span>
+            </div>
+            <div className="text-[11px] font-mono text-gray-500 font-semibold mt-0.5">Tenant ID: {activeTenant.id}</div>
           </div>
         </div>
       </div>
@@ -306,7 +341,7 @@ export const CreateTenantUserPage: React.FC = () => {
               />
             </div>
 
-            {/* Email Address */}
+            {/* Email */}
             <div>
               <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
                 Email Address <span className="text-[#ba1a1a]">*</span>
@@ -316,7 +351,7 @@ export const CreateTenantUserPage: React.FC = () => {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="jane.doe@example.com"
+                placeholder="jane.doe@company.com"
                 className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs focus:outline-none focus:border-[#4744e5] text-[#1a1c1c] placeholder-[#9494a0]"
               />
             </div>
@@ -335,320 +370,295 @@ export const CreateTenantUserPage: React.FC = () => {
                   setIsUsernameCustom(true);
                 }}
                 placeholder="janedoe"
+                className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs focus:outline-none focus:border-[#4744e5] text-[#1a1c1c] placeholder-[#9494a0] bg-[#F8F8F9]"
+              />
+              <p className="text-[10px] text-[#767587] mt-1">Used for login instead of email if preferred.</p>
+            </div>
+            
+            {/* Phone */}
+            <div>
+              <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
+                Phone Number <span className="text-[#9494a0] font-normal">(Optional)</span>
+              </label>
+              <input
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="+1 (555) 000-0000"
                 className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs focus:outline-none focus:border-[#4744e5] text-[#1a1c1c] placeholder-[#9494a0]"
               />
             </div>
+          </div>
+        </div>
 
-            {/* Phone Number */}
+        <div className="h-px bg-[#E1E1E1] w-full my-6"></div>
+
+        {/* SECTION 2: ACCESS & ROLE */}
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-base font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">Access & Role</h2>
+            <p className="text-xs text-[#767587]">Define system privileges and organizational placement.</p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Role */}
+            <div className="col-span-1 sm:col-span-2 md:col-span-1">
+              <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
+                System Role <span className="text-[#ba1a1a]">*</span>
+              </label>
+              <div className="relative">
+                <select
+                  required
+                  value={role}
+                  onChange={(e) => setRole(e.target.value as UserRole)}
+                  className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs focus:outline-none focus:border-[#4744e5] text-[#1a1c1c] appearance-none cursor-pointer bg-white"
+                >
+                  <option value="" disabled>Select a role...</option>
+                  {roleOptions.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none text-[#767587]">
+                  <span className="material-symbols-outlined text-[18px]">expand_more</span>
+                </div>
+              </div>
+              <p className="text-[10px] text-[#767587] mt-1">
+                Determines permissions and features this user can access within {activeTenant.name}.
+              </p>
+            </div>
+            
+            {/* Team Assignment */}
+            <div className="col-span-1 sm:col-span-2 md:col-span-1">
+              <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
+                Team Assignment <span className="text-[#9494a0] font-normal">(Optional)</span>
+              </label>
+              <div className="relative">
+                <select
+                  value={selectedTeamId}
+                  onChange={(e) => setSelectedTeamId(e.target.value)}
+                  className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs focus:outline-none focus:border-[#4744e5] text-[#1a1c1c] appearance-none cursor-pointer bg-white disabled:bg-gray-50"
+                  disabled={teamsList.length === 0}
+                >
+                  <option value="">No team assignment</option>
+                  {teamsList.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="absolute inset-y-0 right-0 flex items-center px-3 pointer-events-none text-[#767587]">
+                  <span className="material-symbols-outlined text-[18px]">expand_more</span>
+                </div>
+              </div>
+              {teamsList.length === 0 && (
+                <p className="text-[10px] text-amber-600 mt-1">No teams found for this tenant.</p>
+              )}
+            </div>
+
+            {/* Department */}
             <div>
               <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
-                Phone Number
+                Department
               </label>
               <input
                 type="text"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="+62 812..."
+                value={department}
+                onChange={(e) => setDepartment(e.target.value)}
+                placeholder="e.g. Sales"
                 className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs focus:outline-none focus:border-[#4744e5] text-[#1a1c1c] placeholder-[#9494a0]"
               />
             </div>
 
-            {/* Position */}
+            {/* Job Title / Position */}
             <div>
               <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
-                Position
+                Job Title
               </label>
               <input
                 type="text"
                 value={position}
                 onChange={(e) => setPosition(e.target.value)}
-                placeholder="e.g. Regional Sales Lead"
+                placeholder="e.g. Account Executive"
                 className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs focus:outline-none focus:border-[#4744e5] text-[#1a1c1c] placeholder-[#9494a0]"
               />
             </div>
-
-            {/* Assigned Team (Optional) */}
-            <div className="sm:col-span-2">
-              <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
-                Assigned Team (Optional)
-              </label>
-              <select
-                value={selectedTeamId}
-                onChange={(e) => setSelectedTeamId(e.target.value)}
-                className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs bg-white text-[#1a1c1c] focus:outline-none focus:border-[#4744e5]"
-              >
-                <option value="">No Team (Individual / Unassigned)</option>
-                {teamsList.map(t => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
-                ))}
-              </select>
-              <p className="text-[11px] text-[#767587] mt-1">
-                Users with Team data scope will only have visibility over records assigned to members of this team.
-              </p>
-            </div>
           </div>
         </div>
 
-        {/* SECTION 2: ROLE & STATUS */}
-        <div className="border-t border-[#E1E1E1] pt-6 space-y-4">
+        <div className="h-px bg-[#E1E1E1] w-full my-6"></div>
+
+        {/* SECTION 3: CREDENTIALS */}
+        <div className="space-y-4">
           <div>
-            <h2 className="text-base font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">Role & Status</h2>
-            <p className="text-xs text-[#767587]">Determine the user's access level and current system status.</p>
+            <h2 className="text-base font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">Credentials & Security</h2>
+            <p className="text-xs text-[#767587]">How the user will log in to SalesFlow Pro.</p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {/* System Role */}
-            <div>
-              <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
-                System Role <span className="text-[#ba1a1a]">*</span>
+          <div className="p-4 rounded-xl border border-[#E1E1E1] bg-[#F8F8F9] space-y-4">
+            <div className="flex gap-6">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="securityMethod"
+                  value="EMAIL"
+                  checked={securityMethod === 'EMAIL'}
+                  onChange={() => setSecurityMethod('EMAIL')}
+                  className="w-4 h-4 text-[#4744e5] border-[#E1E1E1] focus:ring-[#4744e5]"
+                />
+                <span className="text-xs font-semibold text-[#1a1c1c]">Email Setup Link</span>
               </label>
-              <select
-                required
-                value={role}
-                onChange={(e) => setRole(e.target.value as UserRole)}
-                className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs bg-white text-[#1a1c1c] focus:outline-none focus:border-[#4744e5]"
-              >
-                <option value="" disabled>Select a role...</option>
-                {roleOptions.length === 0 && <option value="" disabled>Loading roles...</option>}
-                {roleOptions.map(r => (
-                  <option key={r.id} value={r.id}>{r.name}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Account Status */}
-            <div>
-              <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-1">
-                Account Status
-              </label>
-              <select
-                value={status}
-                onChange={(e) => setStatus(e.target.value as UserStatus)}
-                className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-lg text-xs bg-white text-[#1a1c1c] focus:outline-none focus:border-[#4744e5]"
-              >
-                <option value="ACTIVE">Active</option>
-                <option value="INVITED">Invited</option>
-                <option value="INACTIVE">Inactive</option>
-                <option value="SUSPENDED">Suspended</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        {/* SECTION 3: SECURITY & ACCESS */}
-        <div className="border-t border-[#E1E1E1] pt-6 space-y-4">
-          <div>
-            <h2 className="text-base font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">Security & Access</h2>
-            <p className="text-xs text-[#767587]">Choose how this user will receive their initial login credentials.</p>
-          </div>
-
-          <div className="space-y-3">
-            {/* Radio Option 1: Send Email Link */}
-            <label
-              className={`flex items-start gap-3 p-4 rounded-xl border transition-all cursor-pointer ${
-                securityMethod === 'EMAIL'
-                  ? 'border-2 border-[#4744e5] bg-[#4744e5]/[0.02] shadow-sm'
-                  : 'border-[#E1E1E1] hover:border-[#b0b0b0] bg-white'
-              }`}
-            >
-              <input
-                type="radio"
-                name="securityMethod"
-                value="EMAIL"
-                checked={securityMethod === 'EMAIL'}
-                onChange={() => setSecurityMethod('EMAIL')}
-                className="mt-1 text-[#4744e5] focus:ring-[#4744e5]"
-              />
-              <div>
-                <div className="font-bold text-xs text-[#1a1c1c] font-['Hanken_Grotesk']">
-                  Send password setup email (Recommended)
-                </div>
-                <div className="text-xs text-[#767587] mt-0.5">
-                  User will receive a secure link to set their own password.
-                </div>
-              </div>
-            </label>
-
-            {/* Radio Option 2: Generate Temporary Password */}
-            <div
-              className={`rounded-xl border transition-all ${
-                securityMethod === 'TEMP_PASSWORD'
-                  ? 'border-2 border-[#4744e5] bg-[#4744e5]/[0.02] shadow-sm p-4'
-                  : 'border-[#E1E1E1] hover:border-[#b0b0b0] bg-white p-4'
-              }`}
-            >
-              <label className="flex items-start gap-3 cursor-pointer">
+              <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="radio"
                   name="securityMethod"
                   value="TEMP_PASSWORD"
                   checked={securityMethod === 'TEMP_PASSWORD'}
                   onChange={() => setSecurityMethod('TEMP_PASSWORD')}
-                  className="mt-1 text-[#4744e5] focus:ring-[#4744e5]"
+                  className="w-4 h-4 text-[#4744e5] border-[#E1E1E1] focus:ring-[#4744e5]"
                 />
-                <div>
-                  <div className="font-bold text-xs text-[#1a1c1c] font-['Hanken_Grotesk']">
-                    Generate temporary password
-                  </div>
-                  <div className="text-xs text-[#767587] mt-0.5">
-                    A temporary password will be generated and shown after creation.
-                  </div>
-                </div>
+                <span className="text-xs font-semibold text-[#1a1c1c]">Temporary Password</span>
               </label>
+            </div>
 
-              {/* DYNAMIC FIELD: Appears directly when "Generate temporary password" is selected */}
-              {securityMethod === 'TEMP_PASSWORD' && (
-                <div className="mt-4 pt-4 border-t border-[#4744e5]/20 pl-7 space-y-3 animate-in fade-in slide-in-from-top-1 duration-150">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                    <label className="block text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">
-                      Temporary Password <span className="text-[#ba1a1a]">*</span>
-                    </label>
-                    <span className="text-[11px] text-[#4744e5] font-medium">
-                      (Password otomatis tergenerate & dapat Anda ubah secara bebas)
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <div className="relative flex-1">
+            {securityMethod === 'EMAIL' ? (
+              <div className="text-xs text-[#767587] pl-6 border-l-2 border-[#4744e5]/30">
+                An invitation email will be sent to <strong>{email || 'the provided address'}</strong> with a secure link to complete their profile and set a password. The link expires in 48 hours.
+              </div>
+            ) : (
+              <div className="space-y-3 pl-6 border-l-2 border-[#4744e5]">
+                <div>
+                  <label className="block text-[11px] font-bold text-[#1a1c1c] uppercase tracking-wider mb-1">
+                    Temporary Password
+                  </label>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1 max-w-[280px]">
                       <input
                         type={showPassword ? 'text' : 'password'}
                         value={tempPassword}
-                        onChange={(e) => setTempPassword(e.target.value)}
-                        placeholder="Masukkan temporary password custom..."
-                        className="w-full pl-3.5 pr-10 py-2.5 border border-[#4744e5] rounded-lg text-xs font-mono font-bold bg-white text-[#1a1c1c] focus:outline-none focus:ring-2 focus:ring-[#4744e5]/30 shadow-inner"
+                        readOnly
+                        className="w-full px-3.5 py-2 border border-[#E1E1E1] rounded-lg text-sm font-mono text-[#1a1c1c] bg-white pr-10"
                       />
                       <button
                         type="button"
                         onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-[#767587] hover:text-[#1a1c1c]"
-                        title={showPassword ? 'Hide Password' : 'Show Password'}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-[#767587] hover:text-[#1a1c1c]"
+                        tabIndex={-1}
                       >
                         <span className="material-symbols-outlined text-[18px]">
                           {showPassword ? 'visibility_off' : 'visibility'}
                         </span>
                       </button>
                     </div>
-
-                    {/* Regenerate Random Password Button */}
+                    
                     <button
                       type="button"
                       onClick={handleRegeneratePassword}
-                      className="px-3 py-2.5 bg-white border border-[#E1E1E1] hover:border-[#4744e5] text-[#464555] hover:text-[#4744e5] rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0"
-                      title="Acak / Auto Generate Password Baru"
+                      className="px-3 py-2 bg-white border border-[#E1E1E1] rounded-lg text-xs font-semibold text-[#464555] hover:bg-gray-50 flex items-center gap-1 transition-colors"
+                      title="Generate new password"
                     >
-                      <span className="material-symbols-outlined text-[16px]">refresh</span>
-                      <span className="hidden sm:inline">Generate Auto</span>
+                      <span className="material-symbols-outlined text-[16px]">autorenew</span>
                     </button>
 
-                    {/* Copy Password Button */}
                     <button
                       type="button"
                       onClick={handleCopyPassword}
-                      className={`px-3 py-2.5 border rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 ${
-                        isCopied
-                          ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
-                          : 'bg-[#4744e5]/10 border-[#4744e5]/30 text-[#4744e5] hover:bg-[#4744e5]/20'
+                      className={`px-3 py-2 border rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors ${
+                        isCopied 
+                          ? 'bg-[#10b981]/10 border-[#10b981]/20 text-[#10b981]' 
+                          : 'bg-white border-[#E1E1E1] text-[#464555] hover:bg-gray-50'
                       }`}
-                      title="Salin Password"
                     >
                       <span className="material-symbols-outlined text-[16px]">
                         {isCopied ? 'check' : 'content_copy'}
                       </span>
-                      <span>{isCopied ? 'Copied!' : 'Copy'}</span>
+                      {isCopied ? 'Copied' : 'Copy'}
                     </button>
                   </div>
-
-                  {/* Require password change checkbox */}
-                  <label className="flex items-center gap-2 pt-1 cursor-pointer text-xs text-[#464555]">
-                    <input
-                      type="checkbox"
-                      checked={requirePassChange}
-                      onChange={(e) => setRequirePassChange(e.target.checked)}
-                      className="rounded border-[#E1E1E1] text-[#4744e5] focus:ring-[#4744e5]"
-                    />
-                    <span>Require user to change password on first login</span>
-                  </label>
                 </div>
-              )}
-            </div>
+                
+                <label className="flex items-center gap-2 cursor-pointer mt-2">
+                  <input
+                    type="checkbox"
+                    checked={requirePassChange}
+                    onChange={(e) => setRequirePassChange(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded border-[#E1E1E1] text-[#4744e5] focus:ring-[#4744e5]"
+                  />
+                  <span className="text-xs text-[#464555]">Require password change on first login</span>
+                </label>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* BOTTOM ACTION BUTTONS */}
+        {/* Form Actions */}
         <div className="pt-6 border-t border-[#E1E1E1] flex items-center justify-end gap-3">
           <button
             type="button"
-            onClick={() => navigate('/admin/tenant-users')}
-            className="px-5 py-2.5 border border-[#E1E1E1] hover:bg-[#f3f3f3] text-[#1a1c1c] font-bold text-xs rounded-xl transition-all font-['Hanken_Grotesk']"
+            onClick={() => navigate(-1)}
+            className="px-5 py-2.5 border border-[#E1E1E1] rounded-lg text-[#464555] text-xs font-bold hover:bg-[#F8F8F9] transition-colors"
+            disabled={isSubmitting}
           >
             Cancel
           </button>
           <button
             type="submit"
-            className="px-6 py-2.5 bg-[#4744e5] hover:bg-[#2c24ce] text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center gap-1.5 font-['Hanken_Grotesk'] active:scale-[0.98]"
+            disabled={isSubmitting}
+            className="px-5 py-2.5 bg-[#4744e5] text-white rounded-lg text-xs font-bold hover:bg-[#2c24ce] transition-colors flex items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
           >
-            <span className="material-symbols-outlined text-[18px]">add</span>
-            <span>Create User</span>
+            {isSubmitting ? (
+              <>
+                <span className="material-symbols-outlined animate-spin text-[18px]">autorenew</span>
+                Creating User...
+              </>
+            ) : (
+              <>
+                <span className="material-symbols-outlined text-[18px]">person_add</span>
+                Create User
+              </>
+            )}
           </button>
         </div>
       </form>
 
-      {/* SUCCESS MODAL FOR TEMPORARY PASSWORD */}
+      {/* Success Modal */}
       {successModal && (
-        <div className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-md rounded-2xl border border-[#E1E1E1] shadow-2xl p-6 text-center space-y-5 animate-in fade-in zoom-in-95 duration-200">
-            <div className="mx-auto w-14 h-14 rounded-full bg-emerald-100 border border-emerald-300 flex items-center justify-center text-emerald-700">
-              <span className="material-symbols-outlined text-3xl">check_circle</span>
-            </div>
-
-            <div className="space-y-1">
-              <h3 className="text-lg font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">
-                User Created Successfully!
+        <div className="fixed inset-0 bg-[#1a1c1c]/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <div className="p-6 text-center">
+              <div className="w-16 h-16 rounded-full bg-[#10b981]/10 flex items-center justify-center mx-auto mb-4">
+                <span className="material-symbols-outlined text-3xl text-[#10b981]">check_circle</span>
+              </div>
+              <h3 className="text-xl font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] mb-2">
+                User Created Successfully
               </h3>
-              <p className="text-xs text-[#767587]">
-                Account for <strong className="text-[#1a1c1c]">{successModal.name}</strong> has been provisioned.
+              <p className="text-sm text-[#767587] mb-6">
+                <strong>{successModal.name}</strong> has been added to {activeTenant.name} as a {successModal.roleName}.
               </p>
-            </div>
-
-            <div className="bg-[#f8f9fc] border border-[#E1E1E1] rounded-xl p-4 text-left text-xs space-y-2">
-              <div className="flex justify-between border-b border-[#E1E1E1] pb-2">
-                <span className="text-[#767587]">Username:</span>
-                <span className="font-mono font-bold text-[#1a1c1c]">{successModal.username}</span>
+              
+              {securityMethod === 'TEMP_PASSWORD' && (
+                <div className="bg-[#F8F8F9] p-4 rounded-xl border border-[#E1E1E1] text-left mb-6">
+                  <p className="text-xs font-semibold text-[#1a1c1c] mb-2 uppercase tracking-wider">Login Credentials</p>
+                  <div className="flex justify-between items-center py-1.5 border-b border-[#E1E1E1]">
+                    <span className="text-xs text-[#767587]">Email:</span>
+                    <span className="text-xs font-mono font-medium text-[#1a1c1c]">{successModal.email}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-1.5">
+                    <span className="text-xs text-[#767587]">Password:</span>
+                    <span className="text-xs font-mono font-medium text-[#1a1c1c]">{tempPassword}</span>
+                  </div>
+                </div>
+              )}
+              
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={() => navigate(`/admin/tenant-users`)}
+                  className="w-full py-2.5 bg-[#4744e5] text-white rounded-lg text-sm font-bold hover:bg-[#2c24ce] transition-colors"
+                >
+                  Done
+                </button>
               </div>
-              <div className="flex justify-between border-b border-[#E1E1E1] pb-2">
-                <span className="text-[#767587]">Email:</span>
-                <span className="font-bold text-[#1a1c1c]">{successModal.email}</span>
-              </div>
-              <div className="flex justify-between border-b border-[#E1E1E1] pb-2">
-                <span className="text-[#767587]">Assigned Role:</span>
-                <span className="font-bold text-[#4744e5]">{successModal.roleName}</span>
-              </div>
-              <div className="flex justify-between items-center pt-1">
-                <span className="text-[#767587] font-bold">Temporary Password:</span>
-                <span className="font-mono font-bold text-amber-900 bg-amber-100 px-2.5 py-1 rounded border border-amber-300 text-xs">
-                  {tempPassword}
-                </span>
-              </div>
-            </div>
-
-            <p className="text-[11px] text-[#767587] italic">
-              Please share these credentials securely with the user.
-            </p>
-
-            <div className="flex items-center gap-2 pt-2">
-              <button
-                onClick={handleCopyPassword}
-                className="flex-1 py-2.5 bg-white border border-[#E1E1E1] hover:border-[#4744e5] text-[#1a1c1c] font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-1.5 font-['Hanken_Grotesk']"
-              >
-                <span className="material-symbols-outlined text-[16px]">content_copy</span>
-                <span>{isCopied ? 'Copied!' : 'Copy Password'}</span>
-              </button>
-              <button
-                onClick={() => navigate('/admin/tenant-users')}
-                className="flex-1 py-2.5 bg-[#4744e5] hover:bg-[#2c24ce] text-white font-bold text-xs rounded-xl shadow-md transition-all font-['Hanken_Grotesk']"
-              >
-                Done
-              </button>
             </div>
           </div>
         </div>
