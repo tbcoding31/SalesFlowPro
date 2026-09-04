@@ -14,6 +14,24 @@ export const AuditLogsPage: React.FC = () => {
   const [totalItems, setTotalItems] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
 
+  
+  const formatDateTime = (iso: string) => {
+    if (!iso) return '-';
+    try {
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return iso;
+      let formatted = new Intl.DateTimeFormat('en-GB', {
+        day: '2-digit', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+        timeZone: 'Asia/Jakarta'
+      }).format(d);
+      formatted = formatted.replace('Sept', 'Sep'); 
+      return formatted + ' WIB';
+    } catch {
+      return iso;
+    }
+  };
+
   const loadData = async (page = currentPage) => {
     setIsLoading(true);
     try {
@@ -83,8 +101,8 @@ export const AuditLogsPage: React.FC = () => {
                       <span className="font-semibold text-[#1a1c1c]">{log.action || log.title}</span>
                     </td>
                     <td className="px-6 py-4 text-[#464555]">{log.userId || log.user || 'System'}</td>
-                    <td className="px-6 py-4 text-[#464555] font-mono text-xs">{log.ipAddress || log.ip || '-'}</td>
-                    <td className="px-6 py-4 text-[#767587] text-xs">{log.createdAt || log.date || '-'}</td>
+                    <td className="px-6 py-4 text-[#464555] font-mono text-xs">{log.ipAddress || '�'}</td>
+                    <td className="px-6 py-4 text-[#767587] text-xs">{formatDateTime(log.timestamp || log.createdAt)}</td>
                   </tr>
                 ))
               )}

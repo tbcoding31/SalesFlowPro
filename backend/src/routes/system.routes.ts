@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { pool } from '../db';
+import { logAudit } from '../utils/audit';
 
 export const systemRoutes = Router();
 
@@ -26,7 +27,7 @@ systemRoutes.get('/audit-logs', async (req: any, res: any) => {
     }
 
     const [rows]: any = await pool.query(`
-      SELECT a.id, a.tenantId, a.userId, a.action, a.module, a.entity, a.entityId, a.description, a.ipAddress, a.timestamp,
+      SELECT a.id, a.tenantId, a.userId, a.action, a.module, a.entity, a.entityId, a.description, a.ipAddress, a.userAgent, a.timestamp,
         u.name as userName, u.email as userEmail, t.name as tenantName
       FROM audit_logs a
       LEFT JOIN users u ON a.userId = u.id
@@ -124,10 +125,7 @@ systemRoutes.put('/settings', async (req: any, res: any) => {
     }
     
     // Create Audit Log
-    await pool.query(
-      `INSERT INTO audit_logs (id, tenantId, userId, action, module, entity, description, timestamp) VALUES (?, NULL, ?, ?, ?, ?, ?, NOW())`,
-      [`LOG-${Date.now()}`, req.userId, 'UPDATE', 'System Settings', 'System Settings', `Updated platform settings`]
-    );
+    await logAudit(null, req.userId, 'UPDATE', 'System Settings', null, 'Updated platform settings', req.ip, req.get('User-Agent'), 'SYSTEM');
 
     res.json({ success: true });
   } catch (err: any) {

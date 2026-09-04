@@ -325,7 +325,7 @@ tenantsRoutes.put('/:id', async (req, res) => {
       'UPDATE tenants SET name = ?, email = ?, phone = ?, industry = ?, region = ?, address = ?, description = ? WHERE id = ?',
       [name, email || null, phone || null, industry || null, region || null, address || null, description || null, targetTenantId]
     );
-      await logAudit(targetTenantId, (req as any).userId || 'SYSTEM', 'TENANT_UPDATED', 'Tenant', targetTenantId, 'Tenant details updated.', req.ip);
+      await logAudit(targetTenantId, (req as any).userId || 'SYSTEM', 'TENANT_UPDATED', 'Tenant', targetTenantId, 'Tenant details updated.', req.ip, req.get('User-Agent'));
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: 'Tenant not found.' });
@@ -378,7 +378,7 @@ tenantsRoutes.put('/:id/status', async (req, res) => {
     }
 
       const action = status === 'SUSPENDED' ? 'TENANT_SUSPENDED' : 'TENANT_REACTIVATED';
-      await logAudit(targetTenantId, (req as any).userId || 'SYSTEM', action, 'Tenant', targetTenantId, `Tenant status changed to ${status}.`, req.ip);
+      await logAudit(targetTenantId, (req as any).userId || 'SYSTEM', action, 'Tenant', targetTenantId, `Tenant status changed to ${status}.`, req.ip, req.get('User-Agent'));
 
     res.json({ success: true, status });
   } catch (err: any) {
@@ -424,7 +424,7 @@ tenantsRoutes.put('/:id/trial', async (req, res) => {
           [targetTenantId]
         );
         
-        await logAudit(targetTenantId, (req as any).userId || 'SYSTEM', 'TRIAL_MANUALLY_EXPIRED', 'Tenant', targetTenantId, 'Tenant trial manually expired.', req.ip);
+        await logAudit(targetTenantId, (req as any).userId || 'SYSTEM', 'TRIAL_MANUALLY_EXPIRED', 'Tenant', targetTenantId, 'Tenant trial manually expired.', req.ip, req.get('User-Agent'));
         
         return res.json({ success: true, trialEndDate });
       } else if (action === 'REACTIVATE') {
@@ -435,7 +435,7 @@ tenantsRoutes.put('/:id/trial', async (req, res) => {
         const trialEndDate = scheduledTrialEndDate.toISOString().slice(0, 19).replace('T', ' ');
         await pool.query('UPDATE tenants SET trialEndDate = ? WHERE id = ?', [trialEndDate, targetTenantId]);
         
-        await logAudit(targetTenantId, (req as any).userId || 'SYSTEM', 'TRIAL_REACTIVATED', 'Tenant', targetTenantId, 'Tenant trial manually reactivated.', req.ip);
+        await logAudit(targetTenantId, (req as any).userId || 'SYSTEM', 'TRIAL_REACTIVATED', 'Tenant', targetTenantId, 'Tenant trial manually reactivated.', req.ip, req.get('User-Agent'));
         
         return res.json({ success: true, trialEndDate });
       } else {

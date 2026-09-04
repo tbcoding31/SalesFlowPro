@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { pool } from '../db';
+import { logAudit } from '../utils/audit';
 import * as bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 
@@ -160,12 +161,11 @@ onboardingRoutes.post('/tenant', async (req, res) => {
       }
 
       // Audit Log (without credentials)
-    await connection.query(
-      `INSERT INTO audit_logs (id, tenantId, userId, action, entity, entityId, description, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
-      [`LOG-${Date.now()}`, null, (req as any).userId, 'CREATE', 'Tenant', tenantId, `Created tenant ${tenantId} via onboarding`]
-    );
+    
 
     await connection.commit();
+
+    await logAudit(null, (req as any).userId, 'CREATE', 'Tenant', tenantId, `Created tenant ${tenantId} via onboarding`, req.ip, req.get('User-Agent'), 'ONBOARDING');
     
     res.status(201).json({
       success: true,

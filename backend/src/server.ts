@@ -31,6 +31,10 @@ import { tenantMiddleware } from './middleware/tenant';
 
 export const app = express();
 
+// Trust the immediate reverse proxy for correct client IP
+app.set('trust proxy', 1);
+
+
 app.use(helmet());
 app.use(cors());
 app.use(express.json());

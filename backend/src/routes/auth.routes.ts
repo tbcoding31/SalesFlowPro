@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { pool } from '../db';
 import { resolveUserAccessContext } from '../auth-context';
 import { env } from '../env';
+import { logAudit } from '../utils/audit';
 
 export const authRoutes = Router();
 
@@ -24,6 +25,7 @@ authRoutes.post('/login', async (req: any, res: any) => {
     const user = userRows[0];
     const isMatch = await bcrypt.compare(password, user.passwordHash);
     if (!isMatch) {
+      await logAudit(null, user.id, 'LOGIN_FAILED', 'User', user.id, 'Invalid credentials provided', req.ip, req.get('User-Agent'), 'AUTH');
       return res.status(401).json({ success: false, message: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
     }
 
