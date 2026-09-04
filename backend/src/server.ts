@@ -14,6 +14,8 @@ import { timelineRoutes } from './routes/timeline.routes';
 import { syncRoutes } from './routes/sync.routes';
 import { genericRoutes } from './routes/generic.routes';
 import { masterDataRoutes } from './routes/master_data.routes';
+import { systemRoutes } from './routes/system.routes';
+import { notificationsRoutes } from './routes/notifications.routes';
 import { salesRoutes } from './routes/sales.routes';
 import { managementRoutes } from './routes/management.routes';
 import { tenantsRoutes } from './routes/tenants.routes';
@@ -55,6 +57,8 @@ app.use('/api/tenant/users', authMiddleware, tenantUsersRoutes);
 app.use('/api/tenants', authMiddleware, tenantsRoutes);
 app.use('/api', authMiddleware, genericRoutes);
 app.use('/api/master-data', authMiddleware, masterDataRoutes);
+app.use('/api/system', authMiddleware, systemRoutes);
+app.use('/api/notifications', authMiddleware, notificationsRoutes);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Endpoint Not Found', path: req.originalUrl }));
 

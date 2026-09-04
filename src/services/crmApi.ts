@@ -251,15 +251,34 @@ fetchCustomers: async (params?: QueryPaginationParams): Promise<PaginatedRespons
       if (params.page) q.set('page', String(params.page));
       if (params.pageSize) q.set('pageSize', String(params.pageSize));
       if (params.search) q.set('search', params.search.trim());
-      if (params.sortBy) q.set('sortBy', params.sortBy);
-      if (params.sortOrder) q.set('sortOrder', params.sortOrder);
-      if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
-      if (params.customerId && params.customerId !== 'ALL') q.set('customerId', params.customerId);
+      if (params.tenantId && params.tenantId !== 'ALL' && params.tenantId !== 'null') q.set('tenantId', params.tenantId);
     }
-    const url = `${API_BASE}/audit_logs${q.toString() ? '?' + q.toString() : ''}`;
-    const res = await fetch(url, { headers: getAuthHeaders() });
+    const token = localStorage.getItem('sfp_auth_token');
+    
+    // Check if super admin
+    let userRole = '';
+    try {
+      if (token) {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        userRole = payload.role;
+      }
+    } catch(e) {}
+    
+    const url = userRole === 'SUPER_ADMIN' 
+      ? `${API_BASE}/system/audit-logs${q.toString() ? '?' + q.toString() : ''}`
+      : `${API_BASE}/audit_logs${q.toString() ? '?' + q.toString() : ''}`; // Fallback for tenant admins if needed, though they don't have access to platform logs
+
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch audit logs`);
-    return await res.json();
+    
+    // Convert to PaginatedResponse format if the API returns items/totalCount
+    const data = await res.json();
+    if (data.items) {
+      return {
+        data: data.items, pagination: { totalItems: data.totalCount || data.total, totalPages: data.totalPages }
+      } as any; // Cast because 'data' doesn't exactly match 'Activity' model everywhere, but it's close enough for the UI
+    }
+    return data;
   },
 
   // Generic single record fetcher

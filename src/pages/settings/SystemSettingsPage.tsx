@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 const Toggle: React.FC<{ enabled: boolean; onChange: () => void }> = ({ enabled, onChange }) => (
   <button
@@ -60,13 +60,60 @@ export const SystemSettingsPage: React.FC = () => {
     logLogins: true
   });
 
-  const handleSave = () => {
+  
+  useEffect(() => {
+    fetch('/api/system/settings', { headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` } })
+      .then(res => res.json())
+      .then(data => {
+        if (data.appName) setGeneralSettings(prev => ({...prev, appName: data.appName, timezone: data.timezone || prev.timezone, dateFormat: data.dateFormat || prev.dateFormat, currency: data.currency || prev.currency}));
+        if (data.supportEmail) setApplicationSettings(prev => ({...prev, supportEmail: data.supportEmail, language: data.language || prev.language, maintenanceMode: !!data.maintenanceMode}));
+        if (data.defaultTaskPriority) setSalesSettings(prev => ({...prev, defaultTaskPriority: data.defaultTaskPriority, defaultVisitDuration: String(data.defaultVisitDuration || prev.defaultVisitDuration), projectAutoClose: !!data.projectAutoClose}));
+        if (data.emailAlerts !== undefined) setNotificationSettings(prev => ({...prev, emailAlerts: !!data.emailAlerts, pushNotifications: !!data.pushNotifications, dailyDigest: !!data.dailyDigest}));
+        if (data.sessionTimeout) setSecuritySettings(prev => ({...prev, sessionTimeout: String(data.sessionTimeout), requireUppercase: !!data.requireUppercase, requireNumbers: !!data.requireNumbers, requireSpecialChars: !!data.requireSpecialChars, mfaEnabled: !!data.mfaEnabled}));
+        if (data.retentionDays) setAuditSettings(prev => ({...prev, retentionDays: String(data.retentionDays), logVisits: !!data.logVisits, logProjects: !!data.logProjects, logLogins: !!data.logLogins}));
+      }).catch(console.error);
+  }, []);
+
+  const handleSave = async () => {
     setIsSaving(true);
-    setTimeout(() => {
+    try {
+      const payload = {
+        appName: generalSettings.appName,
+        timezone: generalSettings.timezone,
+        dateFormat: generalSettings.dateFormat,
+        currency: generalSettings.currency,
+        supportEmail: applicationSettings.supportEmail,
+        language: applicationSettings.language,
+        maintenanceMode: applicationSettings.maintenanceMode,
+        defaultTaskPriority: salesSettings.defaultTaskPriority,
+        defaultVisitDuration: Number(salesSettings.defaultVisitDuration),
+        projectAutoClose: salesSettings.projectAutoClose,
+        emailAlerts: notificationSettings.emailAlerts,
+        pushNotifications: notificationSettings.pushNotifications,
+        dailyDigest: notificationSettings.dailyDigest,
+        sessionTimeout: Number(securitySettings.sessionTimeout),
+        requireUppercase: securitySettings.requireUppercase,
+        requireNumbers: securitySettings.requireNumbers,
+        requireSpecialChars: securitySettings.requireSpecialChars,
+        mfaEnabled: securitySettings.mfaEnabled,
+        retentionDays: Number(auditSettings.retentionDays),
+        logVisits: auditSettings.logVisits,
+        logProjects: auditSettings.logProjects,
+        logLogins: auditSettings.logLogins
+      };
+
+      await fetch('/api/system/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` },
+        body: JSON.stringify(payload)
+      });
+    } catch(e) {
+      console.error(e);
+    } finally {
       setIsSaving(false);
-      // alert('Settings saved successfully!');
-    }, 800);
+    }
   };
+
 
   const tabs = [
     { id: 'general', name: 'General', icon: 'settings' },
