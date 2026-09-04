@@ -60,3 +60,43 @@ export const validateTargetTenant = async (req: any, res: any, pool: any, actorT
   
   return targetTenant as string;
 };
+
+export async function evaluateTenantAccess(pool: any, tenantId: string): Promise<{ allowed: boolean, reason: string, trialEndDate?: string }> {
+  const [tenantRows]: any = await pool.query('SELECT status, type, trialEndDate FROM tenants WHERE id = ?', [tenantId]);
+  
+  if (tenantRows.length === 0) {
+    return { allowed: false, reason: 'TENANT_NOT_FOUND' };
+  }
+
+  const tenant = tenantRows[0];
+
+  if (tenant.status !== 'ACTIVE') {
+    return { allowed: false, reason: 'TENANT_SUSPENDED' };
+  }
+
+  if (tenant.type && tenant.type.toUpperCase().includes('TRIAL') && tenant.trialEndDate) {
+    const trialEnd = new Date(tenant.trialEndDate);
+    const now = new Date();
+    
+    // Check if trial has expired based on server time
+    if (now > trialEnd) {
+      return { 
+        allowed: false, 
+        reason: 'TRIAL_EXPIRED',
+        trialEndDate: tenant.trialEndDate
+      };
+    }
+  }
+
+  return { allowed: true, reason: 'ACTIVE' };
+}
+
+export async function revokeTenantSessions(pool: any, tenantId: string): Promise<void> {
+  await pool.query(
+    `DELETE FROM auth_sessions 
+     WHERE userId IN (
+       SELECT userId FROM tenant_users WHERE tenantId = ?
+     )`,
+    [tenantId]
+  );
+}

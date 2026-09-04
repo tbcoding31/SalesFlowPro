@@ -1,3 +1,4 @@
+import { evaluateTenantAccess, revokeTenantSessions } from '../utils/scope';
 import { Request, Response, NextFunction } from 'express';
 import { pool } from '../db';
 import { resolveUserAccessContext } from '../auth-context';
@@ -39,10 +40,17 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
         return res.status(403).json({ error: 'Tenant membership is suspended or inactive', code: 'MEMBERSHIP_SUSPENDED' });
       }
 
-      const [tenantRows]: any = await pool.query('SELECT status FROM tenants WHERE id = ?', [userContext.tenantId]);
-      if (tenantRows.length === 0 || tenantRows[0].status !== 'ACTIVE') {
+      
+      const entitlement = await evaluateTenantAccess(pool, userContext.tenantId);
+      if (!entitlement.allowed) {
+        if (entitlement.reason === 'TRIAL_EXPIRED') {
+          // Idempotent session revocation across the tenant
+          await revokeTenantSessions(pool, userContext.tenantId);
+          return res.status(403).json({ error: 'Tenant trial subscription has expired.', code: 'TRIAL_EXPIRED' });
+        }
         return res.status(403).json({ error: 'Tenant is suspended or inactive', code: 'TENANT_SUSPENDED' });
       }
+
     } else if (!userContext.isPlatformUser) {
         return res.status(403).json({ error: 'Invalid platform principal', code: 'INVALID_PLATFORM_PRINCIPAL' });
     }

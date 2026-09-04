@@ -215,8 +215,8 @@ export const TenantDetailPage: React.FC = () => {
   const toggleTrialStatus = () => {
     const updated: Tenant = {
       ...tenant,
-      isTrialExpired: !tenant.isTrialExpired,
-      trialEndDate: !tenant.isTrialExpired ? '2026-08-01' : '2026-11-12'
+      isTrialExpired: !(tenant?.trialEndDate ? new Date(tenant.trialEndDate) < new Date() : false),
+      trialEndDate: !(tenant?.trialEndDate ? new Date(tenant.trialEndDate) < new Date() : false) ? '2026-08-01' : '2026-11-12'
     };
     setTenant({ ...updated });
   };
@@ -245,11 +245,11 @@ export const TenantDetailPage: React.FC = () => {
             {tenant.type === 'Trial 3 Bulan' && (
               <span
                 className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 ${
-                  tenant.isTrialExpired ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                  (tenant?.trialEndDate ? new Date(tenant.trialEndDate) < new Date() : false) ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                 }`}
               >
                 <span className="material-symbols-outlined text-[12px]">timer</span>
-                <span>{tenant.isTrialExpired ? 'Trial Expired' : 'Trial Active'}</span>
+                <span>{(tenant?.trialEndDate ? new Date(tenant.trialEndDate) < new Date() : false) ? 'Trial Expired' : 'Trial Active'}</span>
               </span>
             )}
             <span
@@ -275,14 +275,14 @@ export const TenantDetailPage: React.FC = () => {
             <button
               onClick={toggleTrialStatus}
               className={`px-3.5 py-2 rounded-lg text-xs font-bold border transition-colors flex items-center gap-1 ${
-                tenant.isTrialExpired
+                (tenant?.trialEndDate ? new Date(tenant.trialEndDate) < new Date() : false)
                   ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
                   : 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
               }`}
               title="Set Trial Status"
             >
               <span className="material-symbols-outlined text-[16px]">timer</span>
-              <span>{tenant.isTrialExpired ? 'Set Trial Active' : 'Set Trial Expired'}</span>
+              <span>{(tenant?.trialEndDate ? new Date(tenant.trialEndDate) < new Date() : false) ? 'Set Trial Active' : 'Set Trial Expired'}</span>
             </button>
           )}
           <button 

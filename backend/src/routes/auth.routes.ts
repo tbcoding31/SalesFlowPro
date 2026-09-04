@@ -1,3 +1,4 @@
+import { evaluateTenantAccess, revokeTenantSessions } from '../utils/scope';
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
@@ -45,10 +46,20 @@ authRoutes.post('/login', async (req: any, res: any) => {
         return res.status(403).json({ success: false, message: 'Your membership in this organization is suspended or inactive', code: 'MEMBERSHIP_SUSPENDED' });
       }
 
-      const [tenantRows]: any = await pool.query('SELECT status FROM tenants WHERE id = ?', [userContext.tenantId]);
-      if (tenantRows.length === 0 || tenantRows[0].status !== 'ACTIVE') {
-        return res.status(403).json({ success: false, message: 'Account organization is suspended or inactive', code: 'TENANT_SUSPENDED' });
-      }
+      
+        const entitlement = await evaluateTenantAccess(pool, userContext.tenantId);
+        if (!entitlement.allowed) {
+          if (entitlement.reason === 'TRIAL_EXPIRED') {
+            return res.status(403).json({ 
+              success: false, 
+              message: 'Trial subscription has expired.', 
+              code: 'TRIAL_EXPIRED',
+              tenant: { trialEndDate: entitlement.trialEndDate }
+            });
+          }
+          return res.status(403).json({ success: false, message: 'Account organization is suspended or inactive', code: 'TENANT_SUSPENDED' });
+        }
+
     } else if (!userContext.isPlatformUser) {
         return res.status(403).json({ success: false, message: 'Invalid platform principal', code: 'INVALID_PLATFORM_PRINCIPAL' });
     }
@@ -119,10 +130,16 @@ authRoutes.get('/me', async (req: any, res: any) => {
       if (userContext.tenantUserStatus !== 'ACTIVE') {
         return res.status(403).json({ error: 'Membership suspended or inactive', code: 'MEMBERSHIP_SUSPENDED' });
       }
-      const [tenantRows]: any = await pool.query('SELECT status FROM tenants WHERE id = ?', [userContext.tenantId]);
-      if (tenantRows.length === 0 || tenantRows[0].status !== 'ACTIVE') {
-        return res.status(403).json({ error: 'Tenant suspended or inactive', code: 'TENANT_SUSPENDED' });
-      }
+      
+        const entitlement = await evaluateTenantAccess(pool, userContext.tenantId);
+        if (!entitlement.allowed) {
+          if (entitlement.reason === 'TRIAL_EXPIRED') {
+            await revokeTenantSessions(pool, userContext.tenantId);
+            return res.status(403).json({ error: 'Tenant trial subscription has expired.', code: 'TRIAL_EXPIRED' });
+          }
+          return res.status(403).json({ error: 'Tenant suspended or inactive', code: 'TENANT_SUSPENDED' });
+        }
+
     } else if (!userContext.isPlatformUser) {
         return res.status(403).json({ error: 'Invalid platform principal', code: 'INVALID_PLATFORM_PRINCIPAL' });
     }

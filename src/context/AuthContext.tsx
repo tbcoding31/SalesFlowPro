@@ -144,7 +144,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try {
           const clone = response.clone();
           const body = await clone.json();
-          if (body?.code === 'TENANT_SUSPENDED') {
+          if (body?.code === 'TENANT_SUSPENDED' || body?.code === 'TRIAL_EXPIRED') {
             isHandlingSuspension = true;
             sessionChannel?.postMessage({ type: 'SESSION_TERMINATED', reason: 'suspended' });
             localStorage.removeItem(AUTH_USER_KEY);
@@ -153,15 +153,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setCurrentTenant(null);
             setToken(null);
             const modal = document.createElement('div');
+            
+            const isTrial = body?.code === 'TRIAL_EXPIRED';
+            const title = isTrial ? 'Trial Period Has Expired' : 'Account Access Suspended';
+            const msg = isTrial 
+              ? 'The trial period for this organization has ended. Access to SalesFlow Pro is temporarily unavailable.<br/><br/>Please contact your administrator or SalesFlow Pro support to activate a subscription.'
+              : "Your organization's tenant has been suspended. You have been logged out and can no longer access the application.";
+            
+            const btnText = isTrial ? 'Logout' : 'Back to Login';
+
             modal.innerHTML = `
               <div style="position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:999999;">
                 <div style="background:white;padding:32px;border-radius:12px;max-width:400px;text-align:center;font-family:sans-serif;box-shadow:0 10px 25px rgba(0,0,0,0.2);">
                   <div style="width:48px;height:48px;background:#fee2e2;color:#ef4444;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
                   </div>
-                  <h2 style="margin:0 0 12px;font-size:20px;color:#111827;">Account Access Suspended</h2>
-                  <p style="margin:0 0 24px;font-size:14px;color:#4b5563;line-height:1.5;">Your organization's tenant has been suspended. You have been logged out and can no longer access the application.</p>
-                  <button id="suspend-ok-btn" style="background:#4744e5;color:white;border:none;padding:10px 24px;border-radius:6px;font-weight:bold;cursor:pointer;width:100%;">Back to Login</button>
+                  <h2 style="margin:0 0 12px;font-size:20px;color:#111827;">${title}</h2>
+                  <p style="margin:0 0 24px;font-size:14px;color:#4b5563;line-height:1.5;">${msg}</p>
+                  <button id="suspend-ok-btn" style="background:#4744e5;color:white;border:none;padding:10px 24px;border-radius:6px;font-weight:bold;cursor:pointer;width:100%;">${btnText}</button>
                 </div>
               </div>
             `;

@@ -383,3 +383,28 @@ tenantsRoutes.put('/:id/status', async (req, res) => {
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+
+tenantsRoutes.put('/:id/trial', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorPermissions = (req as any).userPermissions || [];
+  
+  if (actorRole !== 'SUPER_ADMIN' && !actorPermissions.includes('ALL')) {
+    return res.status(403).json({ error: 'Access denied.' });
+  }
+
+  const targetTenantId = req.params.id;
+  const { isTrialExpired } = req.body;
+
+  try {
+    const trialEndDate = isTrialExpired ? '2020-01-01 00:00:00' : '2030-01-01 00:00:00';
+    
+    await pool.query(
+      'UPDATE tenants SET trialEndDate = ? WHERE id = ?',
+      [trialEndDate, targetTenantId]
+    );
+
+    res.json({ success: true, trialEndDate });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
