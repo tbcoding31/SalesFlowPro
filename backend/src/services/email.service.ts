@@ -164,10 +164,14 @@ export function createSmtpTransporter(config: SmtpConfig, secrets: SmtpSecrets):
     ? Boolean(config.rejectUnauthorized)
     : (config.ignoreTls === true ? false : true);
 
+  // Extract domain for HELO/EHLO hostname alignment
+  const heloDomain = username.includes('@') ? username.split('@')[1] : (host || 'localhost');
+
   return nodemailer.createTransport({
     host,
     port,
     secure,
+    name: heloDomain,
     auth: username ? {
       user: username,
       pass: password
@@ -380,43 +384,23 @@ export async function sendEmail(options: SendEmailOptions): Promise<SendEmailRes
   const transporter = createSmtpTransporter(config, secrets);
 
   const authUser = (secrets.username || config.username || '').trim();
-  const rawSender = (options.from || config.fromEmail || authUser).trim();
+  // Ensure the sender address is aligned with the authenticated SMTP account
+  const senderEmail = (options.from || config.fromEmail || authUser).trim();
   const formatFrom = (addr: string) => (addr.includes('<') ? addr : `"SalesFlow Pro" <${addr}>`);
+  const from = formatFrom(senderEmail);
 
-  let from = formatFrom(rawSender);
-
-  const executeSend = async (fromAddress: string) => {
-    return await transporter.sendMail({
-      from: fromAddress,
-      to: options.to,
-      subject: options.subject,
-      text: options.text,
-      html: options.html,
-      replyTo: options.replyTo || fromAddress
-    });
-  };
-
-  let info: any;
-  try {
-    info = await executeSend(from);
-  } catch (err: any) {
-    // If sender address was rejected or sender verification failed, and rawSender !== authUser, retry with authUser
-    if (
-      authUser &&
-      rawSender !== authUser &&
-      (err.message?.includes('Sender verify failed') ||
-       err.message?.includes('Verification failed for') ||
-       err.message?.includes('Sender address rejected') ||
-       err.responseCode === 550 ||
-       err.responseCode === 553)
-    ) {
-      console.warn(`[sendEmail] Sender address <${rawSender}> failed provider verification. Retrying with authenticated account <${authUser}>...`);
-      from = formatFrom(authUser);
-      info = await executeSend(from);
-    } else {
-      throw err;
+  const info: any = await transporter.sendMail({
+    from,
+    to: options.to,
+    subject: options.subject,
+    text: options.text,
+    html: options.html,
+    replyTo: options.replyTo || from,
+    envelope: {
+      from: authUser || senderEmail,
+      to: Array.isArray(options.to) ? options.to : [options.to]
     }
-  }
+  });
 
   if (Array.isArray(info.rejected) && info.rejected.length > 0 && (!info.accepted || info.accepted.length === 0)) {
     const error: any = new Error(`All recipients were rejected by SMTP provider: ${info.rejected.join(', ')}`);

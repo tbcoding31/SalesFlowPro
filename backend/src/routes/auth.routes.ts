@@ -362,7 +362,7 @@ authRoutes.post('/forgot-password', async (req: any, res: any) => {
         'PASSWORD_RESET_EMAIL_SENT',
         'User',
         user.id,
-        `Password reset email sent via SMTP (id: ${emailResult.messageId || 'unknown'})`,
+        `Password reset email sent via SMTP (id: ${emailResult.messageId || 'unknown'}, provider: ${emailResult.response || '250 OK'})`,
         clientIp,
         req.get('User-Agent'),
         'AUTH'
