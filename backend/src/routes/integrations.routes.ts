@@ -147,10 +147,10 @@ integrationsRoutes.post('/:provider/test', async (req: any, res: any) => {
   const { provider } = req.params;
   try {
     const [rows]: any = await pool.query('SELECT * FROM integration_configs WHERE provider = ?', [provider]);
-    if (!rows.length) return res.status(404).json({ error: 'Integration not configured' });
+    const storedRow = rows.length ? rows[0] : null;
 
     if (provider === 'smtp') {
-      const result = await verifySmtpConnection();
+      const result = await verifySmtpConnection(req.body, storedRow);
 
       if (result.success) {
         await logAudit(null, req.userId, 'SMTP_CONNECTION_TEST_SUCCESS', 'Integration', 'smtp', 'SMTP connection verified successfully', req.ip, req.get('User-Agent'), 'SYSTEM');
@@ -169,6 +169,8 @@ integrationsRoutes.post('/:provider/test', async (req: any, res: any) => {
       }
     }
     
+    if (!storedRow) return res.status(404).json({ error: 'Integration not configured' });
+
     // For other providers not yet implemented
     await pool.query(
       'UPDATE integration_configs SET lastTestedAt = NOW(), lastErrorCode = ? WHERE provider = ?',

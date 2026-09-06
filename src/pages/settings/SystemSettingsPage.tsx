@@ -22,6 +22,8 @@ export const SystemSettingsPage: React.FC = () => {
   const [integrationForm, setIntegrationForm] = useState<any>({});
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<any>(null);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [isDirty, setIsDirty] = useState(false);
 
   useEffect(() => {
     fetch('/api/system/integrations', { headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` } })
@@ -72,12 +74,15 @@ export const SystemSettingsPage: React.FC = () => {
       });
     }
     setTestResult(null);
+    setSaveMessage(null);
+    setIsDirty(false);
     setActiveModal(provider);
   };
 
   const handleSaveIntegration = async () => {
     try {
       setIsSaving(true);
+      setSaveMessage(null);
       await fetch(`/api/system/integrations/${integrationForm.provider}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` },
@@ -89,9 +94,14 @@ export const SystemSettingsPage: React.FC = () => {
       const data = await res.json();
       if (data.success && data.integrations) setIntegrations(data.integrations);
       
-      setActiveModal(null);
+      setIsDirty(false);
+      setSaveMessage('Configuration saved successfully.');
+      if (integrationForm.secrets?.password) {
+        setIntegrationForm((prev: any) => ({ ...prev, hasSecrets: true }));
+      }
     } catch(e) {
       console.error(e);
+      setSaveMessage(null);
     } finally {
       setIsSaving(false);
     }
@@ -99,12 +109,49 @@ export const SystemSettingsPage: React.FC = () => {
 
   const handleTestIntegration = async () => {
     if (isTesting) return;
+
+    if (integrationForm.provider === 'smtp') {
+      const host = (integrationForm.config?.host || '').trim();
+      const port = Number(integrationForm.config?.port);
+      if (!host) {
+        setTestResult({ success: false, code: 'SMTP_MISSING_HOST', message: 'SMTP host is required.' });
+        return;
+      }
+      if (isNaN(port) || port < 1 || port > 65535) {
+        setTestResult({ success: false, code: 'SMTP_INVALID_PORT', message: 'SMTP port must be a valid number between 1 and 65535.' });
+        return;
+      }
+      const hasStoredPass = integrationForm.hasSecrets || (integrations.smtp?.status && integrations.smtp?.status !== 'NOT_CONNECTED');
+      const newPass = integrationForm.secrets?.password ? String(integrationForm.secrets.password).trim() : '';
+      if (!hasStoredPass && !newPass) {
+        setTestResult({ success: false, code: 'SMTP_MISSING_PASSWORD', message: 'SMTP password is required.' });
+        return;
+      }
+    }
+
     try {
       setIsTesting(true);
       setTestResult(null);
+      setSaveMessage(null);
+
+      const payload = {
+        enabled: integrationForm.enabled,
+        host: integrationForm.config?.host,
+        port: integrationForm.config?.port,
+        secure: integrationForm.config?.secure,
+        ignoreTls: integrationForm.config?.ignoreTls,
+        fromEmail: integrationForm.config?.fromEmail,
+        username: integrationForm.config?.username || integrationForm.secrets?.username,
+        password: integrationForm.secrets?.password || undefined
+      };
+
       const res = await fetch(`/api/system/integrations/${integrationForm.provider}/test`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` }
+        headers: { 
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` 
+        },
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
       setTestResult(data);
@@ -721,43 +768,78 @@ export const SystemSettingsPage: React.FC = () => {
               <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50">
                 <div className="bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
                   <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
-                    <h3 className="font-bold text-lg text-slate-900 font-['Hanken_Grotesk']">
-                      Configure {activeModal === 'smtp' ? 'SMTP' : activeModal === 'calendar' ? 'Calendar Sync' : 'Messaging'}
+                    <h3 className="font-bold text-lg text-slate-900 font-['Hanken_Grotesk'] flex items-center gap-2">
+                      <span>Configure {activeModal === 'smtp' ? 'SMTP' : activeModal === 'calendar' ? 'Calendar Sync' : 'Messaging'}</span>
+                      {isDirty && (
+                        <span className="text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-medium">Unsaved changes</span>
+                      )}
                     </h3>
-                    <button onClick={() => setActiveModal(null)} className="text-slate-400 hover:text-slate-600">
+                    <button 
+                      onClick={() => { setActiveModal(null); setSaveMessage(null); setTestResult(null); }} 
+                      className="text-slate-400 hover:text-slate-600"
+                    >
                       <span className="material-symbols-outlined">close</span>
                     </button>
                   </div>
                   
                   <div className="p-6 overflow-y-auto flex-1 space-y-4">
+                    {saveMessage && (
+                      <div className="p-3 rounded-lg text-sm bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center gap-2">
+                        <span className="material-symbols-outlined text-emerald-600 text-base">check_circle</span>
+                        <span>{saveMessage}</span>
+                      </div>
+                    )}
+
+                    {isTesting && (
+                      <div className="p-3 rounded-lg text-sm bg-blue-50 text-blue-800 border border-blue-200 flex items-center gap-2">
+                        <span className="material-symbols-outlined animate-spin text-base text-blue-600">sync</span>
+                        <span>Testing SMTP connection...</span>
+                      </div>
+                    )}
+
                     {activeModal === 'smtp' && (
                       <>
                         <div className="flex items-center gap-3 mb-4">
                           <label className="text-sm font-bold text-slate-700 w-24">Enable</label>
-                          <Toggle enabled={integrationForm.enabled} onChange={() => setIntegrationForm({...integrationForm, enabled: !integrationForm.enabled})} />
+                          <Toggle 
+                            enabled={integrationForm.enabled} 
+                            onChange={() => {
+                              setIntegrationForm({...integrationForm, enabled: !integrationForm.enabled});
+                              setIsDirty(true);
+                            }} 
+                          />
                         </div>
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-1">SMTP Host</label>
                           <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
                             placeholder="e.g. webmail.berjaya-inovasi.com"
-                            value={integrationForm.config.host || ''} 
-                            onChange={e => setIntegrationForm({...integrationForm, config: {...integrationForm.config, host: e.target.value}})} 
+                            value={integrationForm.config?.host || ''} 
+                            onChange={e => {
+                              setIntegrationForm({...integrationForm, config: {...integrationForm.config, host: e.target.value}});
+                              setIsDirty(true);
+                            }} 
                           />
                         </div>
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-1">SMTP Port</label>
                           <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
                             placeholder="587 or 465"
-                            value={integrationForm.config.port || ''} 
-                            onChange={e => setIntegrationForm({...integrationForm, config: {...integrationForm.config, port: e.target.value}})} 
+                            value={integrationForm.config?.port || ''} 
+                            onChange={e => {
+                              setIntegrationForm({...integrationForm, config: {...integrationForm.config, port: e.target.value}});
+                              setIsDirty(true);
+                            }} 
                           />
                         </div>
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-1">From Email</label>
                           <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
                             placeholder="no-reply@yourcompany.com"
-                            value={integrationForm.config.fromEmail || ''} 
-                            onChange={e => setIntegrationForm({...integrationForm, config: {...integrationForm.config, fromEmail: e.target.value}})} 
+                            value={integrationForm.config?.fromEmail || ''} 
+                            onChange={e => {
+                              setIntegrationForm({...integrationForm, config: {...integrationForm.config, fromEmail: e.target.value}});
+                              setIsDirty(true);
+                            }} 
                           />
                         </div>
                         <div className="pt-2 border-t border-slate-100">
@@ -765,19 +847,25 @@ export const SystemSettingsPage: React.FC = () => {
                           <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
                             placeholder="e.g. user@yourcompany.com"
                             value={integrationForm.config?.username !== undefined ? integrationForm.config.username : (integrationForm.secrets?.username || '')} 
-                            onChange={e => setIntegrationForm({
-                              ...integrationForm, 
-                              config: {...integrationForm.config, username: e.target.value},
-                              secrets: {...integrationForm.secrets, username: e.target.value}
-                            })} 
+                            onChange={e => {
+                              setIntegrationForm({
+                                ...integrationForm, 
+                                config: {...integrationForm.config, username: e.target.value},
+                                secrets: {...integrationForm.secrets, username: e.target.value}
+                              });
+                              setIsDirty(true);
+                            }} 
                           />
                         </div>
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-1">Password</label>
                           <input type="password" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
-                            placeholder={integrationForm.hasSecrets || (integrations.smtp?.status && integrations.smtp?.status !== 'NOT_CONNECTED') ? '******** (Leave blank to keep existing)' : 'Enter SMTP password'}
-                            value={integrationForm.secrets.password || ''} 
-                            onChange={e => setIntegrationForm({...integrationForm, secrets: {...integrationForm.secrets, password: e.target.value}})} 
+                            placeholder={integrationForm.hasSecrets || (integrations.smtp?.status && integrations.smtp?.status !== 'NOT_CONNECTED') ? 'Leave blank to keep existing password' : 'Enter SMTP password'}
+                            value={integrationForm.secrets?.password || ''} 
+                            onChange={e => {
+                              setIntegrationForm({...integrationForm, secrets: {...integrationForm.secrets, password: e.target.value}});
+                              setIsDirty(true);
+                            }} 
                           />
                         </div>
                         <div className="flex items-center gap-2 pt-1">
@@ -786,10 +874,13 @@ export const SystemSettingsPage: React.FC = () => {
                             id="smtpIgnoreTls" 
                             className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4"
                             checked={!!integrationForm.config?.ignoreTls} 
-                            onChange={e => setIntegrationForm({
-                              ...integrationForm, 
-                              config: {...integrationForm.config, ignoreTls: e.target.checked}
-                            })} 
+                            onChange={e => {
+                              setIntegrationForm({
+                                ...integrationForm, 
+                                config: {...integrationForm.config, ignoreTls: e.target.checked}
+                              });
+                              setIsDirty(true);
+                            }} 
                           />
                           <label htmlFor="smtpIgnoreTls" className="text-xs font-medium text-slate-600">
                             Ignore TLS certificate mismatch (for shared hosting / cPanel)
@@ -802,13 +893,22 @@ export const SystemSettingsPage: React.FC = () => {
                       <>
                         <div className="flex items-center gap-3 mb-4">
                           <label className="text-sm font-bold text-slate-700 w-24">Enable Sync</label>
-                          <Toggle enabled={integrationForm.enabled} onChange={() => setIntegrationForm({...integrationForm, enabled: !integrationForm.enabled})} />
+                          <Toggle 
+                            enabled={integrationForm.enabled} 
+                            onChange={() => {
+                              setIntegrationForm({...integrationForm, enabled: !integrationForm.enabled});
+                              setIsDirty(true);
+                            }} 
+                          />
                         </div>
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-1">Provider</label>
                           <select className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
                             value={integrationForm.config.calendarProvider || 'google'}
-                            onChange={e => setIntegrationForm({...integrationForm, config: {...integrationForm.config, calendarProvider: e.target.value}})}>
+                            onChange={e => {
+                              setIntegrationForm({...integrationForm, config: {...integrationForm.config, calendarProvider: e.target.value}});
+                              setIsDirty(true);
+                            }}>
                             <option value="google">Google Calendar (OAuth)</option>
                             <option value="outlook">Microsoft Outlook 365 (OAuth)</option>
                           </select>
@@ -817,16 +917,22 @@ export const SystemSettingsPage: React.FC = () => {
                           <label className="block text-sm font-bold text-slate-700 mb-1">OAuth Client ID (Secret)</label>
                           <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
                             placeholder={integrations.calendar?.status && integrations.calendar?.status !== 'NOT_CONNECTED' ? '******** (Leave blank to keep existing)' : ''}
-                            value={integrationForm.secrets.clientId || ''} 
-                            onChange={e => setIntegrationForm({...integrationForm, secrets: {...integrationForm.secrets, clientId: e.target.value}})} 
+                            value={integrationForm.secrets?.clientId || ''} 
+                            onChange={e => {
+                              setIntegrationForm({...integrationForm, secrets: {...integrationForm.secrets, clientId: e.target.value}});
+                              setIsDirty(true);
+                            }} 
                           />
                         </div>
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-1">OAuth Client Secret (Secret)</label>
                           <input type="password" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
                             placeholder={integrations.calendar?.status && integrations.calendar?.status !== 'NOT_CONNECTED' ? '******** (Leave blank to keep existing)' : ''}
-                            value={integrationForm.secrets.clientSecret || ''} 
-                            onChange={e => setIntegrationForm({...integrationForm, secrets: {...integrationForm.secrets, clientSecret: e.target.value}})} 
+                            value={integrationForm.secrets?.clientSecret || ''} 
+                            onChange={e => {
+                              setIntegrationForm({...integrationForm, secrets: {...integrationForm.secrets, clientSecret: e.target.value}});
+                              setIsDirty(true);
+                            }} 
                           />
                         </div>
                       </>
@@ -836,13 +942,22 @@ export const SystemSettingsPage: React.FC = () => {
                       <>
                         <div className="flex items-center gap-3 mb-4">
                           <label className="text-sm font-bold text-slate-700 w-24">Enable</label>
-                          <Toggle enabled={integrationForm.enabled} onChange={() => setIntegrationForm({...integrationForm, enabled: !integrationForm.enabled})} />
+                          <Toggle 
+                            enabled={integrationForm.enabled} 
+                            onChange={() => {
+                              setIntegrationForm({...integrationForm, enabled: !integrationForm.enabled});
+                              setIsDirty(true);
+                            }} 
+                          />
                         </div>
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-1">Provider</label>
                           <select className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
                             value={integrationForm.config.messagingProvider || 'slack'}
-                            onChange={e => setIntegrationForm({...integrationForm, config: {...integrationForm.config, messagingProvider: e.target.value}})}>
+                            onChange={e => {
+                              setIntegrationForm({...integrationForm, config: {...integrationForm.config, messagingProvider: e.target.value}});
+                              setIsDirty(true);
+                            }}>
                             <option value="slack">Slack</option>
                             <option value="teams">Microsoft Teams</option>
                           </select>
@@ -851,16 +966,19 @@ export const SystemSettingsPage: React.FC = () => {
                           <label className="block text-sm font-bold text-slate-700 mb-1">Webhook URL (Secret)</label>
                           <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
                             placeholder={integrations.messaging?.status && integrations.messaging?.status !== 'NOT_CONNECTED' ? '******** (Leave blank to keep existing)' : ''}
-                            value={integrationForm.secrets.webhookUrl || ''} 
-                            onChange={e => setIntegrationForm({...integrationForm, secrets: {...integrationForm.secrets, webhookUrl: e.target.value}})} 
+                            value={integrationForm.secrets?.webhookUrl || ''} 
+                            onChange={e => {
+                              setIntegrationForm({...integrationForm, secrets: {...integrationForm.secrets, webhookUrl: e.target.value}});
+                              setIsDirty(true);
+                            }} 
                           />
                         </div>
                       </>
                     )}
 
-                    {testResult && (
+                    {testResult && !isTesting && (
                       <div className={"p-3 rounded-lg text-sm " + (testResult.success ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200')}>
-                        <div className="font-bold">{testResult.success ? 'Connected' : (testResult.code || 'Connection Failed')}</div>
+                        <div className="font-bold">{testResult.success ? (activeModal === 'smtp' ? 'SMTP connection verified successfully.' : 'Connected') : (testResult.code || 'Connection Failed')}</div>
                         <div className="mt-0.5">{testResult.message || testResult.error}</div>
                       </div>
                     )}
@@ -874,6 +992,13 @@ export const SystemSettingsPage: React.FC = () => {
                       Disconnect
                     </button>
                     <div className="flex gap-2">
+                      <button 
+                        type="button"
+                        onClick={() => { setActiveModal(null); setSaveMessage(null); setTestResult(null); }}
+                        className="px-4 py-2 border border-slate-300 hover:bg-slate-100 text-slate-700 font-bold rounded-lg text-sm transition-colors"
+                      >
+                        Close
+                      </button>
                       <button 
                         type="button"
                         onClick={handleTestIntegration}
