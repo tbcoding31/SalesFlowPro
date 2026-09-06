@@ -994,13 +994,6 @@ export const SystemSettingsPage: React.FC = () => {
                     <div className="flex gap-2">
                       <button 
                         type="button"
-                        onClick={() => { setActiveModal(null); setSaveMessage(null); setTestResult(null); }}
-                        className="px-4 py-2 border border-slate-300 hover:bg-slate-100 text-slate-700 font-bold rounded-lg text-sm transition-colors"
-                      >
-                        Close
-                      </button>
-                      <button 
-                        type="button"
                         onClick={handleTestIntegration}
                         disabled={isTesting || (activeModal === 'smtp' && (!integrationForm.config?.host || !integrationForm.config?.port))}
                         className={`px-4 py-2 font-bold rounded-lg text-sm transition-colors ${
