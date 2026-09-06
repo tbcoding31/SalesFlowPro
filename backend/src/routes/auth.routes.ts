@@ -304,13 +304,26 @@ authRoutes.post('/forgot-password', async (req: any, res: any) => {
       [tokenId, user.id, tenantId, tokenHash, expiresAt, clientIp, req.get('User-Agent') || '']
     );
 
+    // Log token creation audit event
+    await logAudit(
+      tenantId,
+      user.id,
+      'PASSWORD_RESET_REQUESTED',
+      'User',
+      user.id,
+      'Password reset requested',
+      clientIp,
+      req.get('User-Agent'),
+      'AUTH'
+    );
+
     // Build reset URL from config
     const frontendUrl = process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:3100';
     const resetUrl = `${frontendUrl}/reset-password?token=${rawToken}`;
 
     // Send real email via email.service
     try {
-      await sendEmail({
+      const emailResult = await sendEmail({
         to: user.email,
         subject: 'Password Reset Request - SalesFlow Pro',
         text: `Hello ${user.name || 'there'},\n\nYou requested to reset your password for your SalesFlow Pro account.\nPlease click the link below to set a new password:\n\n${resetUrl}\n\nThis link will expire in ${expiryMinutes} minutes.\n\nIf you did not request this, please ignore this email.\n\nSalesFlow Pro Team`,
@@ -343,12 +356,32 @@ authRoutes.post('/forgot-password', async (req: any, res: any) => {
         `
       });
 
-      await logAudit(tenantId, user.id, 'PASSWORD_RESET_REQUESTED', 'User', user.id, 'Password reset requested and email sent', clientIp, req.get('User-Agent'), 'AUTH');
+      await logAudit(
+        tenantId,
+        user.id,
+        'PASSWORD_RESET_EMAIL_SENT',
+        'User',
+        user.id,
+        `Password reset email sent via SMTP (id: ${emailResult.messageId || 'unknown'})`,
+        clientIp,
+        req.get('User-Agent'),
+        'AUTH'
+      );
     } catch (emailErr: any) {
       console.error('[Forgot Password] Email delivery failed:', emailErr.message);
       // Revoke token if email delivery failed
       await pool.query('UPDATE password_reset_tokens SET revokedAt = NOW() WHERE id = ?', [tokenId]);
-      await logAudit(tenantId, user.id, 'PASSWORD_RESET_EMAIL_FAILED', 'User', user.id, 'Password reset email delivery failed', clientIp, req.get('User-Agent'), 'AUTH');
+      await logAudit(
+        tenantId,
+        user.id,
+        'PASSWORD_RESET_EMAIL_DELIVERY_FAILED',
+        'User',
+        user.id,
+        `Password reset email delivery failed: ${emailErr.code || 'SMTP_ERROR'}`,
+        clientIp,
+        req.get('User-Agent'),
+        'AUTH'
+      );
     }
 
     return res.json(publicResponse);

@@ -354,10 +354,20 @@ export async function verifySmtpConnection(requestPayload?: any, storedRow?: any
   return verifySmtpConfiguration(config, secrets, isUnsaved);
 }
 
+export interface SendEmailResult {
+  success: boolean;
+  messageId?: string;
+  accepted?: (string | any)[];
+  rejected?: (string | any)[];
+  pending?: (string | any)[];
+  response?: string;
+  envelope?: any;
+}
+
 /**
  * Sends email using stored SMTP configuration.
  */
-export async function sendEmail(options: SendEmailOptions): Promise<{ success: boolean; messageId?: string }> {
+export async function sendEmail(options: SendEmailOptions): Promise<SendEmailResult> {
   const loaded = await loadStoredSmtpConfiguration();
   if (!loaded) {
     throw new Error('SMTP integration is not configured');
@@ -368,16 +378,61 @@ export async function sendEmail(options: SendEmailOptions): Promise<{ success: b
 
   const { config, secrets } = loaded;
   const transporter = createSmtpTransporter(config, secrets);
-  const from = options.from || config.fromEmail || secrets.username || config.username;
 
-  const info = await transporter.sendMail({
-    from,
-    to: options.to,
-    subject: options.subject,
-    text: options.text,
-    html: options.html,
-    replyTo: options.replyTo
-  });
+  const authUser = (secrets.username || config.username || '').trim();
+  const rawSender = (options.from || config.fromEmail || authUser).trim();
+  const formatFrom = (addr: string) => (addr.includes('<') ? addr : `"SalesFlow Pro" <${addr}>`);
 
-  return { success: true, messageId: info.messageId };
+  let from = formatFrom(rawSender);
+
+  const executeSend = async (fromAddress: string) => {
+    return await transporter.sendMail({
+      from: fromAddress,
+      to: options.to,
+      subject: options.subject,
+      text: options.text,
+      html: options.html,
+      replyTo: options.replyTo || fromAddress
+    });
+  };
+
+  let info: any;
+  try {
+    info = await executeSend(from);
+  } catch (err: any) {
+    // If sender address was rejected or sender verification failed, and rawSender !== authUser, retry with authUser
+    if (
+      authUser &&
+      rawSender !== authUser &&
+      (err.message?.includes('Sender verify failed') ||
+       err.message?.includes('Verification failed for') ||
+       err.message?.includes('Sender address rejected') ||
+       err.responseCode === 550 ||
+       err.responseCode === 553)
+    ) {
+      console.warn(`[sendEmail] Sender address <${rawSender}> failed provider verification. Retrying with authenticated account <${authUser}>...`);
+      from = formatFrom(authUser);
+      info = await executeSend(from);
+    } else {
+      throw err;
+    }
+  }
+
+  if (Array.isArray(info.rejected) && info.rejected.length > 0 && (!info.accepted || info.accepted.length === 0)) {
+    const error: any = new Error(`All recipients were rejected by SMTP provider: ${info.rejected.join(', ')}`);
+    error.code = 'SMTP_RECIPIENTS_REJECTED';
+    error.rejected = info.rejected;
+    error.response = info.response;
+    throw error;
+  }
+
+  return {
+    success: true,
+    messageId: info.messageId,
+    accepted: info.accepted,
+    rejected: info.rejected,
+    pending: info.pending,
+    response: info.response,
+    envelope: info.envelope
+  };
 }
