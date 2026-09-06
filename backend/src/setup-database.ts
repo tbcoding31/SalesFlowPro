@@ -54,7 +54,7 @@ async function setupDatabase() {
     // AUTH & SECURITY
     `CREATE TABLE IF NOT EXISTS login_attempts (id VARCHAR(50) PRIMARY KEY, email VARCHAR(255), ipAddress VARCHAR(50), success BOOLEAN, attemptedAt DATETIME DEFAULT CURRENT_TIMESTAMP)`,
     `CREATE TABLE IF NOT EXISTS auth_sessions (id VARCHAR(50) PRIMARY KEY, userId VARCHAR(50), token VARCHAR(255), ipAddress VARCHAR(50), userAgent TEXT, expiresAt DATETIME, createdAt DATETIME DEFAULT CURRENT_TIMESTAMP)`,
-    `CREATE TABLE IF NOT EXISTS password_reset_tokens (id VARCHAR(50) PRIMARY KEY, userId VARCHAR(50), token VARCHAR(255), expiresAt DATETIME, used BOOLEAN, createdAt DATETIME DEFAULT CURRENT_TIMESTAMP)`,
+    `CREATE TABLE IF NOT EXISTS password_reset_tokens (id VARCHAR(50) PRIMARY KEY, userId VARCHAR(50) NOT NULL, tenantId VARCHAR(50), tokenHash VARCHAR(64) NOT NULL, expiresAt DATETIME NOT NULL, usedAt DATETIME, revokedAt DATETIME, requestedIp VARCHAR(50), requestedUserAgent TEXT, createdAt DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY idx_tokenHash (tokenHash), INDEX idx_userId_expiresAt (userId, expiresAt))`,
 
     // MASTER DATA (Lookups)
     `CREATE TABLE IF NOT EXISTS activity_types (id VARCHAR(50) PRIMARY KEY, code VARCHAR(50), name VARCHAR(100), icon VARCHAR(50), color VARCHAR(50))`,

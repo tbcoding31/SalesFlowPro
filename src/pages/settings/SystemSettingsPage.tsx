@@ -219,6 +219,7 @@ export const SystemSettingsPage: React.FC = () => {
 
   const [securitySettings, setSecuritySettings] = useState({
     sessionTimeout: '30',
+    passwordResetTokenExpiryMinutes: '30',
     requireUppercase: true,
     requireNumbers: true,
     requireSpecialChars: true,
@@ -241,7 +242,15 @@ export const SystemSettingsPage: React.FC = () => {
         if (data.supportEmail) setApplicationSettings(prev => ({...prev, supportEmail: data.supportEmail, language: data.language || prev.language, maintenanceMode: !!data.maintenanceMode}));
         if (data.defaultTaskPriority) setSalesSettings(prev => ({...prev, defaultTaskPriority: data.defaultTaskPriority, defaultVisitDuration: String(data.defaultVisitDuration || prev.defaultVisitDuration), projectAutoClose: !!data.projectAutoClose}));
         if (data.emailAlerts !== undefined) setNotificationSettings(prev => ({...prev, emailAlerts: !!data.emailAlerts, pushNotifications: !!data.pushNotifications, dailyDigest: !!data.dailyDigest}));
-        if (data.sessionTimeout) setSecuritySettings(prev => ({...prev, sessionTimeout: String(data.sessionTimeout), requireUppercase: !!data.requireUppercase, requireNumbers: !!data.requireNumbers, requireSpecialChars: !!data.requireSpecialChars, mfaEnabled: !!data.mfaEnabled}));
+        if (data.sessionTimeout) setSecuritySettings(prev => ({
+          ...prev, 
+          sessionTimeout: String(data.sessionTimeout), 
+          passwordResetTokenExpiryMinutes: String(data.passwordResetTokenExpiryMinutes || 30),
+          requireUppercase: !!data.requireUppercase, 
+          requireNumbers: !!data.requireNumbers, 
+          requireSpecialChars: !!data.requireSpecialChars, 
+          mfaEnabled: !!data.mfaEnabled
+        }));
         if (data.retentionDays) setAuditSettings(prev => ({...prev, retentionDays: String(data.retentionDays), logVisits: !!data.logVisits, logProjects: !!data.logProjects, logLogins: !!data.logLogins}));
       }).catch(console.error);
   }, []);
@@ -264,6 +273,7 @@ export const SystemSettingsPage: React.FC = () => {
         pushNotifications: notificationSettings.pushNotifications,
         dailyDigest: notificationSettings.dailyDigest,
         sessionTimeout: Number(securitySettings.sessionTimeout),
+        passwordResetTokenExpiryMinutes: Number(securitySettings.passwordResetTokenExpiryMinutes || 30),
         requireUppercase: securitySettings.requireUppercase,
         requireNumbers: securitySettings.requireNumbers,
         requireSpecialChars: securitySettings.requireSpecialChars,
@@ -565,6 +575,18 @@ export const SystemSettingsPage: React.FC = () => {
                     className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
                   />
                   <p className="text-[11px] text-slate-500">Users will be logged out after this period of inactivity.</p>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">Password Reset Link Expiry (Minutes)</label>
+                  <input 
+                    type="number"
+                    min="5"
+                    max="1440"
+                    value={securitySettings.passwordResetTokenExpiryMinutes}
+                    onChange={(e) => setSecuritySettings({...securitySettings, passwordResetTokenExpiryMinutes: e.target.value})}
+                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
+                  />
+                  <p className="text-[11px] text-slate-500">Determines how long a password reset link remains valid after it is requested (5 - 1440 mins).</p>
                 </div>
               </div>
 

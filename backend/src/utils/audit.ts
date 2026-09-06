@@ -2,7 +2,7 @@
 import { pool } from '../db';
 import crypto from 'crypto';
 
-const normalizeIp = (ip: string | null) => { if (!ip) return ip; if (ip.startsWith('::ffff:')) return ip.substring(7); if (ip === '::1') return '127.0.0.1'; return ip; };
+export const normalizeIp = (ip: string | null) => { if (!ip) return ip; if (ip.startsWith('::ffff:')) return ip.substring(7); if (ip === '::1') return '127.0.0.1'; return ip; };
 
 export async function logAudit(
   tenantId: string | null,

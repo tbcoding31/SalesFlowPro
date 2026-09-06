@@ -66,6 +66,9 @@ systemRoutes.get('/settings', async (req: any, res: any) => {
       else if (row.valueType === 'number') settings[row.settingKey] = Number(row.settingValue);
       else settings[row.settingKey] = row.settingValue;
     }
+    if (settings.passwordResetTokenExpiryMinutes === undefined) {
+      settings.passwordResetTokenExpiryMinutes = 30;
+    }
     res.json(settings);
   } catch (err: any) {
     console.error(err);
@@ -100,6 +103,7 @@ systemRoutes.put('/settings', async (req: any, res: any) => {
       pushNotifications: { type: 'boolean', category: 'notifications' },
       dailyDigest: { type: 'boolean', category: 'notifications' },
       sessionTimeout: { type: 'number', category: 'security' },
+      passwordResetTokenExpiryMinutes: { type: 'number', category: 'security' },
       requireUppercase: { type: 'boolean', category: 'security' },
       requireNumbers: { type: 'boolean', category: 'security' },
       requireSpecialChars: { type: 'boolean', category: 'security' },
@@ -115,6 +119,13 @@ systemRoutes.put('/settings', async (req: any, res: any) => {
       const def = allowedKeys[key];
       const val = updates[key];
       
+      if (key === 'passwordResetTokenExpiryMinutes') {
+        const num = Number(val);
+        if (isNaN(num) || num < 5 || num > 1440) {
+          return res.status(400).json({ error: 'Password reset token expiry must be between 5 and 1440 minutes' });
+        }
+      }
+
       let strVal = String(val);
       if (def.type === 'boolean') strVal = val ? 'true' : 'false';
       

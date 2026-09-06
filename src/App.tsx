@@ -7,6 +7,7 @@ import { Agentation } from 'agentation';
 // Auth Pages
 import { LoginPage } from './pages/auth/LoginPage';
 import { ForgotPasswordPage } from './pages/auth/ForgotPasswordPage';
+import { ResetPasswordPage } from './pages/auth/ResetPasswordPage';
 
 // Admin Pages
 import { SuperAdminDashboard } from './pages/admin/SuperAdminDashboard';
@@ -134,6 +135,7 @@ export default function App() {
           {/* Public Auth Routes */}
           <Route path="/login" element={<LoginPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
 
           {/* Protected Main App Routes */}
           <Route
