@@ -33,15 +33,44 @@ export const SystemSettingsPage: React.FC = () => {
       }).catch(console.error);
   }, []);
 
-  const openIntegrationModal = (provider: string) => {
-    const existing = integrations[provider] || {};
-    setIntegrationForm({
-      provider,
-      displayName: existing.displayName || provider,
-      enabled: existing.enabled || false,
-      config: existing.config || {},
-      secrets: {} // don't load secrets
-    });
+  const openIntegrationModal = async (provider: string) => {
+    try {
+      const res = await fetch(`/api/system/integrations/${provider}`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` }
+      });
+      const data = await res.json();
+      if (data.success && data.integration) {
+        const itg = data.integration;
+        setIntegrationForm({
+          provider,
+          displayName: itg.displayName || provider,
+          enabled: itg.enabled !== undefined ? itg.enabled : false,
+          config: itg.config || {},
+          hasSecrets: itg.hasSecrets,
+          secrets: {}
+        });
+      } else {
+        const existing = integrations[provider] || {};
+        setIntegrationForm({
+          provider,
+          displayName: existing.displayName || provider,
+          enabled: existing.enabled || false,
+          config: existing.config || {},
+          hasSecrets: false,
+          secrets: {}
+        });
+      }
+    } catch (e) {
+      const existing = integrations[provider] || {};
+      setIntegrationForm({
+        provider,
+        displayName: existing.displayName || provider,
+        enabled: existing.enabled || false,
+        config: existing.config || {},
+        hasSecrets: false,
+        secrets: {}
+      });
+    }
     setTestResult(null);
     setActiveModal(provider);
   };
@@ -58,7 +87,7 @@ export const SystemSettingsPage: React.FC = () => {
       // Reload
       const res = await fetch('/api/system/integrations', { headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` } });
       const data = await res.json();
-      if (data.success) setIntegrations(data.integrations);
+      if (data.success && data.integrations) setIntegrations(data.integrations);
       
       setActiveModal(null);
     } catch(e) {
@@ -69,8 +98,10 @@ export const SystemSettingsPage: React.FC = () => {
   };
 
   const handleTestIntegration = async () => {
+    if (isTesting) return;
     try {
       setIsTesting(true);
+      setTestResult(null);
       const res = await fetch(`/api/system/integrations/${integrationForm.provider}/test`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` }
@@ -81,9 +112,9 @@ export const SystemSettingsPage: React.FC = () => {
       // Reload to see updated status
       const res2 = await fetch('/api/system/integrations', { headers: { Authorization: `Bearer ${localStorage.getItem('sfp_auth_token')}` } });
       const data2 = await res2.json();
-      if (data2.success) setIntegrations(data2.integrations);
-    } catch(e) {
-      setTestResult({ success: false, error: 'Network error' });
+      if (data2.success && data2.integrations) setIntegrations(data2.integrations);
+    } catch(e: any) {
+      setTestResult({ success: false, code: 'NETWORK_ERROR', message: e.message || 'Unable to connect to server.' });
     } finally {
       setIsTesting(false);
     }
@@ -608,7 +639,17 @@ export const SystemSettingsPage: React.FC = () => {
                       <div>
                         <h3 className="text-sm font-bold text-slate-900">Email SMTP Provider</h3>
                         <p className="text-xs font-medium text-slate-500 mt-0.5">
-                          {integrations.smtp?.status === 'CONNECTED' ? <span className="text-emerald-600 font-bold">Connected</span> : (integrations.smtp?.status === 'CONFIGURED' ? <span className="text-blue-600">Configured � live connection not yet verified</span> : 'Not connected')}
+                          {integrations.smtp?.status === 'CONNECTED' ? (
+                            <span className="text-emerald-600 font-bold">Connected</span>
+                          ) : integrations.smtp?.status === 'CONFIGURED' ? (
+                            <span className="text-blue-600">Configured &ndash; live connection not yet verified</span>
+                          ) : integrations.smtp?.status === 'ERROR' ? (
+                            <span className="text-red-600 font-bold">Connection Error</span>
+                          ) : integrations.smtp?.status === 'DISABLED' ? (
+                            <span className="text-slate-400">Disabled</span>
+                          ) : (
+                            <span className="text-slate-500">Not configured</span>
+                          )}
                         </p>
                       </div>
                     </div>
@@ -626,7 +667,17 @@ export const SystemSettingsPage: React.FC = () => {
                       <div>
                         <h3 className="text-sm font-bold text-slate-900">Calendar Sync (Google/Outlook)</h3>
                         <p className="text-xs font-medium text-slate-500 mt-0.5">
-                          {integrations.calendar?.status === 'CONNECTED' ? <span className="text-emerald-600 font-bold">Connected</span> : (integrations.calendar?.status === 'CONFIGURED' ? <span className="text-blue-600">Configured � live connection not yet verified</span> : 'Not connected')}
+                          {integrations.calendar?.status === 'CONNECTED' ? (
+                            <span className="text-emerald-600 font-bold">Connected</span>
+                          ) : integrations.calendar?.status === 'CONFIGURED' ? (
+                            <span className="text-blue-600">Configured &ndash; live connection not yet verified</span>
+                          ) : integrations.calendar?.status === 'ERROR' ? (
+                            <span className="text-red-600 font-bold">Connection Error</span>
+                          ) : integrations.calendar?.status === 'DISABLED' ? (
+                            <span className="text-slate-400">Disabled</span>
+                          ) : (
+                            <span className="text-slate-500">Not configured</span>
+                          )}
                         </p>
                       </div>
                     </div>
@@ -644,7 +695,17 @@ export const SystemSettingsPage: React.FC = () => {
                       <div>
                         <h3 className="text-sm font-bold text-slate-900">Slack / Teams Notifications</h3>
                         <p className="text-xs font-medium text-slate-500 mt-0.5">
-                          {integrations.messaging?.status === 'CONNECTED' ? <span className="text-emerald-600 font-bold">Connected</span> : (integrations.messaging?.status === 'CONFIGURED' ? <span className="text-blue-600">Configured � live connection not yet verified</span> : 'Not connected')}
+                          {integrations.messaging?.status === 'CONNECTED' ? (
+                            <span className="text-emerald-600 font-bold">Connected</span>
+                          ) : integrations.messaging?.status === 'CONFIGURED' ? (
+                            <span className="text-blue-600">Configured &ndash; live connection not yet verified</span>
+                          ) : integrations.messaging?.status === 'ERROR' ? (
+                            <span className="text-red-600 font-bold">Connection Error</span>
+                          ) : integrations.messaging?.status === 'DISABLED' ? (
+                            <span className="text-slate-400">Disabled</span>
+                          ) : (
+                            <span className="text-slate-500">Not configured</span>
+                          )}
                         </p>
                       </div>
                     </div>
@@ -678,6 +739,7 @@ export const SystemSettingsPage: React.FC = () => {
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-1">SMTP Host</label>
                           <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
+                            placeholder="e.g. webmail.berjaya-inovasi.com"
                             value={integrationForm.config.host || ''} 
                             onChange={e => setIntegrationForm({...integrationForm, config: {...integrationForm.config, host: e.target.value}})} 
                           />
@@ -685,6 +747,7 @@ export const SystemSettingsPage: React.FC = () => {
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-1">SMTP Port</label>
                           <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
+                            placeholder="587 or 465"
                             value={integrationForm.config.port || ''} 
                             onChange={e => setIntegrationForm({...integrationForm, config: {...integrationForm.config, port: e.target.value}})} 
                           />
@@ -692,25 +755,45 @@ export const SystemSettingsPage: React.FC = () => {
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-1">From Email</label>
                           <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
+                            placeholder="no-reply@yourcompany.com"
                             value={integrationForm.config.fromEmail || ''} 
                             onChange={e => setIntegrationForm({...integrationForm, config: {...integrationForm.config, fromEmail: e.target.value}})} 
                           />
                         </div>
                         <div className="pt-2 border-t border-slate-100">
-                          <label className="block text-sm font-bold text-slate-700 mb-1">Username (Secret)</label>
+                          <label className="block text-sm font-bold text-slate-700 mb-1">Username</label>
                           <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
-                            placeholder={integrations.smtp?.status && integrations.smtp?.status !== 'NOT_CONNECTED' ? '******** (Leave blank to keep existing)' : ''}
-                            value={integrationForm.secrets.username || ''} 
-                            onChange={e => setIntegrationForm({...integrationForm, secrets: {...integrationForm.secrets, username: e.target.value}})} 
+                            placeholder="e.g. user@yourcompany.com"
+                            value={integrationForm.config?.username !== undefined ? integrationForm.config.username : (integrationForm.secrets?.username || '')} 
+                            onChange={e => setIntegrationForm({
+                              ...integrationForm, 
+                              config: {...integrationForm.config, username: e.target.value},
+                              secrets: {...integrationForm.secrets, username: e.target.value}
+                            })} 
                           />
                         </div>
                         <div>
-                          <label className="block text-sm font-bold text-slate-700 mb-1">Password (Secret)</label>
+                          <label className="block text-sm font-bold text-slate-700 mb-1">Password</label>
                           <input type="password" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" 
-                            placeholder={integrations.smtp?.status && integrations.smtp?.status !== 'NOT_CONNECTED' ? '******** (Leave blank to keep existing)' : ''}
+                            placeholder={integrationForm.hasSecrets || (integrations.smtp?.status && integrations.smtp?.status !== 'NOT_CONNECTED') ? '******** (Leave blank to keep existing)' : 'Enter SMTP password'}
                             value={integrationForm.secrets.password || ''} 
                             onChange={e => setIntegrationForm({...integrationForm, secrets: {...integrationForm.secrets, password: e.target.value}})} 
                           />
+                        </div>
+                        <div className="flex items-center gap-2 pt-1">
+                          <input 
+                            type="checkbox" 
+                            id="smtpIgnoreTls" 
+                            className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4"
+                            checked={!!integrationForm.config?.ignoreTls} 
+                            onChange={e => setIntegrationForm({
+                              ...integrationForm, 
+                              config: {...integrationForm.config, ignoreTls: e.target.checked}
+                            })} 
+                          />
+                          <label htmlFor="smtpIgnoreTls" className="text-xs font-medium text-slate-600">
+                            Ignore TLS certificate mismatch (for shared hosting / cPanel)
+                          </label>
                         </div>
                       </>
                     )}
@@ -777,7 +860,8 @@ export const SystemSettingsPage: React.FC = () => {
 
                     {testResult && (
                       <div className={"p-3 rounded-lg text-sm " + (testResult.success ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200')}>
-                        {testResult.success ? testResult.message : (testResult.error || testResult.message)}
+                        <div className="font-bold">{testResult.success ? 'Connected' : (testResult.code || 'Connection Failed')}</div>
+                        <div className="mt-0.5">{testResult.message || testResult.error}</div>
                       </div>
                     )}
                   </div>
@@ -791,9 +875,14 @@ export const SystemSettingsPage: React.FC = () => {
                     </button>
                     <div className="flex gap-2">
                       <button 
+                        type="button"
                         onClick={handleTestIntegration}
-                        disabled={isTesting}
-                        className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold rounded-lg text-sm transition-colors"
+                        disabled={isTesting || (activeModal === 'smtp' && (!integrationForm.config?.host || !integrationForm.config?.port))}
+                        className={`px-4 py-2 font-bold rounded-lg text-sm transition-colors ${
+                          isTesting || (activeModal === 'smtp' && (!integrationForm.config?.host || !integrationForm.config?.port))
+                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                            : 'bg-slate-200 hover:bg-slate-300 text-slate-800'
+                        }`}
                       >
                         {isTesting ? 'Testing...' : 'Test Connection'}
                       </button>

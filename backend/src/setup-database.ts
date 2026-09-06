@@ -220,6 +220,22 @@ async function setupDatabase() {
     `CREATE INDEX idx_follow_ups_tenant_id ON follow_ups (tenantId, id)`,
     `CREATE INDEX idx_activities_entity_type_id_time ON activities (entityType, entityId, occurredAt)`,
     `CREATE INDEX idx_activities_customer_time ON activities (customerId, occurredAt)`,
+    
+    // INTEGRATION CONFIGURATIONS
+    `CREATE TABLE IF NOT EXISTS integration_configs (
+      provider VARCHAR(50) PRIMARY KEY,
+      displayName VARCHAR(100),
+      status VARCHAR(50) DEFAULT 'NOT_CONFIGURED',
+      enabled TINYINT(1) DEFAULT 0,
+      configurationJson TEXT,
+      encryptedSecrets TEXT,
+      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      lastTestedAt DATETIME,
+      lastSuccessAt DATETIME,
+      lastErrorCode VARCHAR(50),
+      lastErrorMessage TEXT
+    )`,
 
 ];
 

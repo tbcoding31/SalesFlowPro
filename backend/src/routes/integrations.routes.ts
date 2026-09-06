@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { pool } from '../db';
 import { logAudit } from '../utils/audit';
 import { encryptSecret, decryptSecret } from '../utils/encryption';
+import { verifySmtpConnection } from '../services/email.service';
 
 export const integrationsRoutes = Router();
 
@@ -16,7 +17,7 @@ integrationsRoutes.use((req: any, res: any, next) => {
 // GET all integrations status
 integrationsRoutes.get('/', async (req: any, res: any) => {
   try {
-    const [rows]: any = await pool.query('SELECT provider, displayName, status, enabled, configurationJson, lastTestedAt, lastSuccessAt, lastErrorCode FROM integration_configs');
+    const [rows]: any = await pool.query('SELECT provider, displayName, status, enabled, configurationJson, lastTestedAt, lastSuccessAt, lastErrorCode, lastErrorMessage FROM integration_configs');
     const result: any = {};
     for (const row of rows) {
       result[row.provider] = {
@@ -26,7 +27,8 @@ integrationsRoutes.get('/', async (req: any, res: any) => {
         config: row.configurationJson ? JSON.parse(row.configurationJson) : {},
         lastTestedAt: row.lastTestedAt,
         lastSuccessAt: row.lastSuccessAt,
-        lastErrorCode: row.lastErrorCode
+        lastErrorCode: row.lastErrorCode,
+        lastErrorMessage: row.lastErrorMessage
       };
     }
     res.json({ success: true, integrations: result });
@@ -45,6 +47,16 @@ integrationsRoutes.get('/:provider', async (req: any, res: any) => {
     const row = rows[0];
     const config = row.configurationJson ? JSON.parse(row.configurationJson) : {};
     
+    // For smtp, expose username in config if saved in secrets, but never expose password
+    if (provider === 'smtp' && row.encryptedSecrets) {
+      try {
+        const sec = JSON.parse(decryptSecret(row.encryptedSecrets));
+        if (sec.username && !config.username) {
+          config.username = sec.username;
+        }
+      } catch (e) {}
+    }
+    
     // Mask secrets if they exist
     const hasSecrets = !!row.encryptedSecrets;
     
@@ -59,7 +71,8 @@ integrationsRoutes.get('/:provider', async (req: any, res: any) => {
         hasSecrets, // Tell frontend a secret is saved
         lastTestedAt: row.lastTestedAt,
         lastSuccessAt: row.lastSuccessAt,
-        lastErrorCode: row.lastErrorCode
+        lastErrorCode: row.lastErrorCode,
+        lastErrorMessage: row.lastErrorMessage
       }
     });
   } catch (error: any) {
@@ -73,26 +86,37 @@ integrationsRoutes.put('/:provider', async (req: any, res: any) => {
     const { provider } = req.params;
     const { displayName, status, enabled, config, secrets } = req.body;
     
-    let encryptedSecrets: string | null = null;
-    
-    if (secrets && Object.keys(secrets).length > 0) {
-      // Check if they are just sending back masked values or empty
-      const isActuallyNewSecret = Object.values(secrets).some((v: any) => v && v !== '********' && v.trim() !== '');
-      if (isActuallyNewSecret) {
-        encryptedSecrets = encryptSecret(JSON.stringify(secrets));
-      } else {
-        // Keep existing secrets
-        const [existing]: any = await pool.query('SELECT encryptedSecrets FROM integration_configs WHERE provider = ?', [provider]);
-        if (existing.length) {
-          encryptedSecrets = existing[0].encryptedSecrets;
+    // Fetch existing integration config & secrets
+    const [existingRows]: any = await pool.query('SELECT * FROM integration_configs WHERE provider = ?', [provider]);
+    const existing = existingRows.length ? existingRows[0] : null;
+    let existingSecrets: any = {};
+    if (existing && existing.encryptedSecrets) {
+      try {
+        existingSecrets = JSON.parse(decryptSecret(existing.encryptedSecrets));
+      } catch (e) {
+        existingSecrets = {};
+      }
+    }
+
+    let mergedSecrets = { ...existingSecrets };
+    if (secrets && typeof secrets === 'object') {
+      for (const [key, val] of Object.entries(secrets)) {
+        if (typeof val === 'string' && val.trim() !== '' && val !== '********') {
+          mergedSecrets[key] = val.trim();
         }
       }
-    } else {
-      // Keep existing
-      const [existing]: any = await pool.query('SELECT encryptedSecrets FROM integration_configs WHERE provider = ?', [provider]);
-      if (existing.length) {
-        encryptedSecrets = existing[0].encryptedSecrets;
-      }
+    }
+
+    let encryptedSecrets: string | null = existing?.encryptedSecrets || null;
+    if (Object.keys(mergedSecrets).length > 0) {
+      encryptedSecrets = encryptSecret(JSON.stringify(mergedSecrets));
+    }
+
+    // Determine status semantics (Section 10):
+    // Saving configuration resets CONNECTED -> CONFIGURED until tested again
+    let newStatus = status;
+    if (!newStatus || newStatus === 'CONNECTED') {
+      newStatus = 'CONFIGURED';
     }
 
     const configJson = config ? JSON.stringify(config) : null;
@@ -107,7 +131,7 @@ integrationsRoutes.put('/:provider', async (req: any, res: any) => {
       enabled = VALUES(enabled),
       configurationJson = VALUES(configurationJson),
       encryptedSecrets = VALUES(encryptedSecrets)`,
-      [provider, displayName, status || 'CONFIGURED', enabled ? 1 : 0, configJson, encryptedSecrets]
+      [provider, displayName || provider, newStatus, enabled ? 1 : 0, configJson, encryptedSecrets]
     );
 
     await logAudit(null, req.userId, 'INTEGRATION_CONFIG_UPDATED', 'Integration', provider, `Integration ${provider} configuration updated`, req.ip, req.get('User-Agent'), 'SYSTEM');
@@ -124,8 +148,28 @@ integrationsRoutes.post('/:provider/test', async (req: any, res: any) => {
   try {
     const [rows]: any = await pool.query('SELECT * FROM integration_configs WHERE provider = ?', [provider]);
     if (!rows.length) return res.status(404).json({ error: 'Integration not configured' });
+
+    if (provider === 'smtp') {
+      const result = await verifySmtpConnection();
+
+      if (result.success) {
+        await logAudit(null, req.userId, 'SMTP_CONNECTION_TEST_SUCCESS', 'Integration', 'smtp', 'SMTP connection verified successfully', req.ip, req.get('User-Agent'), 'SYSTEM');
+        return res.json({
+          success: true,
+          status: 'CONNECTED',
+          message: result.message
+        });
+      } else {
+        await logAudit(null, req.userId, 'SMTP_CONNECTION_TEST_FAILED', 'Integration', 'smtp', `SMTP connection test failed: ${result.code}`, req.ip, req.get('User-Agent'), 'SYSTEM');
+        return res.status(result.httpStatus || 502).json({
+          success: false,
+          code: result.code,
+          message: result.message
+        });
+      }
+    }
     
-    // We do NOT have a real transport implemented for any provider yet
+    // For other providers not yet implemented
     await pool.query(
       'UPDATE integration_configs SET lastTestedAt = NOW(), lastErrorCode = ? WHERE provider = ?',
       ['PROVIDER_RUNTIME_NOT_IMPLEMENTED', provider]
