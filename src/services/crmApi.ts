@@ -152,7 +152,7 @@ export const crmApi = {
     return await res.json();
   },
 
-fetchCustomers: async (params?: QueryPaginationParams): Promise<PaginatedResponse<Customer>> => {
+  fetchCustomers: async (params?: QueryPaginationParams): Promise<PaginatedResponse<Customer>> => {
     const q = new URLSearchParams();
     if (params) {
       if (params.page) q.set('page', String(params.page));
@@ -168,7 +168,75 @@ fetchCustomers: async (params?: QueryPaginationParams): Promise<PaginatedRespons
     const url = `${API_BASE}/customers${q.toString() ? '?' + q.toString() : ''}`;
     const res = await fetch(url, { headers: getAuthHeaders() });
     if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch customers`);
-    return await res.json();
+    const data = await res.json();
+    if (Array.isArray(data)) {
+      return { data, pagination: { totalItems: data.length, totalPages: 1, page: 1, pageSize: data.length } };
+    }
+    return data;
+  },
+
+  fetchCustomerById: async (id: string): Promise<Customer | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/customers/${id}`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch customer`);
+      return await res.json();
+    } catch (err) {
+      console.error(`[crmApi.fetchCustomerById error]`, err);
+      return null;
+    }
+  },
+
+  createCustomer: async (customerData: Partial<Customer>): Promise<{ success: boolean; data?: Customer; error?: string; code?: string }> => {
+    try {
+      const res = await fetch(`${API_BASE}/customers`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(customerData)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to create customer', code: data.code };
+      }
+      return { success: true, data: data.data || data };
+    } catch (err: any) {
+      console.error('[crmApi.createCustomer error]', err);
+      return { success: false, error: err.message || 'Network error' };
+    }
+  },
+
+  updateCustomer: async (id: string, customerData: Partial<Customer>): Promise<{ success: boolean; data?: any; error?: string; code?: string }> => {
+    try {
+      const res = await fetch(`${API_BASE}/customers/${id}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(customerData)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to update customer', code: data.code };
+      }
+      return { success: true, data };
+    } catch (err: any) {
+      console.error('[crmApi.updateCustomer error]', err);
+      return { success: false, error: err.message || 'Network error' };
+    }
+  },
+
+  deleteCustomer: async (id: string): Promise<{ success: boolean; error?: string; code?: string }> => {
+    try {
+      const res = await fetch(`${API_BASE}/customers/${id}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to delete customer', code: data.code };
+      }
+      return { success: true };
+    } catch (err: any) {
+      console.error('[crmApi.deleteCustomer error]', err);
+      return { success: false, error: err.message || 'Network error' };
+    }
   },
 
       fetchCustomerProjects: async (customerId: string): Promise<any[]> => {

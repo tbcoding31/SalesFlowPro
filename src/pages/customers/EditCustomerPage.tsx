@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { masterDataApi } from '../../services/masterDataApi';
-import { Customer, CustomerType, CustomerStatus, User, MasterDataItem, Task } from '../../types';
+import { Customer, CustomerType, CustomerStatus, User, MasterDataItem } from '../../types';
 import { usersApi } from '../../services/usersApi';
 import { crmApi } from '../../services/crmApi';
 
@@ -14,7 +14,6 @@ export const EditCustomerPage: React.FC = () => {
 
   const [assignableUsers, setAssignableUsers] = useState<User[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
   const [customer, setCustomer] = useState<Customer | undefined>(undefined);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -29,12 +28,11 @@ export const EditCustomerPage: React.FC = () => {
 
   useEffect(() => {
     if (id) {
-      crmApi.fetchRecordById<Customer>('customers', id).then(data => {
+      crmApi.fetchCustomerById(id).then(data => {
         if (data) setCustomer(data);
       });
     }
 
-    crmApi.fetchCollection<Task>('tasks', tenantId).then(setTasks);
     usersApi.fetchUsers(tenantId, true).then(setAssignableUsers);
     usersApi.fetchUsers(tenantId).then(setAllUsers);
 
@@ -143,7 +141,7 @@ export const EditCustomerPage: React.FC = () => {
     setIsSubmitting(true);
     setErrorMsg(null);
     try {
-      const res = await crmApi.updateRecord('customers', updatedCustomer.id, updatedCustomer);
+      const res = await crmApi.updateCustomer(updatedCustomer.id, updatedCustomer);
       if (res.success) {
         navigate(`/customers/${updatedCustomer.id}`);
       } else {

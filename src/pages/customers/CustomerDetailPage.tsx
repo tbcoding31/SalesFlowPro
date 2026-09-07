@@ -1258,7 +1258,7 @@ const loadAllCustomerData = async () => {
       region: editRegion,
       address: editAddress,
     };
-    crmApi.updateRecord('customers', customer.id, updated).then(() => {
+    crmApi.updateCustomer(customer.id, updated).then(() => {
       loadAllCustomerData();
       setShowEditCustomerModal(false);
     });
@@ -1278,7 +1278,7 @@ const loadAllCustomerData = async () => {
       teamName: selectedUser.teamName || customer.teamName,
     };
 
-    crmApi.updateRecord('customers', customer.id, updated).then(() => {
+    crmApi.updateCustomer(customer.id, updated).then(() => {
       loadAllCustomerData();
       setShowChangePicModal(false);
     });
@@ -1363,7 +1363,7 @@ const loadAllCustomerData = async () => {
       notes: existingNotes,
     };
 
-    await crmApi.updateRecord('customers', customer.id, {
+    await crmApi.updateCustomer(customer.id, {
       notes: existingNotes
     });
 

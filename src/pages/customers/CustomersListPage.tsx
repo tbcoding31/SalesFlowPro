@@ -174,7 +174,7 @@ export const CustomersListPage: React.FC = () => {
 
     setItems((prev) => prev.map((i) => (i.id === editingCustomer.id ? updatedItem : i)));
 
-    crmApi.updateRecord('customers', editingCustomer.id, {
+    crmApi.updateCustomer(editingCustomer.id, {
       name: editName,
       industry: editIndustry,
       status: editStatus === 'Active' ? 'ACTIVE' : editStatus === 'Pending' ? 'PROSPECT' : 'INACTIVE',
@@ -200,7 +200,7 @@ export const CustomersListPage: React.FC = () => {
     if (!customerToDelete) return;
 
     try {
-      const res = await crmApi.deleteRecord('customers', customerToDelete.id);
+      const res = await crmApi.deleteCustomer(customerToDelete.id);
       if (res.success) {
         // If deleting the last item of a page greater than 1, step back 1 page
         if (items.length === 1 && currentPage > 1) {
@@ -292,7 +292,7 @@ export const CustomersListPage: React.FC = () => {
       addresses: [],
     };
 
-    crmApi.createRecord('customers', newCustomerObj).then((res) => {
+    crmApi.createCustomer(newCustomerObj).then((res) => {
       if (res.success) {
         setCurrentPage(1);
         loadData(1);

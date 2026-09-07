@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { masterDataApi } from '../../services/masterDataApi';
-import { Customer, CustomerType, CustomerStatus, User, MasterDataItem, Task } from '../../types';
+import { Customer, CustomerType, CustomerStatus, User, MasterDataItem } from '../../types';
 import { usersApi } from '../../services/usersApi';
 import { crmApi } from '../../services/crmApi';
 
@@ -12,7 +12,6 @@ export const CreateCustomerPage: React.FC = () => {
   const tenantId = currentTenant?.id ;
 
   const [tenantUsers, setTenantUsers] = useState<User[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -31,8 +30,6 @@ export const CreateCustomerPage: React.FC = () => {
         setAssignedPicId(prev => prev || users[0].id);
       }
     });
-
-    crmApi.fetchCollection<Task>('tasks', tenantId).then(setTasks);
 
     masterDataApi.fetchMasterData('customer_types').then(data => {
       setMasterTypes(data);
@@ -73,8 +70,7 @@ export const CreateCustomerPage: React.FC = () => {
   // Helper for PIC task workload calculation
   const getPicWorkload = (userId: string) => {
     const user = tenantUsers.find((u) => u.id === userId);
-    const picTasks = tasks.filter((t) => t.picId === userId && t.status !== 'COMPLETED' && t.status !== 'CANCELLED');
-    const taskCount = picTasks.length || user?.activeTasksCount || 8;
+    const taskCount = user?.taskCount || user?.activeTasksCount || 0;
     const isHighWorkload = taskCount >= 10;
     return {
       user,
@@ -146,7 +142,7 @@ export const CreateCustomerPage: React.FC = () => {
     setIsSubmitting(true);
     setErrorMsg(null);
     try {
-      const res = await crmApi.createRecord('customers', newCustomer);
+      const res = await crmApi.createCustomer(newCustomer);
       if (res.success) {
         navigate('/customers');
       } else {
@@ -417,8 +413,7 @@ export const CreateCustomerPage: React.FC = () => {
                   className="w-full px-3.5 py-3 border border-[#E1E1E1] rounded-xl text-xs bg-white appearance-none focus:outline-none focus:border-[#4744e5] cursor-pointer"
                 >
                   {tenantUsers.map((u) => {
-                    const picTasks = tasks.filter((t) => t.picId === u.id && t.status !== 'COMPLETED');
-                    const cnt = picTasks.length || u.activeTasksCount || 8;
+                    const cnt = u.taskCount || u.activeTasksCount || 0;
                     const wl = cnt >= 10 ? 'High Workload' : 'Normal Workload';
                     return (
                       <option key={u.id} value={u.id}>
