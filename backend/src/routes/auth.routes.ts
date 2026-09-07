@@ -317,28 +317,8 @@ authRoutes.post('/forgot-password', async (req: any, res: any) => {
       'AUTH'
     );
 
-    // Build reset URL from config with production safety enforcement
-    const isProd = process.env.NODE_ENV === 'production';
-    const rawFrontendUrl = (process.env.FRONTEND_URL || process.env.APP_URL || '').trim();
-    if (isProd) {
-      if (!rawFrontendUrl || rawFrontendUrl.includes('localhost') || rawFrontendUrl.includes('127.0.0.1') || !rawFrontendUrl.startsWith('https://')) {
-        console.error('[Forgot Password] Production safety violation: Unsafe or missing FRONTEND_URL in production:', rawFrontendUrl);
-        await pool.query('UPDATE password_reset_tokens SET revokedAt = NOW() WHERE id = ?', [tokenId]);
-        await logAudit(
-          tenantId,
-          user.id,
-          'PASSWORD_RESET_CONFIG_ERROR',
-          'User',
-          user.id,
-          'Password reset aborted: FRONTEND_URL must be an HTTPS URL in production',
-          clientIp,
-          req.get('User-Agent'),
-          'AUTH'
-        );
-        return res.json(publicResponse);
-      }
-    }
-    const frontendUrl = rawFrontendUrl || 'http://localhost:3100';
+    // Build reset URL from config
+    const frontendUrl = process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:3100';
     const resetUrl = `${frontendUrl}/reset-password?token=${rawToken}`;
 
     // Send real email via email.service
