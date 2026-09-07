@@ -57,6 +57,17 @@ import { AuditLogsPage } from './pages/admin/AuditLogsPage';
 import { TeamMembersPage } from './pages/team/TeamMembersPage';
 import { SystemSettingsPage } from './pages/settings/SystemSettingsPage';
 
+export const normalizeRole = (role?: string | null): string => {
+  if (!role) return '';
+  const upper = role.toUpperCase();
+  if (upper === 'SUPER_ADMIN' || upper.endsWith('SUPER_ADMIN')) return 'SUPER_ADMIN';
+  if (upper === 'TENANT_ADMIN' || upper.endsWith('TENANT_ADMIN') || upper.startsWith('ROL-ADM')) return 'TENANT_ADMIN';
+  if (upper === 'SALES_MANAGER' || upper.endsWith('SALES_MANAGER')) return 'SALES_MANAGER';
+  if (upper === 'SUPERVISOR' || upper.endsWith('SUPERVISOR') || upper.startsWith('ROL-SUP')) return 'SUPERVISOR';
+  if (upper === 'SALES_REP' || upper === 'SALES_REPRESENTATIVE' || upper.endsWith('SALES_REP') || upper.startsWith('ROL-REP')) return 'SALES_REP';
+  return role;
+};
+
 // Dynamic Dashboard Resolver component based on user role
 const DashboardResolver: React.FC = () => {
   const { currentUser, isLoading } = useAuth();
@@ -78,7 +89,9 @@ const DashboardResolver: React.FC = () => {
     return <Navigate to="/login" replace />;
   }
 
-  switch (currentUser.role) {
+  const normalizedRole = normalizeRole(currentUser.role);
+
+  switch (normalizedRole) {
     case 'SUPER_ADMIN':
       return <SuperAdminDashboard />;
     case 'TENANT_ADMIN':

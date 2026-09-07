@@ -57,7 +57,10 @@ export const authMiddleware = async (req: Request, res: Response, next: NextFunc
 
     (req as any).userId = session.userId;
     (req as any).tenantUserId = userContext.tenantUserId;
-    (req as any).userRole = userContext.roleId;
+    (req as any).userRole = userContext.roleCode || userContext.roleId;
+    (req as any).userRoleId = userContext.roleId;
+    (req as any).userRoleCode = userContext.roleCode || userContext.roleId;
+    (req as any).userRoleName = userContext.roleName;
     (req as any).userTenantId = userContext.tenantId;
     (req as any).userPermissions = userContext.permissions;
     (req as any).userDataScope = userContext.dataScope;

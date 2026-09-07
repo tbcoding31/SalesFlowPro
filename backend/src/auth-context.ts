@@ -9,6 +9,7 @@ export const resolveUserAccessContext = async (pool: any, userId: string) => {
       tenantUserId: null,
       tenantUserStatus: 'MISSING',
       roleId: null,
+      roleCode: null,
       roleName: null,
       isPlatformUser: false,
       permissions: [],
@@ -20,7 +21,7 @@ export const resolveUserAccessContext = async (pool: any, userId: string) => {
   const userGlobalStatus = globalUserRows[0].status;
 
   const [membershipRows]: any = await pool.query(`
-    SELECT tu.id as tenantUserId, tu.tenantId, tu.status as tenantUserStatus, tur.roleId, r.name as roleName, r.scope
+    SELECT tu.id as tenantUserId, tu.tenantId, tu.status as tenantUserStatus, tur.roleId, r.name as roleName, r.code as roleCode, r.scope
     FROM tenant_users tu
     LEFT JOIN tenant_user_roles tur ON tur.tenantUserId = tu.id
     LEFT JOIN roles r ON r.id = tur.roleId
@@ -31,6 +32,7 @@ export const resolveUserAccessContext = async (pool: any, userId: string) => {
   let tenantUserId: string | null = null;
   let tenantUserStatus: string = 'MISSING';
   let roleId: string | null = null;
+  let roleCode: string | null = null;
   let roleName: string | null = null;
   let isPlatformUser = false;
   let isOrphan = true;
@@ -41,13 +43,14 @@ export const resolveUserAccessContext = async (pool: any, userId: string) => {
     tenantUserStatus = membershipRows[0].tenantUserStatus;
     roleId = membershipRows[0].roleId;
     roleName = membershipRows[0].roleName;
+    roleCode = membershipRows[0].roleCode;
     if (tenantUserStatus === 'ACTIVE' && roleId !== null && roleName !== null) {
       isOrphan = false; // Has active membership AND valid role assignment
     }
   } else {
     // Check for explicit platform/system role
     const [globalUserRoleRows]: any = await pool.query(`
-      SELECT gur.roleId, r.name as roleName, r.scope
+      SELECT gur.roleId, r.name as roleName, r.code as roleCode, r.scope
       FROM global_user_roles gur
       JOIN roles r ON r.id = gur.roleId
       WHERE gur.userId = ? AND r.scope = 'SYSTEM'
@@ -57,8 +60,26 @@ export const resolveUserAccessContext = async (pool: any, userId: string) => {
     if (globalUserRoleRows.length > 0) {
       roleId = globalUserRoleRows[0].roleId;
       roleName = globalUserRoleRows[0].roleName;
+      roleCode = globalUserRoleRows[0].roleCode;
       isPlatformUser = true;
       isOrphan = false; // Is explicit SYSTEM user
+    }
+  }
+
+  // Fallback normalize roleCode if null
+  if (!roleCode && roleId) {
+    if (roleId === 'SUPER_ADMIN' || roleId.endsWith('SUPER_ADMIN')) {
+      roleCode = 'SUPER_ADMIN';
+    } else if (roleId.endsWith('TENANT_ADMIN') || roleId.startsWith('ROL-ADM')) {
+      roleCode = 'TENANT_ADMIN';
+    } else if (roleId.endsWith('SALES_MANAGER')) {
+      roleCode = 'SALES_MANAGER';
+    } else if (roleId.endsWith('SUPERVISOR') || roleId.startsWith('ROL-SUP')) {
+      roleCode = 'SUPERVISOR';
+    } else if (roleId.endsWith('SALES_REP') || roleId.startsWith('ROL-REP')) {
+      roleCode = 'SALES_REP';
+    } else {
+      roleCode = roleId;
     }
   }
 
@@ -81,6 +102,7 @@ export const resolveUserAccessContext = async (pool: any, userId: string) => {
     tenantUserId,
     tenantUserStatus,
     roleId,
+    roleCode: roleCode || roleId,
     roleName,
     isPlatformUser,
     permissions,

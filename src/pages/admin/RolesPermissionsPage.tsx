@@ -82,8 +82,8 @@ export const RolesPermissionsPage: React.FC = () => {
           ];
         } else {
           const [roles, cat] = await Promise.all([
-            rolesApi.getAggregatedRolePermissions(tenantId || ''),
-            rolesApi.fetchPermissions()
+            rolesApi.fetchTenantRoles(tenantId || ''),
+            rolesApi.fetchTenantPermissionCatalog()
           ]);
           catalog = cat;
           aggregatedRoles = roles;
@@ -257,28 +257,13 @@ export const RolesPermissionsPage: React.FC = () => {
     setIsSaving(true);
 
     try {
-      const createRes = await fetch('/api/roles', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: roleId,
-          tenantId: isSuperAdmin ? null : tenantId,
-          name: newRoleName.trim(),
-          description: newRoleDescription.trim() || `Custom organization role for ${newRoleName.trim()}.`,
-          isSystem: false,
-          scope: 'TENANT'
-        })
+      const created = await rolesApi.createCustomRole({
+        name: newRoleName.trim(),
+        code: trimmedKey,
+        description: newRoleDescription.trim() || `Custom organization role for ${newRoleName.trim()}.`,
+        dataScope: newRoleDataScope,
+        permissions: newRoleSelectedPerms.length > 0 ? newRoleSelectedPerms : ['VIEW_ALL_CUSTOMERS', 'VIEW_REPORTS']
       });
-
-      if (!createRes.ok) {
-        throw new Error('Failed to create role entity.');
-      }
-
-      await rolesApi.updateRoleDirectPermissions(
-        roleId,
-        newRoleSelectedPerms.length > 0 ? newRoleSelectedPerms : ['VIEW_ALL_CUSTOMERS', 'VIEW_REPORTS'],
-        newRoleDataScope
-      );
 
       setIsAddModalOpen(false);
       setNewRoleName('');
@@ -287,7 +272,9 @@ export const RolesPermissionsPage: React.FC = () => {
       setNewRoleSelectedPerms([]);
       triggerToast(`Custom role "${newRoleName.trim()}" successfully created!`);
       await loadAllData();
-      setSelectedRole(roleId);
+      if (created?.id) {
+        setSelectedRole(created.id);
+      }
     } catch (err: any) {
       setAddFormError(err.message || 'Role creation failed.');
     } finally {
@@ -307,12 +294,8 @@ export const RolesPermissionsPage: React.FC = () => {
     }
 
     try {
-      const res = await fetch(`/api/roles/${editingRoleNameObj.roleId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: editRoleNameInput.trim() })
-      });
-      if (!res.ok) throw new Error('Update failed');
+      const ok = await rolesApi.updateRoleName(editingRoleNameObj.roleId, editRoleNameInput.trim());
+      if (!ok) throw new Error('Update failed');
       setEditingRoleNameObj(null);
       triggerToast(`Role name updated to "${editRoleNameInput.trim()}".`);
       await loadAllData();
@@ -337,8 +320,8 @@ export const RolesPermissionsPage: React.FC = () => {
     }
 
     try {
-      const res = await fetch(`/api/roles/${roleToDelete.role}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Deletion failed');
+      const ok = await rolesApi.deleteCustomRole(roleToDelete.role);
+      if (!ok) throw new Error('Deletion failed');
       setIsDeleteModalOpen(false);
       setRoleToDelete(null);
       triggerToast(`Role "${roleToDelete.roleName}" was successfully removed.`);

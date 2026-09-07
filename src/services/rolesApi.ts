@@ -46,115 +46,40 @@ export const rolesApi = {
     }
   },
 
-  // Keeping original methods for other pages if needed.
-  fetchRoles: async (tenantId: string): Promise<any[]> => {
+  fetchTenantRoles: async (tenantId?: string | null): Promise<RolePermissions[]> => {
     try {
       const token = localStorage.getItem('sfp_auth_token') || '';
-      const res = await fetch(`${API_BASE}/roles?tenantId=${tenantId}`, {
+      const url = tenantId ? `${API_BASE}/roles/tenant?tenantId=${tenantId}` : `${API_BASE}/roles/tenant`;
+      const res = await fetch(url, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      if (!res.ok) throw new Error('Failed to fetch roles');
-      return await res.json();
+      if (!res.ok) throw new Error('Failed to fetch tenant roles');
+      const data = await res.json();
+      return data.items || [];
     } catch (err) {
       console.error(err);
       return [];
     }
   },
 
-  fetchPermissions: async (): Promise<any[]> => {
+  fetchTenantPermissionCatalog: async (): Promise<any[]> => {
     try {
       const token = localStorage.getItem('sfp_auth_token') || '';
-      const res = await fetch(`${API_BASE}/permissions`, {
+      const res = await fetch(`${API_BASE}/permissions/tenant-catalog`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      if (!res.ok) throw new Error('Failed to fetch permissions');
+      if (!res.ok) throw new Error('Failed to fetch tenant permission catalog');
       return await res.json();
     } catch (err) {
       console.error(err);
       return [];
     }
-  },
-
-  fetchRolePermissions: async (): Promise<any[]> => {
-    try {
-      const token = localStorage.getItem('sfp_auth_token') || '';
-      const res = await fetch(`${API_BASE}/role_permissions`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (!res.ok) throw new Error('Failed to fetch role_permissions');
-      return await res.json();
-    } catch (err) {
-      console.error(err);
-      return [];
-    }
-  },
-
-  fetchRoleDataScopes: async (): Promise<any[]> => {
-    try {
-      const token = localStorage.getItem('sfp_auth_token') || '';
-      const res = await fetch(`${API_BASE}/role_data_scopes`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (!res.ok) throw new Error('Failed to fetch role_data_scopes');
-      return await res.json();
-    } catch (err) {
-      console.error(err);
-      return [];
-    }
-  },
-
-  getAggregatedRolePermissions: async (tenantId: string): Promise<RolePermissions[]> => {
-    const token = localStorage.getItem('sfp_auth_token') || '';
-    const [roles, permissions, rolePerms, dataScopes, tenantUsers] = await Promise.all([
-      rolesApi.fetchRoles(tenantId),
-      rolesApi.fetchPermissions(),
-      rolesApi.fetchRolePermissions(),
-      rolesApi.fetchRoleDataScopes(),
-      fetch(`${API_BASE}/tenant_user_roles`, { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.ok ? r.json() : []).catch(() => [])
-    ]);
-
-    const moduleNames = ['Customers', 'Visits', 'Tasks', 'Projects', 'Reports', 'Settings'];
-
-    return roles.map(role => {
-      const rolePermissionIds = rolePerms.filter(rp => rp.roleId === role.id).map(rp => rp.permission || rp.permissionId);
-      const roleScope = dataScopes.find(ds => ds.roleId === role.id);
-      const membersCount = tenantUsers.filter((tur: any) => tur.roleId === role.id).length;
-      
-      const permissionsMap = moduleNames.map(moduleName => {
-        const prefix = moduleName.toUpperCase();
-        return {
-          module: moduleName,
-          view: rolePermissionIds.includes(`${prefix}_VIEW`) || rolePermissionIds.includes(`MANAGE_${prefix}`) || rolePermissionIds.includes(`VIEW_ALL_${prefix}`),
-          create: rolePermissionIds.includes(`${prefix}_CREATE`) || rolePermissionIds.includes(`MANAGE_${prefix}`),
-          edit: rolePermissionIds.includes(`${prefix}_EDIT`) || rolePermissionIds.includes(`MANAGE_${prefix}`),
-          delete: rolePermissionIds.includes(`${prefix}_DELETE`) || rolePermissionIds.includes(`MANAGE_${prefix}`),
-          export: rolePermissionIds.includes(`${prefix}_EXPORT`),
-          assign: rolePermissionIds.includes(`${prefix}_ASSIGN`) || rolePermissionIds.includes(`ASSIGN_${prefix}`),
-          reassign: rolePermissionIds.includes(`${prefix}_REASSIGN`),
-          complete: rolePermissionIds.includes(`${prefix}_COMPLETE`),
-          moveStage: rolePermissionIds.includes(`${prefix}_MOVESTAGE`),
-        };
-      });
-      
-      return {
-        role: role.id || role.role_code || role.name,
-        roleName: role.name,
-        description: role.description,
-        scope: role.scope,
-        isSystem: role.isSystem,
-        tenantId: role.tenantId,
-        memberCount: membersCount,
-        assignedPermissions: rolePermissionIds,
-        permissions: permissionsMap as any,
-        dataScope: roleScope ? roleScope.scope : 'TEAM',
-      } as RolePermissions;
-    });
   },
 
   updateRoleDirectPermissions: async (roleId: string, permissions: string[], dataScope: string): Promise<boolean> => {
     try {
       const token = localStorage.getItem('sfp_auth_token') || '';
-      const res = await fetch(`${API_BASE}/roles/${roleId}/permissions_scopes`, {
+      const res = await fetch(`${API_BASE}/roles/tenant/${roleId}/permissions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ permissions, dataScope })
@@ -166,31 +91,46 @@ export const rolesApi = {
     }
   },
 
-  updateRolePermissions: async (roleId: string, permissionsState: RolePermissions): Promise<boolean> => {
+  createCustomRole: async (roleData: { name: string; code?: string; description?: string; dataScope?: string; permissions?: string[] }): Promise<any> => {
     try {
-      if (permissionsState.assignedPermissions && Array.isArray(permissionsState.assignedPermissions)) {
-        return await rolesApi.updateRoleDirectPermissions(roleId, permissionsState.assignedPermissions, permissionsState.dataScope);
-      }
-
-      const dbPermissions: string[] = [];
-      permissionsState.permissions?.forEach((p: any) => {
-        const prefix = p.module.toUpperCase();
-        if (p.view) dbPermissions.push(`${prefix}_VIEW`);
-        if (p.create) dbPermissions.push(`${prefix}_CREATE`);
-        if (p.edit) dbPermissions.push(`${prefix}_EDIT`);
-        if (p.delete) dbPermissions.push(`${prefix}_DELETE`);
-        if (p.export) dbPermissions.push(`${prefix}_EXPORT`);
-        if (p.assign) dbPermissions.push(`${prefix}_ASSIGN`);
-        if (p.reassign) dbPermissions.push(`${prefix}_REASSIGN`);
-        if (p.complete) dbPermissions.push(`${prefix}_COMPLETE`);
-        if (p.moveStage) dbPermissions.push(`${prefix}_MOVESTAGE`);
-      });
-
       const token = localStorage.getItem('sfp_auth_token') || '';
-      const res = await fetch(`${API_BASE}/roles/${roleId}/permissions_scopes`, {
+      const res = await fetch(`${API_BASE}/roles/tenant`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ permissions: dbPermissions, dataScope: permissionsState.dataScope })
+        body: JSON.stringify(roleData)
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to create role');
+      }
+      return await res.json();
+    } catch (err: any) {
+      console.error(err);
+      throw err;
+    }
+  },
+
+  updateRoleName: async (roleId: string, name: string, description?: string): Promise<boolean> => {
+    try {
+      const token = localStorage.getItem('sfp_auth_token') || '';
+      const res = await fetch(`${API_BASE}/roles/tenant/${roleId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ name, description })
+      });
+      return res.ok;
+    } catch (err) {
+      console.error(err);
+      return false;
+    }
+  },
+
+  deleteCustomRole: async (roleId: string): Promise<boolean> => {
+    try {
+      const token = localStorage.getItem('sfp_auth_token') || '';
+      const res = await fetch(`${API_BASE}/roles/tenant/${roleId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
       });
       return res.ok;
     } catch (err) {

@@ -106,11 +106,12 @@ onboardingRoutes.post('/tenant', async (req, res) => {
     for (const tmpl of templates) {
       const shortTmpl = tmpl.id.replace('TEMPLATE_', '').replace('REPRESENTATIVE', 'REP');
       const clonedRoleId = `ROLE-${tenantId}-${shortTmpl}`;
+      const roleCode = tmpl.code || (shortTmpl === 'TENANT_ADMIN' ? 'TENANT_ADMIN' : shortTmpl);
       
       await connection.query(`
-        INSERT INTO roles (id, tenantId, name, description, isSystem, scope)
-        VALUES (?, ?, ?, ?, 1, 'TENANT')
-      `, [clonedRoleId, tenantId, tmpl.name, tmpl.description]);
+        INSERT INTO roles (id, tenantId, code, name, description, isSystem, scope)
+        VALUES (?, ?, ?, ?, ?, 1, 'TENANT')
+      `, [clonedRoleId, tenantId, roleCode, tmpl.name, tmpl.description]);
 
       // Clone Permissions
       const [tmplPerms]: any = await connection.query('SELECT permission FROM role_permissions WHERE roleId = ?', [tmpl.id]);
