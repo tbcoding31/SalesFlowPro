@@ -533,6 +533,43 @@ customersRoutes.get('/:id/contacts', async (req: any, res: any) => {
   }
 });
 
+// GET /api/customers/:id/visits - Customer visits list
+customersRoutes.get('/:id/visits', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { id } = req.params;
+
+  try {
+    const [rows]: any = await pool.query(`
+      SELECT 
+        v.*,
+        vs.code as statusCode, vs.name as statusName,
+        vp.code as purposeCode, vp.name as purposeName,
+        u.name as picName, u.email as picEmail, u.avatar as picAvatar,
+        c.name as customerName, c.code as customerCode
+      FROM visits v
+      LEFT JOIN visit_statuses vs ON vs.id = v.statusId
+      LEFT JOIN visit_purposes vp ON vp.id = v.purposeId
+      LEFT JOIN users u ON u.id = v.picId
+      LEFT JOIN customers c ON c.id = v.customerId
+      WHERE v.customerId = ? AND v.tenantId = ?
+      ORDER BY v.visitDate DESC, v.createdAt DESC
+    `, [id, targetTenant]);
+
+    res.json(rows);
+  } catch (err: any) {
+    console.error(`GET /api/customers/${id}/visits error:`, err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 // GET /api/customers/:id/addresses - Customer addresses list
 customersRoutes.get('/:id/addresses', async (req: any, res: any) => {
   const actorRole = (req as any).userRole;

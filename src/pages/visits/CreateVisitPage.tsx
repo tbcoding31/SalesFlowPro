@@ -20,11 +20,68 @@ export const CreateVisitPage: React.FC = () => {
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [rawUsers, setRawUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+
+  // Form State
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
+  const [visitDate, setVisitDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [startTime, setStartTime] = useState<string>('09:00');
+  const [endTime, setEndTime] = useState<string>('10:30');
+  const [location, setLocation] = useState<string>('');
+  const [purpose, setPurpose] = useState<string>('');
+  const [title, setTitle] = useState<string>('');
+
+  const [visitPurposes, setVisitPurposes] = useState<MasterDataItem[]>([]);
+
+  // Ownership State
+  const [selectedPicId, setSelectedPicId] = useState<string>(currentUser?.id || '');
+  const [additionalPicIds, setAdditionalPicIds] = useState<string[]>([]);
+  const [notes, setNotes] = useState<string>('');
 
   useEffect(() => {
-    crmApi.fetchCollection<Customer>('customers', tenantId).then(setCustomers);
-    usersApi.fetchUsers(tenantId).then(setRawUsers);
-  }, [tenantId]);
+    let mounted = true;
+    setLoading(true);
+
+    Promise.all([
+      crmApi.fetchCustomers({ page: 1, pageSize: 100 }),
+      usersApi.fetchUsers(undefined, true),
+      masterDataApi.fetchMasterData('visit_purposes', tenantId)
+    ]).then(([custRes, usersRes, purposesRes]) => {
+      if (!mounted) return;
+      const custList = Array.isArray(custRes) ? custRes : (custRes?.data || []);
+      setCustomers(custList);
+
+      const userList = Array.isArray(usersRes) ? usersRes : [];
+      setRawUsers(userList);
+
+      const purposeList = Array.isArray(purposesRes) ? purposesRes : [];
+      setVisitPurposes(purposeList);
+
+      const def = purposeList.find((d: any) => d.isDefault || d.is_default);
+      if (def) {
+        setPurpose(def.codeValue || (def as any).code_value || '');
+      } else if (purposeList.length > 0) {
+        setPurpose(purposeList[0].codeValue || (purposeList[0] as any).code_value || '');
+      }
+
+      if (userList.length > 0) {
+        setSelectedPicId((prev) => {
+          if (prev && userList.some((u: any) => u.id === prev)) return prev;
+          const matchCurrent = userList.find((u: any) => u.id === currentUser?.id);
+          return matchCurrent ? matchCurrent.id : userList[0].id;
+        });
+      }
+      setLoading(false);
+    }).catch((err) => {
+      console.error('[CreateVisitPage init error]', err);
+      if (mounted) setLoading(false);
+    });
+
+    return () => {
+      mounted = false;
+    };
+  }, [tenantId, currentUser?.id]);
 
   // Compute stats/workload for PIC dropdown results
   const usersWithWorkload = useMemo<UserWorkloadInfo[]>(() => {
@@ -44,31 +101,6 @@ export const CreateVisitPage: React.FC = () => {
       };
     });
   }, [rawUsers]);
-
-  // Form State
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
-  const [visitDate, setVisitDate] = useState<string>('2026-08-18');
-  const [startTime, setStartTime] = useState<string>('09:00');
-  const [endTime, setEndTime] = useState<string>('10:30');
-  const [location, setLocation] = useState<string>('');
-  const [purpose, setPurpose] = useState<string>('');
-  const [title, setTitle] = useState<string>('');
-
-  const [visitPurposes, setVisitPurposes] = useState<MasterDataItem[]>([]);
-
-  useEffect(() => {
-    masterDataApi.fetchMasterData('visit_purposes', tenantId).then(data => {
-      setVisitPurposes(data);
-      const def = data.find(d => d.isDefault);
-      if (def) setPurpose(def.codeValue);
-      else if (data.length > 0) setPurpose(data[0].codeValue);
-    });
-  }, [tenantId]);
-
-  // Ownership State
-  const [selectedPicId, setSelectedPicId] = useState<string>(currentUser?.id || rawUsers[0]?.id || 'USR-001');
-  const [additionalPicIds, setAdditionalPicIds] = useState<string[]>([]);
-  const [notes, setNotes] = useState<string>('');
 
   // PIC Searchable Dropdown state
   const [isPicDropdownOpen, setIsPicDropdownOpen] = useState<boolean>(false);
@@ -106,7 +138,8 @@ export const CreateVisitPage: React.FC = () => {
         setLocation(cus.address || `${cus.name} Head Office`);
       }
       if (!title) {
-        setTitle(`${purpose} - ${cus.name}`);
+        const pLabel = visitPurposes.find(p => (p.codeValue || (p as any).code_value) === purpose)?.label || purpose;
+        setTitle(`${pLabel || 'Meeting'} - ${cus.name}`);
       }
     }
   };
@@ -118,8 +151,11 @@ export const CreateVisitPage: React.FC = () => {
   );
 
   // Selected PIC info
-  const selectedPicInfo = useMemo(
-    () => usersWithWorkload.find((u) => u.user.id === selectedPicId) || usersWithWorkload[0],
+  const selectedPicInfo = useMemo<UserWorkloadInfo | null>(
+    () => {
+      if (usersWithWorkload.length === 0) return null;
+      return usersWithWorkload.find((u) => u.user.id === selectedPicId) || usersWithWorkload[0] || null;
+    },
     [usersWithWorkload, selectedPicId]
   );
 
@@ -130,8 +166,8 @@ export const CreateVisitPage: React.FC = () => {
     return usersWithWorkload.filter(
       (item) =>
         item.user.name.toLowerCase().includes(q) ||
-        item.user.roleName.toLowerCase().includes(q) ||
-        item.user.department.toLowerCase().includes(q)
+        (item.user.roleName || '').toLowerCase().includes(q) ||
+        (item.user.department || '').toLowerCase().includes(q)
     );
   }, [usersWithWorkload, picSearchQuery]);
 
@@ -150,7 +186,7 @@ export const CreateVisitPage: React.FC = () => {
   };
 
   // Save / Schedule Handler
-  const handleSaveVisit = (status: VisitStatus) => {
+  const handleSaveVisit = async (status: VisitStatus) => {
     if (!selectedCustomerId) {
       alert('Please select a customer.');
       return;
@@ -158,39 +194,43 @@ export const CreateVisitPage: React.FC = () => {
 
     const cus = customers.find((c) => c.id === selectedCustomerId);
     const pic = selectedPicInfo?.user;
+    const resolvedPicId = pic?.id || selectedPicId || currentUser?.id;
 
-    const newVisitId = `VIS-${Math.floor(100 + Math.random() * 900)}`;
+    if (!resolvedPicId) {
+      alert('Please select a Person in Charge (PIC).');
+      return;
+    }
 
-    const newVisit = {
-      id: newVisitId,
-      tenantId: tenantId,
-      customerId: selectedCustomerId,
-      customerName: cus?.name || 'Unknown Customer',
-      customerCode: cus?.code || 'CUS-0000',
-      picId: pic?.id || 'USR-001',
-      picName: pic?.name || 'Ahmad Ricky',
-      picAvatar: pic?.avatarUrl || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
-      title: title || `${purpose} - ${cus?.name || 'Meeting'}`,
-      purpose: purpose,
-      visitDate: visitDate,
-      startTime: startTime,
-      endTime: endTime,
-      location: location || cus?.address || 'Client Office',
-      status: status,
-      notes: notes,
-      createdAt: new Date().toISOString().split('T')[0],
-    };
+    setIsSubmitting(true);
+    try {
+      const payload = {
+        customerId: selectedCustomerId,
+        picId: resolvedPicId,
+        title: title || `${purpose || 'Meeting'} - ${cus?.name || 'Customer'}`,
+        purpose: purpose,
+        visitDate: visitDate,
+        startTime: startTime,
+        endTime: endTime,
+        location: location || cus?.address || 'Client Office',
+        status: status,
+        notes: notes,
+        additionalPicIds: additionalPicIds,
+      };
 
-    crmApi.createRecord('visits', newVisit).then((res) => {
+      const res = await crmApi.createVisit(payload);
       if (res.success) {
         setToastMessage(status === 'PLANNED' ? 'Visit draft saved successfully!' : 'Customer visit scheduled successfully!');
         setTimeout(() => {
           navigate('/visits');
         }, 1200);
       } else {
-        alert(`Failed to save visit: ${res.error}`);
+        alert(`Failed to save visit: ${res.error || 'Unknown error'}`);
       }
-    });
+    } catch (err: any) {
+      alert(`Failed to save visit: ${err.message || err}`);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -279,16 +319,20 @@ export const CreateVisitPage: React.FC = () => {
               onChange={(e) => {
                 setPurpose(e.target.value);
                 if (selectedCustomer) {
-                  const label = visitPurposes.find(p => p.code_value === e.target.value)?.label || e.target.value;
+                  const pItem = visitPurposes.find(p => (p.codeValue || (p as any).code_value) === e.target.value);
+                  const label = pItem?.label || e.target.value;
                   setTitle(`${label} - ${selectedCustomer.name}`);
                 }
               }}
               className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-xl text-xs bg-white text-[#1a1c1c] focus:outline-none focus:border-[#4744e5] focus:ring-1 focus:ring-[#4744e5] font-medium"
             >
               <option value="">Select Purpose</option>
-              {visitPurposes.map(p => (
-                <option key={p.id} value={p.code_value}>{p.label}</option>
-              ))}
+              {visitPurposes.map(p => {
+                const val = p.codeValue || (p as any).code_value || p.id;
+                return (
+                  <option key={p.id} value={val}>{p.label}</option>
+                );
+              })}
             </select>
           </div>
 
@@ -385,46 +429,55 @@ export const CreateVisitPage: React.FC = () => {
 
             {/* Selected PIC Display Trigger */}
             <div
-              onClick={() => setIsPicDropdownOpen(!isPicDropdownOpen)}
-              className="w-full p-3 border border-[#E1E1E1] hover:border-[#4744e5] rounded-xl bg-white flex items-center justify-between cursor-pointer transition-all shadow-2xs"
+              onClick={() => usersWithWorkload.length > 0 && setIsPicDropdownOpen(!isPicDropdownOpen)}
+              className={`w-full p-3 border border-[#E1E1E1] hover:border-[#4744e5] rounded-xl bg-white flex items-center justify-between cursor-pointer transition-all shadow-2xs ${
+                usersWithWorkload.length === 0 ? 'opacity-70 cursor-not-allowed' : ''
+              }`}
             >
-              <div className="flex items-center gap-3 min-w-0">
-                <img
-                  src={
-                    selectedPicInfo.user.avatarUrl ||
-                    'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
-                  }
-                  alt={selectedPicInfo.user.name}
-                  className="w-9 h-9 rounded-full object-cover border border-[#E1E1E1] shrink-0"
-                />
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-extrabold text-xs text-[#1a1c1c] font-['Hanken_Grotesk'] truncate">
-                      {selectedPicInfo.user.name}
-                    </span>
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-[#555468] font-bold shrink-0">
-                      {selectedPicInfo.user.roleName || selectedPicInfo.user.position || 'Sales Rep'}
-                    </span>
-                  </div>
-                  <div className="text-[10px] text-[#767587] flex items-center gap-2 mt-0.5">
-                    <span>{selectedPicInfo.activeTasks} active tasks</span>
-                    <span>•</span>
-                    <span className="text-rose-600 font-semibold">{selectedPicInfo.overdueTasks} overdue</span>
-                    <span>•</span>
-                    <span
-                      className={`font-semibold ${
-                        selectedPicInfo.workloadLevel === 'High'
-                          ? 'text-amber-600'
-                          : selectedPicInfo.workloadLevel === 'Low'
-                          ? 'text-emerald-600'
-                          : 'text-indigo-600'
-                      }`}
-                    >
-                      {selectedPicInfo.workloadLevel} workload
-                    </span>
+              {selectedPicInfo ? (
+                <div className="flex items-center gap-3 min-w-0">
+                  <img
+                    src={
+                      selectedPicInfo.user?.avatarUrl ||
+                      'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
+                    }
+                    alt={selectedPicInfo.user?.name || 'User'}
+                    className="w-9 h-9 rounded-full object-cover border border-[#E1E1E1] shrink-0"
+                  />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-extrabold text-xs text-[#1a1c1c] font-['Hanken_Grotesk'] truncate">
+                        {selectedPicInfo.user?.name}
+                      </span>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-[#555468] font-bold shrink-0">
+                        {selectedPicInfo.user?.roleName || selectedPicInfo.user?.position || 'Sales Rep'}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-[#767587] flex items-center gap-2 mt-0.5">
+                      <span>{selectedPicInfo.activeTasks} active tasks</span>
+                      <span>•</span>
+                      <span className="text-rose-600 font-semibold">{selectedPicInfo.overdueTasks} overdue</span>
+                      <span>•</span>
+                      <span
+                        className={`font-semibold ${
+                          selectedPicInfo.workloadLevel === 'High'
+                            ? 'text-amber-600'
+                            : selectedPicInfo.workloadLevel === 'Low'
+                            ? 'text-emerald-600'
+                            : 'text-indigo-600'
+                        }`}
+                      >
+                        {selectedPicInfo.workloadLevel} workload
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : (
+                <div className="flex items-center gap-2 text-xs text-[#767587]">
+                  <span className="material-symbols-outlined text-[20px]">person</span>
+                  <span>{loading ? 'Loading sales representatives...' : 'No assignable sales representatives found'}</span>
+                </div>
+              )}
               <span className="material-symbols-outlined text-[#767587] text-[20px] shrink-0">
                 {isPicDropdownOpen ? 'expand_less' : 'unfold_more'}
               </span>
@@ -641,7 +694,7 @@ export const CreateVisitPage: React.FC = () => {
             </h2>
           </div>
           <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-indigo-50 text-[#4744e5]">
-            {visitPurposes.find(p => p.code_value === purpose)?.label || purpose}
+            {visitPurposes.find(p => (p.codeValue || (p as any).code_value) === purpose)?.label || purpose || 'Planned'}
           </span>
         </div>
 
@@ -702,17 +755,25 @@ export const CreateVisitPage: React.FC = () => {
               PIC
             </span>
             <div className="flex items-center gap-1.5">
-              <img
-                src={
-                  selectedPicInfo?.user.avatarUrl ||
-                  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
-                }
-                alt={selectedPicInfo?.user.name}
-                className="w-4 h-4 rounded-full object-cover"
-              />
-              <p className="text-xs font-extrabold text-[#1a1c1c] truncate font-['Hanken_Grotesk']">
-                {selectedPicInfo ? selectedPicInfo.user.name : '— Not assigned —'}
-              </p>
+              {selectedPicInfo ? (
+                <>
+                  <img
+                    src={
+                      selectedPicInfo.user?.avatarUrl ||
+                      'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
+                    }
+                    alt={selectedPicInfo.user?.name || 'User'}
+                    className="w-4 h-4 rounded-full object-cover"
+                  />
+                  <p className="text-xs font-extrabold text-[#1a1c1c] truncate font-['Hanken_Grotesk']">
+                    {selectedPicInfo.user?.name}
+                  </p>
+                </>
+              ) : (
+                <p className="text-xs font-medium text-[#767587] truncate font-['Hanken_Grotesk']">
+                  — Not assigned —
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -730,19 +791,21 @@ export const CreateVisitPage: React.FC = () => {
 
         <button
           type="button"
+          disabled={isSubmitting}
           onClick={() => handleSaveVisit('PLANNED')}
-          className="w-full sm:w-auto px-5 py-2.5 border border-[#4744e5] text-[#4744e5] hover:bg-indigo-50 text-xs font-bold rounded-xl transition-all cursor-pointer font-['Hanken_Grotesk'] text-center"
+          className="w-full sm:w-auto px-5 py-2.5 border border-[#4744e5] text-[#4744e5] hover:bg-indigo-50 disabled:opacity-50 text-xs font-bold rounded-xl transition-all cursor-pointer font-['Hanken_Grotesk'] text-center"
         >
-          Save Draft
+          {isSubmitting ? 'Saving...' : 'Save Draft'}
         </button>
 
         <button
           type="button"
+          disabled={isSubmitting}
           onClick={() => handleSaveVisit('CONFIRMED')}
-          className="w-full sm:w-auto px-6 py-2.5 bg-[#4744e5] hover:bg-[#322fce] text-white text-xs font-extrabold rounded-xl shadow-md transition-all cursor-pointer font-['Hanken_Grotesk'] flex items-center justify-center gap-1.5"
+          className="w-full sm:w-auto px-6 py-2.5 bg-[#4744e5] hover:bg-[#322fce] disabled:opacity-50 text-white text-xs font-extrabold rounded-xl shadow-md transition-all cursor-pointer font-['Hanken_Grotesk'] flex items-center justify-center gap-1.5"
         >
           <span className="material-symbols-outlined text-[18px]">send</span>
-          <span>Schedule Visit</span>
+          <span>{isSubmitting ? 'Scheduling...' : 'Schedule Visit'}</span>
         </button>
       </div>
     </div>

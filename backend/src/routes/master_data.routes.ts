@@ -10,6 +10,7 @@ const ALLOWED_PLATFORM_CATEGORIES = [
   'customer_types',
   'customer_statuses',
   'visit_purposes',
+  'visit_statuses',
   'task_statuses',
   'project_stages',
   'departments',

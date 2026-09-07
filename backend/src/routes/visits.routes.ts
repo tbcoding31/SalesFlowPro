@@ -1,6 +1,8 @@
 import { Router } from 'express';
+import crypto from 'crypto';
 import { pool } from '../db';
 import { buildReportScopeWhere, validateTargetTenant } from '../utils/scope';
+import { logAudit } from '../utils/audit';
 
 export const visitsRoutes = Router();
 
@@ -112,6 +114,367 @@ visitsRoutes.get('/', async (req: any, res: any) => {
     }
   } catch (err: any) {
     console.error('GET /api/visits error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// GET /api/visits/:id - Single visit detail
+visitsRoutes.get('/:id', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { id } = req.params;
+
+  try {
+    const [rows]: any = await pool.query(`
+      SELECT 
+        v.*,
+        vs.code as statusCode, vs.name as statusName,
+        vp.code as purposeCode, vp.name as purposeName,
+        u.name as picName, u.email as picEmail, u.avatar as picAvatar,
+        c.name as customerName, c.code as customerCode,
+        (SELECT address FROM customer_addresses ca WHERE ca.customerId = c.id ORDER BY ca.isPrimary DESC LIMIT 1) as customerAddress,
+        p.title as projectTitle
+      FROM visits v
+      LEFT JOIN visit_statuses vs ON vs.id = v.statusId
+      LEFT JOIN visit_purposes vp ON vp.id = v.purposeId
+      LEFT JOIN users u ON u.id = v.picId
+      LEFT JOIN customers c ON c.id = v.customerId
+      LEFT JOIN projects p ON p.id = v.relatedProjectId
+      WHERE v.id = ? AND v.tenantId = ?
+    `, [id, targetTenant]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Visit not found' });
+    }
+
+    const visit = rows[0];
+
+    // Fetch participants if any
+    const [parts]: any = await pool.query(`
+      SELECT vp.*, u.name as userName, u.email as userEmail, u.avatar as userAvatar
+      FROM visit_participants vp
+      LEFT JOIN users u ON u.id = vp.userId
+      WHERE vp.visitId = ?
+    `, [id]);
+
+    visit.participants = parts;
+
+    res.json(visit);
+  } catch (err: any) {
+    console.error(`GET /api/visits/${id} error:`, err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// POST /api/visits - Schedule a new visit securely
+visitsRoutes.post('/', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  // Tenant is authoritatively derived from the session, never trusting client body
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const hasPerm = actorRole === 'SUPER_ADMIN' ||
+    actorRole === 'TENANT_ADMIN' ||
+    actorRole === 'SALES_MANAGER' ||
+    actorRole === 'SUPERVISOR' ||
+    actorRole === 'SALES_REP' ||
+    actorPermissions.includes('MANAGE_TASKS') ||
+    actorPermissions.includes('MANAGE_OWN_TASKS') ||
+    actorPermissions.includes('ALL');
+
+  if (!hasPerm) {
+    return res.status(403).json({ error: 'Access denied: Visit scheduling permission required' });
+  }
+
+  const data = req.body || {};
+  const { customerId, visitDate, title, startTime, endTime, location, result, nextAction, notes, relatedProjectId, additionalPicIds } = data;
+
+  // Validate required fields
+  if (!customerId || !String(customerId).trim()) {
+    return res.status(400).json({ error: 'Customer ID is required', code: 'MISSING_CUSTOMER_ID' });
+  }
+  if (!visitDate) {
+    return res.status(400).json({ error: 'Visit date is required', code: 'MISSING_VISIT_DATE' });
+  }
+
+  // Validate customer belongs to targetTenant
+  const [cRows]: any = await pool.query(
+    'SELECT id, name FROM customers WHERE id = ? AND tenantId = ?',
+    [String(customerId).trim(), targetTenant]
+  );
+  if (cRows.length === 0) {
+    return res.status(400).json({ error: 'Customer not found or access denied', code: 'CUSTOMER_NOT_FOUND' });
+  }
+  const customer = cRows[0];
+
+  // Validate PIC assignment
+  const picCandidate = data.picId || actorUserId;
+  const [uRows]: any = await pool.query(`
+    SELECT tu.userId, u.name
+    FROM tenant_users tu
+    JOIN users u ON u.id = tu.userId
+    WHERE tu.tenantId = ? AND tu.userId = ? AND tu.status = 'ACTIVE' AND u.status = 'ACTIVE'
+    LIMIT 1
+  `, [targetTenant, picCandidate]);
+
+  if (uRows.length === 0) {
+    return res.status(400).json({ error: 'Invalid or unauthorized PIC assigned', code: 'CROSS_TENANT_PIC_DENIED' });
+  }
+  const resolvedPicId = uRows[0].userId;
+
+  // Role constraint: SALES_REP can only schedule for themselves
+  if (actorRole === 'SALES_REP' && resolvedPicId !== actorUserId && !actorPermissions.includes('MANAGE_TASKS') && !actorPermissions.includes('ALL')) {
+    return res.status(403).json({ error: 'Sales Rep can only schedule visits for themselves', code: 'DELEGATION_DENIED' });
+  }
+
+  // Validate optional project
+  let resolvedProjectId: string | null = null;
+  const projCandidate = relatedProjectId || data.projectId;
+  if (projCandidate) {
+    const [pRows]: any = await pool.query(
+      'SELECT id FROM projects WHERE id = ? AND tenantId = ? AND customerId = ?',
+      [projCandidate, targetTenant, customer.id]
+    );
+    if (pRows.length > 0) {
+      resolvedProjectId = pRows[0].id;
+    } else {
+      return res.status(400).json({ error: 'Invalid or cross-customer project specified', code: 'INVALID_PROJECT' });
+    }
+  }
+
+  // Resolve statusId
+  let resolvedStatusId = 'VS-1';
+  const statusCandidate = data.statusId || data.status;
+  if (statusCandidate) {
+    const sVal = String(statusCandidate).trim();
+    const [sRows]: any = await pool.query(
+      'SELECT id FROM visit_statuses WHERE id = ? OR code = ? OR name = ? LIMIT 1',
+      [sVal, sVal, sVal]
+    );
+    if (sRows.length > 0) resolvedStatusId = sRows[0].id;
+  }
+
+  // Resolve purposeId
+  let resolvedPurposeId: string | null = null;
+  const purposeCandidate = data.purposeId || data.purpose;
+  if (purposeCandidate) {
+    const pVal = String(purposeCandidate).trim();
+    const [pRows]: any = await pool.query(
+      'SELECT id FROM visit_purposes WHERE id = ? OR code = ? OR name = ? LIMIT 1',
+      [pVal, pVal, pVal]
+    );
+    if (pRows.length > 0) resolvedPurposeId = pRows[0].id;
+  }
+  if (!resolvedPurposeId) {
+    resolvedPurposeId = 'VP-1';
+  }
+
+  const visitId = 'VIS-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+  const visitTitle = (title && String(title).trim()) ? String(title).trim() : `Client Visit - ${customer.name}`;
+  const loc = location ? String(location).trim() : null;
+  const resText = result ? String(result).trim() : null;
+  const nextAct = nextAction ? String(nextAction).trim() : (notes ? String(notes).trim() : null);
+  const sTime = startTime ? String(startTime).trim() : null;
+  const eTime = endTime ? String(endTime).trim() : null;
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    await conn.query(`
+      INSERT INTO visits (
+        id, tenantId, title, customerId, relatedProjectId, purposeId, statusId,
+        visitDate, startTime, endTime, location, result, nextAction, picId, createdAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+    `, [
+      visitId, targetTenant, visitTitle, customer.id, resolvedProjectId, resolvedPurposeId, resolvedStatusId,
+      visitDate, sTime, eTime, loc, resText, nextAct, resolvedPicId
+    ]);
+
+    if (Array.isArray(additionalPicIds) && additionalPicIds.length > 0) {
+      for (const pUserId of additionalPicIds) {
+        if (pUserId && pUserId !== resolvedPicId) {
+          const partId = 'VPART-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+          await conn.query(`
+            INSERT INTO visit_participants (id, visitId, userId, role)
+            VALUES (?, ?, ?, 'PARTICIPANT')
+          `, [partId, visitId, pUserId]);
+        }
+      }
+    }
+
+    await conn.commit();
+
+    await logAudit(
+      targetTenant,
+      actorUserId,
+      'VISIT_CREATED',
+      'Visit',
+      visitId,
+      `Visit '${visitTitle}' scheduled for customer '${customer.name}'`,
+      req.ip,
+      req.get('User-Agent'),
+      'CRM'
+    );
+
+    res.status(201).json({
+      success: true,
+      id: visitId,
+      message: 'Visit scheduled successfully',
+      data: {
+        id: visitId,
+        tenantId: targetTenant,
+        title: visitTitle,
+        customerId: customer.id,
+        customerName: customer.name,
+        picId: resolvedPicId,
+        visitDate,
+        startTime: sTime,
+        endTime: eTime,
+        statusId: resolvedStatusId
+      }
+    });
+  } catch (err: any) {
+    await conn.rollback();
+    console.error('POST /api/visits error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  } finally {
+    conn.release();
+  }
+});
+
+// PUT /api/visits/:id - Update visit
+visitsRoutes.put('/:id', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { id } = req.params;
+  const data = req.body || {};
+
+  try {
+    const [existing]: any = await pool.query('SELECT * FROM visits WHERE id = ? AND tenantId = ?', [id, targetTenant]);
+    if (existing.length === 0) {
+      return res.status(404).json({ error: 'Visit not found' });
+    }
+    const current = existing[0];
+
+    const title = data.title !== undefined ? String(data.title).trim() : current.title;
+    const visitDate = data.visitDate !== undefined ? data.visitDate : current.visitDate;
+    const startTime = data.startTime !== undefined ? data.startTime : current.startTime;
+    const endTime = data.endTime !== undefined ? data.endTime : current.endTime;
+    const location = data.location !== undefined ? data.location : current.location;
+    const result = data.result !== undefined ? data.result : current.result;
+    const nextAction = data.nextAction !== undefined ? data.nextAction : current.nextAction;
+
+    let statusId = current.statusId;
+    if (data.statusId || data.status) {
+      const sVal = String(data.statusId || data.status).trim();
+      const [sRows]: any = await pool.query('SELECT id FROM visit_statuses WHERE id = ? OR code = ? OR name = ? LIMIT 1', [sVal, sVal, sVal]);
+      if (sRows.length > 0) statusId = sRows[0].id;
+    }
+
+    let purposeId = current.purposeId;
+    if (data.purposeId || data.purpose) {
+      const pVal = String(data.purposeId || data.purpose).trim();
+      const [pRows]: any = await pool.query('SELECT id FROM visit_purposes WHERE id = ? OR code = ? OR name = ? LIMIT 1', [pVal, pVal, pVal]);
+      if (pRows.length > 0) purposeId = pRows[0].id;
+    }
+
+    let picId = current.picId;
+    if (data.picId) {
+      const [uRows]: any = await pool.query(`
+        SELECT tu.userId FROM tenant_users tu
+        JOIN users u ON u.id = tu.userId
+        WHERE tu.tenantId = ? AND tu.userId = ? AND tu.status = 'ACTIVE' AND u.status = 'ACTIVE'
+        LIMIT 1
+      `, [targetTenant, data.picId]);
+      if (uRows.length > 0) picId = uRows[0].userId;
+    }
+
+    await pool.query(`
+      UPDATE visits
+      SET title = ?, visitDate = ?, startTime = ?, endTime = ?, location = ?, result = ?, nextAction = ?, statusId = ?, purposeId = ?, picId = ?
+      WHERE id = ? AND tenantId = ?
+    `, [title, visitDate, startTime, endTime, location, result, nextAction, statusId, purposeId, picId, id, targetTenant]);
+
+    await logAudit(
+      targetTenant,
+      actorUserId,
+      'VISIT_UPDATED',
+      'Visit',
+      id,
+      `Visit '${title}' updated successfully`,
+      req.ip,
+      req.get('User-Agent'),
+      'CRM'
+    );
+
+    res.json({ success: true, id });
+  } catch (err: any) {
+    console.error(`PUT /api/visits/${id} error:`, err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// DELETE /api/visits/:id - Delete visit
+visitsRoutes.delete('/:id', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { id } = req.params;
+
+  try {
+    const [existing]: any = await pool.query('SELECT * FROM visits WHERE id = ? AND tenantId = ?', [id, targetTenant]);
+    if (existing.length === 0) {
+      return res.status(404).json({ error: 'Visit not found' });
+    }
+
+    await pool.query('DELETE FROM visit_participants WHERE visitId = ?', [id]);
+    await pool.query('DELETE FROM visits WHERE id = ? AND tenantId = ?', [id, targetTenant]);
+
+    await logAudit(
+      targetTenant,
+      actorUserId,
+      'VISIT_DELETED',
+      'Visit',
+      id,
+      `Visit '${existing[0].title}' deleted`,
+      req.ip,
+      req.get('User-Agent'),
+      'CRM'
+    );
+
+    res.json({ success: true, message: 'Visit deleted successfully' });
+  } catch (err: any) {
+    console.error(`DELETE /api/visits/${id} error:`, err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });

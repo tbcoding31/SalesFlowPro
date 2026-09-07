@@ -124,6 +124,24 @@ export const crmApi = {
     return await res.json();
   },
 
+  createVisit: async (payload: any): Promise<{ success: boolean; data?: Visit; id?: string; error?: string }> => {
+    try {
+      const res = await fetch(`${API_BASE}/visits`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to schedule visit' };
+      }
+      return { success: true, data: data.data, id: data.id };
+    } catch (err: any) {
+      console.error('[crmApi.createVisit error]', err);
+      return { success: false, error: err.message || 'Network error' };
+    }
+  },
+
   fetchFollowUps: async (params?: QueryPaginationParams): Promise<PaginatedResponse<FollowUp>> => {
     const q = new URLSearchParams();
     if (params) {

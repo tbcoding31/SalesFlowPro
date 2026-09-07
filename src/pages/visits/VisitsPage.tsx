@@ -597,7 +597,7 @@ export const VisitsPage: React.FC = () => {
             className="px-4 py-2 bg-[#4744e5] hover:bg-[#322fce] text-white text-xs font-bold rounded-xl shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer font-['Hanken_Grotesk']"
           >
             <span className="material-symbols-outlined text-[18px]">add</span>
-            <span>+ Schedule Visit</span>
+            <span>Schedule Visit</span>
           </button>
         </div>
       </div>
