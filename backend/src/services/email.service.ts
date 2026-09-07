@@ -382,6 +382,7 @@ export async function sendEmail(options: SendEmailOptions): Promise<SendEmailRes
 
   const { config, secrets } = loaded;
   const transporter = createSmtpTransporter(config, secrets);
+  console.log(`[SMTP-TRACE] transporter created host=${config.host}:${config.port} secure=${config.secure}`);
 
   const authUser = (secrets.username || config.username || '').trim();
   // Ensure the sender address is aligned with the authenticated SMTP account
@@ -389,6 +390,7 @@ export async function sendEmail(options: SendEmailOptions): Promise<SendEmailRes
   const formatFrom = (addr: string) => (addr.includes('<') ? addr : `"SalesFlow Pro" <${addr}>`);
   const from = formatFrom(senderEmail);
 
+  console.log(`[SMTP-TRACE] calling transporter.sendMail - subject="${options.subject}"`);
   const info: any = await transporter.sendMail({
     from,
     to: options.to,
@@ -401,6 +403,7 @@ export async function sendEmail(options: SendEmailOptions): Promise<SendEmailRes
       to: Array.isArray(options.to) ? options.to : [options.to]
     }
   });
+  console.log(`[SMTP-TRACE] transporter.sendMail resolved - messageId=${info.messageId} response="${info.response}" accepted=${info.accepted?.length || 0} rejected=${info.rejected?.length || 0}`);
 
   if (Array.isArray(info.rejected) && info.rejected.length > 0 && (!info.accepted || info.accepted.length === 0)) {
     const error: any = new Error(`All recipients were rejected by SMTP provider: ${info.rejected.join(', ')}`);

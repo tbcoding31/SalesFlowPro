@@ -239,6 +239,19 @@ function escapeHtml(str: string): string {
     .replace(/'/g, '&#039;');
 }
 
+function maskEmail(email: string): string {
+  if (!email || !email.includes('@')) return '***';
+  const [local, domain] = email.split('@');
+  const maskedLocal = local.length <= 2 ? local[0] + '***' : local[0] + '***' + local[local.length - 1];
+  return `${maskedLocal}@${domain}`;
+}
+
+function extractQueueId(response?: string): string | null {
+  if (!response) return null;
+  const match = response.match(/id=([a-zA-Z0-9_-]+)/);
+  return match ? match[1] : null;
+}
+
 async function getPasswordPolicy(): Promise<{ minLength: number; requireUppercase: boolean; requireNumbers: boolean; requireSpecialChars: boolean }> {
   const [rows]: any = await pool.query('SELECT settingKey, settingValue FROM system_settings WHERE category = "security"');
   const policy = {
@@ -257,12 +270,19 @@ async function getPasswordPolicy(): Promise<{ minLength: number; requireUppercas
 
 // POST /forgot-password
 authRoutes.post('/forgot-password', async (req: any, res: any) => {
+  const requestId = 'REQ-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex');
+  const requestTimestamp = new Date().toISOString();
+  res.setHeader('X-Request-Id', requestId);
+
   try {
     const rawClientIp = req.ip || (req.socket && req.socket.remoteAddress) || '127.0.0.1';
     const clientIp = normalizeIp(rawClientIp) || '127.0.0.1';
+    console.log(`[FORGOT-PW-TRACE] [${requestId}] [${requestTimestamp}] REQUEST_RECEIVED clientIp=${clientIp}`);
+
     const rateLimitCheck = checkForgotPasswordRateLimit(clientIp);
     if (!rateLimitCheck.allowed) {
       const retryAfter = rateLimitCheck.retryAfterSeconds || 60;
+      console.log(`[FORGOT-PW-TRACE] [${requestId}] RATE_LIMITED retryAfterSeconds=${retryAfter}`);
       res.setHeader('Retry-After', String(retryAfter));
       return res.status(429).json({
         success: false,
@@ -274,6 +294,7 @@ authRoutes.post('/forgot-password', async (req: any, res: any) => {
 
     const { email } = req.body || {};
     if (!email || typeof email !== 'string') {
+      console.log(`[FORGOT-PW-TRACE] [${requestId}] INVALID_EMAIL missing`);
       return res.status(400).json({
         success: false,
         message: 'Email address is required.',
@@ -284,6 +305,7 @@ authRoutes.post('/forgot-password', async (req: any, res: any) => {
     const normalizedEmail = email.trim().toLowerCase();
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(normalizedEmail) || normalizedEmail.length > 255) {
+      console.log(`[FORGOT-PW-TRACE] [${requestId}] INVALID_EMAIL format`);
       return res.status(400).json({
         success: false,
         message: 'Invalid email address format.',
@@ -298,7 +320,9 @@ authRoutes.post('/forgot-password', async (req: any, res: any) => {
 
     // Lookup user in database
     const [userRows]: any = await pool.query('SELECT * FROM users WHERE LOWER(email) = ?', [normalizedEmail]);
+    console.log(`[FORGOT-PW-TRACE] [${requestId}] USER_LOOKUP found=${userRows.length > 0} maskedRecipient=${maskEmail(normalizedEmail)}`);
     if (userRows.length === 0) {
+      console.log(`[FORGOT-PW-TRACE] [${requestId}] USER_NOT_FOUND (returning anti-enumeration 200)`);
       // Return identical public response to prevent enumeration
       return res.json(publicResponse);
     }
@@ -339,6 +363,7 @@ authRoutes.post('/forgot-password', async (req: any, res: any) => {
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [tokenId, user.id, tenantId, tokenHash, expiresAt, clientIp, req.get('User-Agent') || '']
     );
+    console.log(`[FORGOT-PW-TRACE] [${requestId}] TOKEN_CREATED tokenId=${tokenId} userId=${user.id}`);
 
     // Log token creation audit event
     await logAudit(
@@ -359,6 +384,7 @@ authRoutes.post('/forgot-password', async (req: any, res: any) => {
 
     // Send real email via email.service
     try {
+      console.log(`[FORGOT-PW-TRACE] [${requestId}] SEND_EMAIL_ENTERED`);
       const emailResult = await sendEmail({
         to: user.email,
         subject: 'Password Reset Request - SalesFlow Pro',
@@ -392,6 +418,9 @@ authRoutes.post('/forgot-password', async (req: any, res: any) => {
         `
       });
 
+      const queueId = extractQueueId(emailResult.response);
+      console.log(`[FORGOT-PW-TRACE] [${requestId}] SEND_EMAIL_SUCCESS messageId=${emailResult.messageId} accepted=${emailResult.accepted?.length || 0} rejected=${emailResult.rejected?.length || 0} providerResponse="${emailResult.response}" queueId=${queueId || 'none'}`);
+
       await logAudit(
         tenantId,
         user.id,
@@ -404,7 +433,7 @@ authRoutes.post('/forgot-password', async (req: any, res: any) => {
         'AUTH'
       );
     } catch (emailErr: any) {
-      console.error('[Forgot Password] Email delivery failed:', emailErr.message);
+      console.error(`[FORGOT-PW-TRACE] [${requestId}] SEND_EMAIL_FAILED errorCode=${emailErr.code || 'SMTP_ERROR'} errorMessage="${emailErr.message || 'unknown'}"`);
       // Revoke token if email delivery failed
       await pool.query('UPDATE password_reset_tokens SET revokedAt = NOW() WHERE id = ?', [tokenId]);
       await logAudit(
@@ -420,9 +449,10 @@ authRoutes.post('/forgot-password', async (req: any, res: any) => {
       );
     }
 
+    console.log(`[FORGOT-PW-TRACE] [${requestId}] PUBLIC_RESPONSE_SENT status=200`);
     return res.json(publicResponse);
   } catch (err: any) {
-    console.error('[Forgot Password Error]:', err);
+    console.error(`[FORGOT-PW-TRACE] [${requestId}] INTERNAL_ERROR:`, err);
     res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
