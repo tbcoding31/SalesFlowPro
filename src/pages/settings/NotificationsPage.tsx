@@ -3,7 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 
 export const NotificationsPage: React.FC = () => {
   const [notifications, setNotifications] = useState<any[]>([]);
-  const { authState } = useAuth();
+  const { user } = useAuth();
 
   const fetchNotifs = async () => {
     try {

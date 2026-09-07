@@ -773,7 +773,7 @@ export const TenantDetailPage: React.FC = () => {
                           </span>
                         </td>
 
-                        <td className="px-6 py-3.5 font-bold text-[#1a1c1c]">{u.taskCount || 0}</td>
+                        <td className="px-6 py-3.5 font-bold text-[#1a1c1c]">{(u as any).taskCount || 0}</td>
 
                         <td className="px-6 py-3.5 text-[#767587] font-medium">
 {formatDateTime(u.lastLoginAt)}
