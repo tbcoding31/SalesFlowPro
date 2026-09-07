@@ -345,70 +345,35 @@ authRoutes.post('/forgot-password', async (req: any, res: any) => {
     try {
       const emailResult = await sendEmail({
         to: user.email,
-        subject: 'Reset your SalesFlow Pro password',
-        text: `Hello ${user.name || 'there'},\n\nWe received a request to reset the password for your SalesFlow Pro account.\n\nTo reset your password, please click the link below or copy and paste it into your browser:\n${resetUrl}\n\nThis link will expire in ${expiryMinutes} minutes and can only be used once.\n\nIf you did not request a password reset, you can safely ignore this email. Your password will remain unchanged.\n\nSecurity Notice: SalesFlow Pro will never ask for your password or credentials via email.\n\n— SalesFlow Pro Team`,
-        html: `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Reset your SalesFlow Pro password</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b;">
-  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; padding: 40px 0;">
-    <tr>
-      <td align="center">
-        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 580px; background-color: #ffffff; border-radius: 8px; border: 1px solid #e2e8f0; overflow: hidden; text-align: left;">
-          <!-- Header -->
-          <tr>
-            <td style="padding: 28px 32px 20px 32px; border-bottom: 1px solid #f1f5f9;">
-              <h1 style="margin: 0; font-size: 22px; font-weight: 700; color: #4338ca; letter-spacing: -0.3px;">SalesFlow Pro</h1>
-            </td>
-          </tr>
-          <!-- Content -->
-          <tr>
-            <td style="padding: 32px;">
-              <h2 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #0f172a;">Reset your password</h2>
-              <p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.6; color: #334155;">Hello <strong>${escapeHtml(user.name || 'there')}</strong>,</p>
-              <p style="margin: 0 0 24px 0; font-size: 15px; line-height: 1.6; color: #334155;">
-                We received a request to reset the password for your SalesFlow Pro account. You can reset your password by clicking the button below:
+        subject: 'Password Reset Request - SalesFlow Pro',
+        text: `Hello ${user.name || 'there'},\n\nYou requested to reset your password for your SalesFlow Pro account.\nPlease click the link below to set a new password:\n\n${resetUrl}\n\nThis link will expire in ${expiryMinutes} minutes.\n\nIf you did not request this, please ignore this email.\n\nSalesFlow Pro Team`,
+        html: `
+          <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 580px; margin: 0 auto; padding: 32px 24px; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px;">
+            <div style="text-align: center; margin-bottom: 28px;">
+              <h1 style="color: #4744e5; margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.5px;">SalesFlow Pro</h1>
+              <p style="color: #64748b; font-size: 13px; margin-top: 4px;">Enterprise CRM Password Recovery</p>
+            </div>
+            <div style="padding: 24px 0; border-top: 1px solid #f1f5f9; border-bottom: 1px solid #f1f5f9;">
+              <h2 style="font-size: 18px; font-weight: 700; color: #0f172a; margin-top: 0; margin-bottom: 12px;">Reset Your Password</h2>
+              <p style="color: #334155; font-size: 14px; line-height: 1.6; margin: 0 0 16px 0;">Hello <strong>${escapeHtml(user.name || 'there')}</strong>,</p>
+              <p style="color: #334155; font-size: 14px; line-height: 1.6; margin: 0 0 24px 0;">
+                We received a request to reset the password for your SalesFlow Pro account. Click the button below to proceed:
               </p>
-              <!-- CTA Button -->
-              <table role="presentation" border="0" cellspacing="0" cellpadding="0" style="margin: 0 0 24px 0;">
-                <tr>
-                  <td align="center" style="border-radius: 6px; background-color: #4338ca;">
-                    <a href="${resetUrl}" target="_blank" rel="noopener noreferrer" style="font-size: 15px; font-weight: 600; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 6px; display: inline-block;">Reset Password</a>
-                  </td>
-                </tr>
-              </table>
-              <p style="margin: 0 0 8px 0; font-size: 13px; line-height: 1.5; color: #64748b;">
-                This link will expire in <strong>${expiryMinutes} minutes</strong> and can only be used once.
+              <div style="text-align: center; margin: 32px 0;">
+                <a href="${resetUrl}" style="background-color: #4744e5; color: #ffffff; padding: 12px 32px; text-decoration: none; font-weight: 700; font-size: 14px; border-radius: 8px; display: inline-block;">Set New Password</a>
+              </div>
+              <p style="color: #64748b; font-size: 12px; line-height: 1.5; margin: 0 0 8px 0;">
+                This link is valid for <strong>${expiryMinutes} minutes</strong> and can only be used once.
               </p>
-              <p style="margin: 0 0 24px 0; font-size: 13px; line-height: 1.5; color: #64748b;">
+              <p style="color: #64748b; font-size: 12px; line-height: 1.5; margin: 0;">
                 If you did not request a password reset, you can safely ignore this email. Your password will remain unchanged.
               </p>
-              <!-- Fallback URL -->
-              <div style="padding-top: 16px; border-top: 1px solid #f1f5f9;">
-                <p style="margin: 0 0 6px 0; font-size: 12px; color: #64748b;">If the button above does not work, copy and paste this URL into your web browser:</p>
-                <p style="margin: 0; font-size: 12px; word-break: break-all;"><a href="${resetUrl}" style="color: #4338ca; text-decoration: underline;">${resetUrl}</a></p>
-              </div>
-              <div style="margin-top: 24px; padding: 12px; background-color: #f8fafc; border-radius: 6px; border: 1px solid #e2e8f0;">
-                <p style="margin: 0; font-size: 12px; line-height: 1.4; color: #64748b;"><strong>Security Notice:</strong> SalesFlow Pro will never ask you to disclose your password via email.</p>
-              </div>
-            </td>
-          </tr>
-          <!-- Footer -->
-          <tr>
-            <td style="padding: 20px 32px; background-color: #f8fafc; border-top: 1px solid #f1f5f9; text-align: center;">
-              <p style="margin: 0; font-size: 12px; color: #94a3b8;">&copy; SalesFlow Pro. All rights reserved.</p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`
+            </div>
+            <div style="text-align: center; margin-top: 24px; color: #94a3b8; font-size: 11px;">
+              <p style="margin: 0;">© SalesFlow Pro Enterprise CRM. All rights reserved.</p>
+            </div>
+          </div>
+        `
       });
 
       await logAudit(
