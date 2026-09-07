@@ -137,9 +137,9 @@ export const CustomersListPage: React.FC = () => {
   const [customerTypes, setCustomerTypes] = useState<MasterDataItem[]>([]);
 
   React.useEffect(() => {
-    masterDataApi.fetchMasterData('customer_statuses', tenantId).then(setCustomerStatuses);
-    masterDataApi.fetchMasterData('customer_types', tenantId).then(setCustomerTypes);
-  }, [tenantId]);
+    masterDataApi.fetchMasterData('customer_statuses').then(setCustomerStatuses);
+    masterDataApi.fetchMasterData('customer_types').then(setCustomerTypes);
+  }, []);
 
   const handleOpenEditModal = (item: ExtendedCustomerItem) => {
     setEditingCustomer(item);

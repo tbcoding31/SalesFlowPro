@@ -38,8 +38,8 @@ export const EditCustomerPage: React.FC = () => {
     usersApi.fetchUsers(tenantId, true).then(setAssignableUsers);
     usersApi.fetchUsers(tenantId).then(setAllUsers);
 
-    masterDataApi.fetchMasterData('customer_types', tenantId).then(setMasterTypes);
-    masterDataApi.fetchMasterData('customer_statuses', tenantId).then(setMasterStatuses);
+    masterDataApi.fetchMasterData('customer_types').then(setMasterTypes);
+    masterDataApi.fetchMasterData('customer_statuses').then(setMasterStatuses);
   }, [id, tenantId]);
 
   const [contactPerson, setContactPerson] = useState('');

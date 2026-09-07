@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { pool } from '../db';
+import { validateTargetTenant } from '../utils/scope';
 
 export const masterDataRoutes = Router();
 
@@ -14,6 +15,8 @@ const ALLOWED_PLATFORM_CATEGORIES = [
   'departments',
   'positions'
 ];
+
+// --- SUPER ADMIN PLATFORM MASTER DATA ENDPOINTS ---
 
 masterDataRoutes.get('/platform/:category', async (req: any, res: any) => {
   const actorRole = (req as any).userRole;
@@ -150,7 +153,6 @@ masterDataRoutes.delete('/platform/:category/:id', async (req: any, res: any) =>
   const id = req.params.id;
 
   try {
-    // Basic referential protection could go here, but for now we execute DELETE
     let query = `DELETE FROM ${category} WHERE id = ?`;
     if (category === 'departments' || category === 'positions') {
       query += ' AND tenantId IS NULL';
@@ -165,3 +167,195 @@ masterDataRoutes.delete('/platform/:category/:id', async (req: any, res: any) =>
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// --- TENANT-SCOPED MASTER DATA ENDPOINTS ---
+
+const handleTenantGetMasterData = async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const category = req.params.category;
+  if (!ALLOWED_PLATFORM_CATEGORIES.includes(category)) {
+    return res.status(400).json({ error: 'Invalid master data category' });
+  }
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  try {
+    if (category === 'departments' || category === 'positions') {
+      const [rows]: any = await pool.query(
+        `SELECT * FROM ${category} WHERE tenantId = ? ORDER BY id ASC`,
+        [targetTenant]
+      );
+      return res.json(rows);
+    }
+
+    let orderBy = 'id ASC';
+    if (category === 'project_stages') {
+      orderBy = 'displayOrder ASC, id ASC';
+    }
+    const [rows]: any = await pool.query(`SELECT * FROM ${category} ORDER BY ${orderBy}`);
+    res.json(rows);
+  } catch (err: any) {
+    console.error(`Error GET /api/master-data/${category}:`, err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+masterDataRoutes.get('/tenant/:category', handleTenantGetMasterData);
+masterDataRoutes.get('/:category', handleTenantGetMasterData);
+
+const handleTenantPostMasterData = async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const category = req.params.category;
+  if (!ALLOWED_PLATFORM_CATEGORIES.includes(category)) {
+    return res.status(400).json({ error: 'Invalid master data category' });
+  }
+
+  if (category !== 'departments' && category !== 'positions') {
+    return res.status(403).json({ error: 'Reference master data can only be modified by platform administrators.' });
+  }
+
+  const hasPerm = actorRole === 'SUPER_ADMIN' || actorRole === 'TENANT_ADMIN' || actorPermissions.includes('MANAGE_TENANT');
+  if (!hasPerm) {
+    return res.status(403).json({ error: 'Access denied. Management capability required.' });
+  }
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const data = req.body;
+  if (!data.id) return res.status(400).json({ error: 'Missing ID' });
+
+  try {
+    if (category === 'departments') {
+      await pool.query(
+        'INSERT INTO departments (id, tenantId, name, description) VALUES (?, ?, ?, ?)',
+        [data.id, targetTenant, data.name, data.description || null]
+      );
+    } else if (category === 'positions') {
+      await pool.query(
+        'INSERT INTO positions (id, tenantId, name, level) VALUES (?, ?, ?, ?)',
+        [data.id, targetTenant, data.name, data.level || 1]
+      );
+    }
+    res.status(201).json({ success: true, id: data.id });
+  } catch (err: any) {
+    console.error(`Error POST /api/master-data/${category}:`, err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+const handleTenantPutMasterData = async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const category = req.params.category;
+  if (!ALLOWED_PLATFORM_CATEGORIES.includes(category)) {
+    return res.status(400).json({ error: 'Invalid category' });
+  }
+
+  if (category !== 'departments' && category !== 'positions') {
+    return res.status(403).json({ error: 'Reference master data can only be modified by platform administrators.' });
+  }
+
+  const hasPerm = actorRole === 'SUPER_ADMIN' || actorRole === 'TENANT_ADMIN' || actorPermissions.includes('MANAGE_TENANT');
+  if (!hasPerm) {
+    return res.status(403).json({ error: 'Access denied. Management capability required.' });
+  }
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const id = req.params.id;
+  const data = req.body;
+
+  try {
+    if (category === 'departments') {
+      await pool.query(
+        'UPDATE departments SET name = ?, description = ? WHERE id = ? AND tenantId = ?',
+        [data.name, data.description || null, id, targetTenant]
+      );
+    } else if (category === 'positions') {
+      await pool.query(
+        'UPDATE positions SET name = ?, level = ? WHERE id = ? AND tenantId = ?',
+        [data.name, data.level || 1, id, targetTenant]
+      );
+    }
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error(`Error PUT /api/master-data/${category}/${id}:`, err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+const handleTenantDeleteMasterData = async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const category = req.params.category;
+  if (!ALLOWED_PLATFORM_CATEGORIES.includes(category)) {
+    return res.status(400).json({ error: 'Invalid category' });
+  }
+
+  if (category !== 'departments' && category !== 'positions') {
+    return res.status(403).json({ error: 'Reference master data can only be modified by platform administrators.' });
+  }
+
+  const hasPerm = actorRole === 'SUPER_ADMIN' || actorRole === 'TENANT_ADMIN' || actorPermissions.includes('MANAGE_TENANT');
+  if (!hasPerm) {
+    return res.status(403).json({ error: 'Access denied. Management capability required.' });
+  }
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const id = req.params.id;
+
+  try {
+    await pool.query(
+      `DELETE FROM ${category} WHERE id = ? AND tenantId = ?`,
+      [id, targetTenant]
+    );
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error(`Error DELETE /api/master-data/${category}/${id}:`, err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+masterDataRoutes.post('/tenant/:category', handleTenantPostMasterData);
+masterDataRoutes.post('/:category', handleTenantPostMasterData);
+
+masterDataRoutes.put('/tenant/:category/:id', handleTenantPutMasterData);
+masterDataRoutes.put('/:category/:id', handleTenantPutMasterData);
+
+masterDataRoutes.delete('/tenant/:category/:id', handleTenantDeleteMasterData);
+masterDataRoutes.delete('/:category/:id', handleTenantDeleteMasterData);
+

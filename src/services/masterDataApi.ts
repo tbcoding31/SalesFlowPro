@@ -46,12 +46,12 @@ const mapToDb = (category: MasterDataItem['category'], item: MasterDataItem, ten
 };
 
 export const masterDataApi = {
-  fetchMasterData: async (category: MasterDataItem['category'], tenantId: string): Promise<MasterDataItem[]> => {
+  fetchMasterData: async (category: MasterDataItem['category'], tenantId?: string): Promise<MasterDataItem[]> => {
     const table = getTableName(category);
     try {
       const url = tenantId === 'platform' 
         ? `${API_BASE}/master-data/platform/${table}` 
-        : `${API_BASE}/${table}?tenantId=${tenantId}`;
+        : `${API_BASE}/master-data/${table}`;
       const res = await fetch(url, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('sfp_auth_token')}` }
       });
@@ -64,11 +64,19 @@ export const masterDataApi = {
     }
   },
 
-  saveMasterDataItem: async (item: MasterDataItem, tenantId: string, isNew: boolean): Promise<boolean> => {
+  fetchTenantMasterData: async (category: MasterDataItem['category']): Promise<MasterDataItem[]> => {
+    return masterDataApi.fetchMasterData(category);
+  },
+
+  fetchPlatformMasterData: async (category: MasterDataItem['category']): Promise<MasterDataItem[]> => {
+    return masterDataApi.fetchMasterData(category, 'platform');
+  },
+
+  saveMasterDataItem: async (item: MasterDataItem, tenantId?: string, isNew: boolean = false): Promise<boolean> => {
     const table = getTableName(item.category);
-    const dbRow = mapToDb(item.category, item, tenantId);
+    const dbRow = mapToDb(item.category, item, tenantId || '');
     try {
-      let url = isNew ? `${API_BASE}/${table}` : `${API_BASE}/${table}/${item.id}`;
+      let url = isNew ? `${API_BASE}/master-data/${table}` : `${API_BASE}/master-data/${table}/${item.id}`;
       if (tenantId === 'platform') {
         url = isNew ? `${API_BASE}/master-data/platform/${table}` : `${API_BASE}/master-data/platform/${table}/${item.id}`;
       }
@@ -89,7 +97,7 @@ export const masterDataApi = {
   deleteMasterDataItem: async (category: MasterDataItem['category'], id: string, tenantId?: string): Promise<boolean> => {
     const table = getTableName(category);
     try {
-      let url = `${API_BASE}/${table}/${id}`;
+      let url = `${API_BASE}/master-data/${table}/${id}`;
       if (tenantId === 'platform') {
         url = `${API_BASE}/master-data/platform/${table}/${id}`;
       }

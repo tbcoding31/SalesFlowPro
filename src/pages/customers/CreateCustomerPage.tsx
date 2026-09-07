@@ -34,13 +34,13 @@ export const CreateCustomerPage: React.FC = () => {
 
     crmApi.fetchCollection<Task>('tasks', tenantId).then(setTasks);
 
-    masterDataApi.fetchMasterData('customer_types', tenantId).then(data => {
+    masterDataApi.fetchMasterData('customer_types').then(data => {
       setMasterTypes(data);
       const def = data.find(d => d.isDefault);
       if (def) setCustomerType(def.codeValue);
       else if (data.length > 0) setCustomerType(data[0].codeValue);
     });
-    masterDataApi.fetchMasterData('customer_statuses', tenantId).then(data => {
+    masterDataApi.fetchMasterData('customer_statuses').then(data => {
       setMasterStatuses(data);
       const def = data.find(d => d.isDefault);
       if (def) setCustomerStatus(def.codeValue);
