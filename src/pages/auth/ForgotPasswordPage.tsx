@@ -26,8 +26,13 @@ export const ForgotPasswordPage: React.FC = () => {
 
       const data = await res.json();
       if (!res.ok && res.status !== 200) {
-        if (data.code === 'RATE_LIMITED') {
-          setErrorMessage(data.message || 'Too many password reset requests. Please try again later.');
+        if (data.code === 'RATE_LIMITED' || data.code === 'PASSWORD_RESET_RATE_LIMITED') {
+          if (data.retryAfterSeconds) {
+            const minutes = Math.ceil(data.retryAfterSeconds / 60);
+            setErrorMessage(`Too many reset requests. Please wait approximately ${minutes} minute${minutes > 1 ? 's' : ''} before trying again.`);
+          } else {
+            setErrorMessage(data.message || 'Too many password reset requests. Please try again later.');
+          }
           return;
         }
         if (data.code === 'INVALID_EMAIL') {

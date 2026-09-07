@@ -182,20 +182,52 @@ authRoutes.post('/logout', async (req: any, res: any) => {
   }
 });
 
-// Rate limiter helper for forgot-password: max 5 requests per 15 minutes per IP
+// Configurable rate limiter helper for forgot-password
+interface RateLimitResult {
+  allowed: boolean;
+  retryAfterSeconds?: number;
+}
+
 const forgotPasswordAttempts = new Map<string, number[]>();
 
-function checkForgotPasswordRateLimit(ip: string): boolean {
+export function getForgotPasswordRateLimitConfig(): { windowMs: number; maxRequests: number; windowMinutes: number } {
+  const isProd = process.env.NODE_ENV === 'production';
+  const defaultWindowMinutes = 15;
+  const defaultMaxRequests = isProd ? 5 : 20;
+
+  const envWindow = Number(process.env.PASSWORD_RESET_RATE_LIMIT_WINDOW_MINUTES);
+  const envMax = Number(process.env.PASSWORD_RESET_RATE_LIMIT_MAX_REQUESTS);
+
+  const windowMinutes = (!isNaN(envWindow) && envWindow >= 1 && envWindow <= 1440) ? envWindow : defaultWindowMinutes;
+  const maxRequests = (!isNaN(envMax) && envMax >= 1 && envMax <= 1000) ? envMax : defaultMaxRequests;
+
+  return {
+    windowMinutes,
+    windowMs: windowMinutes * 60 * 1000,
+    maxRequests
+  };
+}
+
+export function checkForgotPasswordRateLimit(ip: string): RateLimitResult {
   const now = Date.now();
-  const windowMs = 15 * 60 * 1000;
+  const { windowMs, maxRequests } = getForgotPasswordRateLimitConfig();
   const attempts = forgotPasswordAttempts.get(ip) || [];
   const recent = attempts.filter(ts => now - ts < windowMs);
-  if (recent.length >= 5) {
-    return false;
+
+  if (recent.length >= maxRequests) {
+    const oldest = Math.min(...recent);
+    const retryAfterMs = (oldest + windowMs) - now;
+    const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+    return { allowed: false, retryAfterSeconds };
   }
+
   recent.push(now);
   forgotPasswordAttempts.set(ip, recent);
-  return true;
+  return { allowed: true };
+}
+
+export function resetForgotPasswordRateLimits(): void {
+  forgotPasswordAttempts.clear();
 }
 
 function escapeHtml(str: string): string {
@@ -226,13 +258,17 @@ async function getPasswordPolicy(): Promise<{ minLength: number; requireUppercas
 // POST /forgot-password
 authRoutes.post('/forgot-password', async (req: any, res: any) => {
   try {
-    const rawClientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip;
+    const rawClientIp = req.ip || (req.socket && req.socket.remoteAddress) || '127.0.0.1';
     const clientIp = normalizeIp(rawClientIp) || '127.0.0.1';
-    if (!checkForgotPasswordRateLimit(clientIp)) {
+    const rateLimitCheck = checkForgotPasswordRateLimit(clientIp);
+    if (!rateLimitCheck.allowed) {
+      const retryAfter = rateLimitCheck.retryAfterSeconds || 60;
+      res.setHeader('Retry-After', String(retryAfter));
       return res.status(429).json({
         success: false,
+        code: 'PASSWORD_RESET_RATE_LIMITED',
         message: 'Too many password reset requests. Please try again later.',
-        code: 'RATE_LIMITED'
+        retryAfterSeconds: retryAfter
       });
     }
 
