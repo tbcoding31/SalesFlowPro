@@ -49,6 +49,7 @@ app.use('/api/projects', authMiddleware, tenantMiddleware, projectsRoutes);
 app.use('/api/tasks', authMiddleware, tenantMiddleware, tasksRoutes);
 app.use('/api/visits', authMiddleware, tenantMiddleware, visitsRoutes);
 app.use('/api/followups', authMiddleware, tenantMiddleware, followupsRoutes);
+app.use('/api/follow_ups', authMiddleware, tenantMiddleware, followupsRoutes);
 app.use('/api/timeline', authMiddleware, tenantMiddleware, timelineRoutes);
 app.use('/api/sync', authMiddleware, tenantMiddleware, syncRoutes);
 app.use('/api/sales', authMiddleware, tenantMiddleware, salesRoutes);

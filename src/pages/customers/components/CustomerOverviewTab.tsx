@@ -3,6 +3,7 @@ import { crmApi } from '../../../services/crmApi';
 import React, { useState, useEffect } from 'react';
 import { Customer, Visit, Task, Project, Activity, AttentionSignal, ProjectAttentionSummary } from '../../../types';
 import { CustomerAttentionTab } from './CustomerAttentionTab';
+import { formatDateTime, formatDate } from '../../../utils/formatters';
 
 export interface CustomerOverviewSummaryMetrics {
   totalVisits: number;
@@ -275,23 +276,28 @@ export const CustomerOverviewTab: React.FC<CustomerOverviewTabProps> = ({
               </div>
 
               <div className="space-y-3">
-                {activities.slice(0, 4).map((act) => (
-                  <div key={act.id} className="p-3 bg-[#f9f9f9] rounded-lg border border-[#E1E1E1] text-xs flex gap-3">
-                    <div className="w-8 h-8 rounded-full bg-[#4744e5]/10 text-[#4744e5] flex items-center justify-center shrink-0">
-                      <span className="material-symbols-outlined text-[16px]">
-                        {act.type === 'VISIT' ? 'route' : act.type === 'CALL' ? 'call' : act.type === 'NOTE' ? 'edit_note' : 'task_alt'}
-                      </span>
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex justify-between items-start">
-                        <span className="font-bold text-[#1a1c1c]">{act.subject}</span>
-                        <span className="text-[10px] text-[#767587] font-mono">{act.occurredAt}</span>
+                {activities.slice(0, 4).map((act: any) => {
+                  const itemKey = act.stableEventKey || act.id || act.sourceId || `${act.eventType || act.type || 'ACT'}-${act.eventTimestamp || act.occurredAt}`;
+                  const iconType = String(act.type || act.eventType || '').toUpperCase();
+                  const icon = iconType === 'VISIT' ? 'route' : iconType === 'CALL' ? 'call' : iconType === 'NOTE' ? 'edit_note' : iconType === 'CUSTOMER' ? 'corporate_fare' : 'task_alt';
+                  return (
+                    <div key={itemKey} className="p-3 bg-[#f9f9f9] rounded-lg border border-[#E1E1E1] text-xs flex gap-3">
+                      <div className="w-8 h-8 rounded-full bg-[#4744e5]/10 text-[#4744e5] flex items-center justify-center shrink-0">
+                        <span className="material-symbols-outlined text-[16px]">
+                          {icon}
+                        </span>
                       </div>
-                      <p className="text-[11px] text-[#767587] mt-0.5">{act.description}</p>
-                      <span className="text-[10px] text-[#4744e5] font-semibold mt-1 block">By {act.userName}</span>
+                      <div className="flex-1">
+                        <div className="flex justify-between items-start">
+                          <span className="font-bold text-[#1a1c1c]">{act.subject || act.title}</span>
+                          <span className="text-[10px] text-[#767587] font-mono">{formatDateTime(act.occurredAt || act.eventTimestamp)}</span>
+                        </div>
+                        <p className="text-[11px] text-[#767587] mt-0.5">{act.description || act.details}</p>
+                        <span className="text-[10px] text-[#4744e5] font-semibold mt-1 block">By {act.userName || act.picName || 'System'}</span>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
@@ -325,13 +331,13 @@ export const CustomerOverviewTab: React.FC<CustomerOverviewTabProps> = ({
                   <div className="text-center py-6 text-[#767587] text-sm">No upcoming visits</div>
                 ) : (
                   localVisits.map((v: any) => (
-                    <div key={v.id} className="p-3 bg-[#f9f9f9] rounded-lg border border-[#E1E1E1] text-xs flex justify-between items-center">
+                    <div key={v.id || `visit-${v.visitDate}-${v.title}`} className="p-3 bg-[#f9f9f9] rounded-lg border border-[#E1E1E1] text-xs flex justify-between items-center">
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="px-1.5 py-0.5 bg-[#e6f0ff] text-[#0052cc] text-[9px] font-bold rounded">VISIT</span>
                           <span className="font-bold text-[#1a1c1c]">{v.title}</span>
                         </div>
-                        <div className="text-[#767587] mt-1">{new Date(v.visitDate).toLocaleDateString()}</div>
+                        <div className="text-[#767587] mt-1">{formatDate(v.visitDate)}</div>
                       </div>
                       <button onClick={onViewVisits} className="text-[#0052cc] font-bold hover:underline">View</button>
                     </div>
@@ -344,13 +350,13 @@ export const CustomerOverviewTab: React.FC<CustomerOverviewTabProps> = ({
                   <div className="text-center py-6 text-[#767587] text-sm">No upcoming tasks</div>
                 ) : (
                   localTasks.map((t: any) => (
-                    <div key={t.id} className="p-3 bg-[#f9f9f9] rounded-lg border border-[#E1E1E1] text-xs flex justify-between items-center">
+                    <div key={t.id || `task-${t.dueDate}-${t.title}`} className="p-3 bg-[#f9f9f9] rounded-lg border border-[#E1E1E1] text-xs flex justify-between items-center">
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="px-1.5 py-0.5 bg-slate-200 text-slate-700 text-[9px] font-bold rounded">TASK</span>
                           <span className="font-bold text-[#1a1c1c]">{t.title}</span>
                         </div>
-                        <div className="text-[#767587] mt-1">{new Date(t.dueDate).toLocaleDateString()}</div>
+                        <div className="text-[#767587] mt-1">{formatDate(t.dueDate)}</div>
                       </div>
                       <button onClick={onViewTasks} className="text-[#0052cc] font-bold hover:underline">View</button>
                     </div>
@@ -392,7 +398,7 @@ export const CustomerOverviewTab: React.FC<CustomerOverviewTabProps> = ({
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {projects.map((opp) => (
-                  <div key={opp.id} className="p-4 bg-white rounded-xl border border-[#E1E1E1] hover:border-[#4744e5] transition-all group">
+                  <div key={opp.id || `project-${opp.name || opp.title}`} className="p-4 bg-white rounded-xl border border-[#E1E1E1] hover:border-[#4744e5] transition-all group">
                     <div className="flex justify-between items-start mb-2">
                       <span className="text-[10px] font-bold text-[#767587] uppercase tracking-wider">{opp.stage}</span>
                       <span className="px-2 py-0.5 bg-[#e1dfff] text-[#4744e5] text-[10px] font-bold rounded-full">

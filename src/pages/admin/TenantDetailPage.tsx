@@ -35,27 +35,10 @@ function deriveTrialUiState(tenant: any | null, now: Date = new Date()): TrialUi
 }
 
 
+import { formatDateTime as sharedFormatDateTime } from '../../utils/formatters';
+
 export function formatDateTime(val: any, nullLabel: string = 'Never logged in'): string {
-  if (!val) return nullLabel;
-  try {
-    const d = new Date(val);
-    if (isNaN(d.getTime())) return nullLabel;
-    
-    let formatted = new Intl.DateTimeFormat('en-GB', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-      timeZone: 'Asia/Jakarta'
-    }).format(d);
-    
-    formatted = formatted.replace('Sept', 'Sep'); 
-    return `${formatted} WIB`;
-  } catch(err) {
-    return nullLabel;
-  }
+  return sharedFormatDateTime(val, { includeZoneSuffix: true, nullLabel });
 }
 
 export const TenantDetailPage: React.FC = () => {

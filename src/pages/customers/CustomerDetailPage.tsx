@@ -172,6 +172,8 @@ export const CustomerDetailPage: React.FC = () => {
   const { timelineEvents, timelinePage, timelineHasMore, isLoadingTimeline, error: timelineError, loadTimeline } = useCustomerTimeline(id || '', tenantId);
 
   const [customer, setCustomer] = useState<Customer | undefined>(undefined);
+  const [isLoadingCustomer, setIsLoadingCustomer] = useState<boolean>(true);
+  const [customerNotFound, setCustomerNotFound] = useState<boolean>(false);
   const [customerNextAction, setCustomerNextAction] = useState<any | null>(null);
   const [customerAttentionSignals, setCustomerAttentionSignals] = useState<any[]>([]);
   const [projectAttentionSummary, setProjectAttentionSummary] = useState<any | null>(null);
@@ -325,72 +327,73 @@ export const CustomerDetailPage: React.FC = () => {
   const [actUserFilter, setActUserFilter] = useState<string>('ALL');
   const [viewingActivity, setViewingActivity] = useState<ActivityTimelineItem | null>(null);
 
-  if (!customer) {
-    return (
-      <div className="bg-white p-8 rounded-xl border border-[#E1E1E1] text-center">
-        <h2 className="text-xl font-bold text-[#1a1c1c]">Customer Account Not Found</h2>
-        <Link to="/customers" className="inline-block mt-4 px-4 py-2 bg-[#4744e5] text-white text-xs font-bold rounded-lg">
-          Return to Customer Directory
-        </Link>
-      </div>
-    );
-  }
-
-  
   const [oppsList, setOppsList] = useState<Project[]>([]);
   const [activitiesList, setActivitiesList] = useState<Activity[]>([]);
 
   const [contactsList, setContactsList] = useState<CustomerContact[]>([]);
   const [tenantUsers, setTenantUsers] = useState<User[]>([]);
 
-  
-const loadAllCustomerData = async () => {
+  const loadAllCustomerData = async () => {
     if (!id) return;
     try {
-      const [custSummary, vList, pList, aList, cList, uList, naRes] = await Promise.all([
+      setIsLoadingCustomer(true);
+      const custData = await crmApi.fetchCustomerById(id);
+      if (!custData) {
+        setCustomerNotFound(true);
+        setIsLoadingCustomer(false);
+        return;
+      }
+
+      setCustomer(custData);
+      setCustomerNotFound(false);
+      setEditName(custData.name || '');
+      setEditCode(custData.code || '');
+      setEditType((custData as any).typeName || (custData as any).typeCode || custData.type || 'COMPANY');
+      setEditStatus((custData as any).statusName || (custData as any).statusCode || custData.status || 'ACTIVE');
+      setEditPhone(custData.phone || '');
+      setEditEmail(custData.email || '');
+      setEditRegion(custData.region || '');
+      setEditAddress(custData.address || '');
+      setSelectedPicId(custData.picId || (custData as any).assignedPicId || '');
+
+      if (custData.contacts && Array.isArray(custData.contacts) && custData.contacts.length > 0) {
+        setContactsList(custData.contacts);
+      }
+
+      // Non-fatal secondary queries using Promise.allSettled
+      Promise.allSettled([
         crmApi.fetchCustomerSummary(id),
-        Promise.resolve([]), /* visits moved to tab */
-        
-        Promise.resolve([]),
-        Promise.resolve([]),
         crmApi.fetchCustomerContacts(id),
         usersApi.fetchUsers(tenantId),
         crmApi.fetchCustomerNextAction(id)
-      ]);
-
-      if (custSummary && custSummary.customer) {
-        const custData = custSummary.customer;
-        setCustomer(custData);
-        if (custSummary.attentionSignals) {
-          setCustomerAttentionSignals(custSummary.attentionSignals);
+      ]).then(([summaryRes, contactsRes, usersRes, naRes]) => {
+        if (summaryRes.status === 'fulfilled' && summaryRes.value) {
+          if (summaryRes.value.attentionSignals) {
+            setCustomerAttentionSignals(summaryRes.value.attentionSignals);
+          }
+          if (summaryRes.value.projectAttentionSummary) {
+            setProjectAttentionSummary(summaryRes.value.projectAttentionSummary);
+          }
         }
-        if (custSummary.projectAttentionSummary) {
-          setProjectAttentionSummary(custSummary.projectAttentionSummary);
+        if (contactsRes.status === 'fulfilled' && Array.isArray(contactsRes.value) && contactsRes.value.length > 0) {
+          setContactsList(contactsRes.value);
         }
-        setEditName(custData.name || '');
-        setEditCode(custData.code || '');
-        setEditType(custData.type || 'COMPANY');
-        setEditStatus(custData.status || 'ACTIVE');
-        setEditPhone(custData.phone || '');
-        setEditEmail(custData.email || '');
-        setEditRegion(custData.region || '');
-        setEditAddress(custData.address || '');
-        setSelectedPicId(custData.picId || (custData as any).assignedPicId || '');
-      }
-
-      
-      
-      setOppsList(pList.filter((p: any) => p.customerId === id));
-      setActivitiesList(aList.filter((a: any) => a.customerId === id || a.entityId === id));
-      setContactsList(cList);
-      setTenantUsers(uList || []);
-      if (naRes && naRes.nextAction) {
-        setCustomerNextAction(naRes.nextAction);
-      } else {
-        setCustomerNextAction(null);
-      }
+        if (usersRes.status === 'fulfilled' && Array.isArray(usersRes.value)) {
+          setTenantUsers(usersRes.value);
+        }
+        if (naRes.status === 'fulfilled' && naRes.value?.nextAction) {
+          setCustomerNextAction(naRes.value.nextAction);
+        } else {
+          setCustomerNextAction(null);
+        }
+      }).catch(err => {
+        console.warn('Non-fatal error loading secondary customer data:', err);
+      });
     } catch (err) {
       console.error('Error loading customer detail data:', err);
+      setCustomerNotFound(true);
+    } finally {
+      setIsLoadingCustomer(false);
     }
   };
 
@@ -1384,6 +1387,26 @@ const loadAllCustomerData = async () => {
     loadAllCustomerData();
   };
 
+  if (isLoadingCustomer) {
+    return (
+      <div className="bg-white p-12 rounded-xl border border-[#E1E1E1] text-center space-y-3">
+        <div className="inline-block w-8 h-8 border-4 border-[#4744e5] border-t-transparent rounded-full animate-spin"></div>
+        <p className="text-xs text-[#767587] font-medium">Loading customer details...</p>
+      </div>
+    );
+  }
+
+  if (customerNotFound || !customer) {
+    return (
+      <div className="bg-white p-8 rounded-xl border border-[#E1E1E1] text-center">
+        <h2 className="text-xl font-bold text-[#1a1c1c]">Customer Account Not Found</h2>
+        <Link to="/customers" className="inline-block mt-4 px-4 py-2 bg-[#4744e5] text-white text-xs font-bold rounded-lg">
+          Return to Customer Directory
+        </Link>
+      </div>
+    );
+  }
+
   const primaryContact = contactsList.find(c => c.isPrimary) || contactsList[0] || (customer.phone || customer.email ? {
     name: customer.contactPerson || customer.name || 'Primary Contact',
     position: 'Main Contact',
@@ -1391,6 +1414,10 @@ const loadAllCustomerData = async () => {
     phone: customer.phone || '',
     isPrimary: true
   } : null);
+
+  const displayStatus = (customer as any).statusName || customer.status || 'Active';
+  const displayType = (customer as any).typeName || (customer as any).typeCode || customer.type || 'Enterprise';
+  const displayPic = (customer as any).picName || customer.assignedPicName || 'Unassigned';
 
   return (
     <div className="space-y-6 font-['Inter',sans-serif]">
@@ -1414,14 +1441,14 @@ const loadAllCustomerData = async () => {
                 {customer.name}
               </h1>
               <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                customer.status === 'ACTIVE' || customer.status === 'CUSTOMER'
+                customer.status === 'ACTIVE' || customer.status === 'CUSTOMER' || (customer as any).statusCode === 'ST_ACTIVE' || displayStatus === 'Active'
                   ? 'bg-[#00C875]/10 text-[#008f53]'
                   : 'bg-[#ffcc00]/20 text-[#8f7000]'
               }`}>
-                {customer.status}
+                {displayStatus}
               </span>
               <span className="px-2 py-0.5 bg-[#eff4ff] text-[#4744e5] rounded text-[10px] font-bold">
-                {customer.type}
+                {displayType}
               </span>
             </div>
 
@@ -1431,20 +1458,20 @@ const loadAllCustomerData = async () => {
               <span>•</span>
               <span className="flex items-center gap-1">
                 <span className="material-symbols-outlined text-[14px]">person</span>
-                <span>PIC: <strong className="text-[#1a1c1c]">{customer.assignedPicName}</strong></span>
+                <span>PIC: <strong className="text-[#1a1c1c]">{displayPic}</strong></span>
               </span>
               <span>•</span>
               <span className="flex items-center gap-1">
                 <span className="material-symbols-outlined text-[14px]">phone</span>
-                <span>{customer.phone}</span>
+                <span>{customer.phone || '-'}</span>
               </span>
               <span>•</span>
               <span className="flex items-center gap-1">
                 <span className="material-symbols-outlined text-[14px]">location_on</span>
-                <span>{customer.region}</span>
+                <span>{customer.region || ((customer as any).addresses?.[0]?.city) || '-'}</span>
               </span>
               <span>•</span>
-              <span>Since: {customer.createdAt}</span>
+              <span>Since: {customer.createdAt ? String(customer.createdAt).split('T')[0] : '-'}</span>
             </div>
           </div>
         </div>

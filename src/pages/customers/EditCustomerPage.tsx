@@ -5,6 +5,7 @@ import { masterDataApi } from '../../services/masterDataApi';
 import { Customer, CustomerType, CustomerStatus, User, MasterDataItem } from '../../types';
 import { usersApi } from '../../services/usersApi';
 import { crmApi } from '../../services/crmApi';
+import { formatDateTime } from '../../utils/formatters';
 
 export const EditCustomerPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -56,94 +57,58 @@ export const EditCustomerPage: React.FC = () => {
   useEffect(() => {
     if (customer) {
       setCompanyName(customer.name || '');
-      setCustomerType(customer.type || '');
-      setCustomerStatus(customer.status || '');
+      setCustomerType((customer as any).typeCode || customer.typeId || (customer as any).type || '');
+      setCustomerStatus((customer as any).statusCode || customer.statusId || (customer as any).status || '');
 
-      const primaryContact = customer.contacts?.[0];
-      setContactPerson(primaryContact?.name || 'Budi Santoso');
-      setPhone(customer.phone || primaryContact?.phone || '+62 812 3456 7890');
-      setEmail(customer.email || primaryContact?.email || 'budi.s@majujaya.co.id');
+      const primaryContact = customer.contacts?.find((c: any) => c.isPrimary) || customer.contacts?.[0];
+      setContactPerson(primaryContact?.name || (customer as any).contactPerson || '');
+      setPhone(customer.phone || primaryContact?.phone || '');
+      setEmail(customer.email || primaryContact?.email || '');
 
-      setStreetAddress(customer.address || 'Jl. Sudirman Kav 21');
-      setCity(customer.city || 'Jakarta Selatan');
-      setProvince(customer.province || 'DKI Jakarta');
-      setPostalCode(customer.postalCode || '12190');
+      const primaryAddr = customer.addresses?.find((a: any) => a.isPrimary) || customer.addresses?.[0];
+      setStreetAddress(primaryAddr?.address || (customer as any).address || '');
+      setCity(primaryAddr?.city || (customer as any).city || '');
+      setProvince(primaryAddr?.province || (customer as any).province || '');
+      setPostalCode(primaryAddr?.postalCode || (customer as any).postalCode || '');
 
-      setAssignedPicId(customer.assignedPicId || currentUser?.id || 'USR-001');
-      setCustomerSource(customer.customerSource || 'Referral');
-      setNotes(customer.notes || 'Key supplier for heavy machinery parts in the Java region.');
-    } else {
-      // Fallback data matching PT Maju Jaya screenshot if ID not found directly
-      setCompanyName('PT Maju Jaya');
-      setCustomerType('');
-      setCustomerStatus('');
-      setContactPerson('Budi Santoso');
-      setPhone('+62 812 3456 7890');
-      setEmail('budi.s@majujaya.co.id');
-      setStreetAddress('Jl. Sudirman Kav 21');
-      setCity('Jakarta Selatan');
-      setProvince('DKI Jakarta');
-      setPostalCode('12190');
-      setAssignedPicId('USR-001');
-      setCustomerSource('Referral');
-      setNotes('Key supplier for heavy machinery parts in the Java region.');
+      setAssignedPicId(customer.picId || (customer as any).assignedPicId || '');
+      setCustomerSource((customer as any).customerSource || '');
+      setNotes(customer.notes || '');
     }
-  }, [customer, currentUser]);
+  }, [customer]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    const selectedUser = allUsers.find((u) => u.id === assignedPicId) || currentUser;
+    const targetId = id || customer?.id;
+    if (!targetId) return;
 
-    const updatedCustomer: Customer = {
-      ...(customer || {
-        id: id || 'CUS-001',
-        tenantId,
-        code: 'CUS-0001',
-        projectValue: 1000000000,
-        createdAt: '2026-01-10',
-      }),
-      id: id || customer?.id || 'CUS-001',
-      tenantId,
-      code: customer?.code || 'CUS-0001',
-      name: companyName,
-      type: customerType || 'TYPE_ENTERPRISE',
-      industry: masterTypes.find(t => t.code_value === customerType)?.label || 'Other',
-      status: customerStatus || 'ST_PROSPECT',
-      phone: phone,
-      email: email,
-      address: streetAddress,
-      city: city,
-      province: province,
-      postalCode: postalCode,
-      region: province || 'DKI Jakarta',
-      assignedPicId: selectedUser?.id || 'USR-001',
-      assignedPicName: selectedUser?.name || 'Ahmad',
-      assignedPicAvatar: selectedUser?.avatarUrl || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
-      customerSource: customerSource,
-      notes: notes,
-      updatedAt: '15 Aug 2026',
-      createdByName: customer?.createdByName || 'Admin User',
-      createdAt: customer?.createdAt || '10 Jan 2026',
-      contacts: [
-        {
-          id: customer?.contacts?.[0]?.id || `CON-${Date.now()}`,
-          customerId: customer?.id || id || 'CUS-001',
-          name: contactPerson,
-          position: 'Primary Contact',
-          email: email,
-          phone: phone,
-          isPrimary: true,
-        },
-      ],
+    const payload: any = {
+      name: companyName.trim(),
+      typeId: customerType,
+      type: customerType,
+      statusId: customerStatus,
+      status: customerStatus,
+      phone: phone.trim(),
+      email: email.trim(),
+      contactPerson: contactPerson.trim(),
+      streetAddress: streetAddress.trim(),
+      address: streetAddress.trim(),
+      city: city.trim(),
+      province: province.trim(),
+      postalCode: postalCode.trim(),
+      picId: assignedPicId,
+      assignedPicId: assignedPicId,
+      customerSource,
+      notes: notes.trim()
     };
 
     setIsSubmitting(true);
     setErrorMsg(null);
     try {
-      const res = await crmApi.updateCustomer(updatedCustomer.id, updatedCustomer);
+      const res = await crmApi.updateCustomer(targetId, payload);
       if (res.success) {
-        navigate(`/customers/${updatedCustomer.id}`);
+        navigate(`/customers/${targetId}`);
       } else {
         setErrorMsg(res.error || 'Failed to update customer');
       }
@@ -213,7 +178,7 @@ export const EditCustomerPage: React.FC = () => {
                     >
                       <option value="">Select Type</option>
                       {masterTypes.map(t => (
-                        <option key={t.id} value={t.code_value}>{t.label}</option>
+                        <option key={t.id} value={t.codeValue || t.id}>{t.label}</option>
                       ))}
                     </select>
                     <span className="material-symbols-outlined text-[18px] text-[#767587] absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
@@ -234,7 +199,7 @@ export const EditCustomerPage: React.FC = () => {
                       className="w-full px-3.5 py-2 border border-[#E1E1E1] rounded-lg text-xs bg-white text-[#1a1c1c] font-medium appearance-none focus:outline-none focus:border-[#4744e5] cursor-pointer"
                     >
                       {masterStatuses.map(s => (
-                        <option key={s.id} value={s.code_value}>{s.label}</option>
+                        <option key={s.id} value={s.codeValue || s.id}>{s.label}</option>
                       ))}
                     </select>
                     <span className="material-symbols-outlined text-[18px] text-[#767587] absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
@@ -392,7 +357,7 @@ export const EditCustomerPage: React.FC = () => {
                       );
                     })()}
                     {assignableUsers.map((u) => {
-                      const tCnt = tasks.filter((t) => t.picId === u.id && t.status !== 'COMPLETED').length || 0;
+                      const tCnt = u.taskCount || u.activeTasksCount || 0;
                       return (
                         <option key={u.id} value={u.id}>
                           {u.name} — {u.position || u.roleName} ({tCnt} Active Tasks)
@@ -408,7 +373,7 @@ export const EditCustomerPage: React.FC = () => {
                 {/* Rich PIC Box matching Image 2 */}
                 {(() => {
                   const selectedPicUser = allUsers.find((u) => u.id === assignedPicId);
-                  const picTasksCount = tasks.filter((t) => t.picId === assignedPicId && t.status !== 'COMPLETED').length || 0;
+                  const picTasksCount = selectedPicUser?.taskCount || selectedPicUser?.activeTasksCount || 0;
                   return selectedPicUser ? (
                     <div className="mt-2.5 p-3 bg-slate-50 border border-[#E1E1E1] rounded-xl flex items-center gap-3">
                       <img
@@ -485,18 +450,18 @@ export const EditCustomerPage: React.FC = () => {
               <div className="flex items-center justify-between pt-1">
                 <span className="text-[#767587] font-medium">Created:</span>
                 <span className="font-bold text-[#1a1c1c] text-right">
-                  {customer?.createdByName || 'Admin User'}<br />
+                  {customer?.createdByName || customer?.picName || 'System'}<br />
                   <span className="text-[11px] font-normal text-[#767587]">
-                    {customer?.createdAt || '10 Jan 2026'}
+                    {formatDateTime(customer?.createdAt)}
                   </span>
                 </span>
               </div>
               <div className="flex items-center justify-between pt-2">
                 <span className="text-[#767587] font-medium">Last Updated:</span>
                 <span className="font-bold text-[#1a1c1c] text-right">
-                  {customer?.assignedPicName || 'Ahmad'}<br />
+                  {customer?.updatedByName || customer?.createdByName || customer?.picName || 'System'}<br />
                   <span className="text-[11px] font-normal text-[#767587]">
-                    {customer?.updatedAt || '15 Aug 2026'}
+                    {formatDateTime(customer?.updatedAt || customer?.createdAt)}
                   </span>
                 </span>
               </div>

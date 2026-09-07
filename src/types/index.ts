@@ -97,6 +97,7 @@ export interface User {
   teamName?: string;
   status: UserStatus;
   activeTasksCount?: number;
+  taskCount?: number;
   lastLoginAt?: string;
   permissions?: string[];
   dataScope?: string;
@@ -155,6 +156,17 @@ export interface Customer {
   city?: string;
   province?: string;
   postalCode?: string;
+  typeId?: string;
+  statusId?: string;
+  typeCode?: string;
+  typeName?: string;
+  statusCode?: string;
+  statusName?: string;
+  picName?: string;
+  picEmail?: string;
+  createdBy?: string;
+  updatedBy?: string;
+  updatedByName?: string;
   createdAt: string;
   updatedAt?: string;
   contacts?: CustomerContact[];

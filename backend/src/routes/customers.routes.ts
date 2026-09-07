@@ -214,6 +214,43 @@ customersRoutes.get('/:id', async (req: any, res: any) => {
 
     const customer = cRows[0];
 
+    // Authoritative created and updated actor resolution from audit_logs
+    const [auditRows]: any = await pool.query(`
+      SELECT a.action, a.userId, u.name as actorName, a.timestamp
+      FROM audit_logs a
+      LEFT JOIN users u ON u.id = a.userId
+      WHERE a.entity = 'Customer' AND a.entityId = ? AND a.tenantId = ?
+      ORDER BY a.timestamp DESC
+    `, [id, targetTenant]);
+
+    let createdByName: string | null = null;
+    let createdById: string | null = null;
+    let createdAt = customer.createdAt;
+    let updatedByName: string | null = null;
+    let updatedById: string | null = null;
+    let updatedAt = customer.updatedAt || customer.createdAt;
+
+    const createLog = [...auditRows].reverse().find((l: any) => l.action === 'CUSTOMER_CREATED') || auditRows[auditRows.length - 1];
+    if (createLog) {
+      createdByName = createLog.actorName;
+      createdById = createLog.userId;
+      if (!createdAt) createdAt = createLog.timestamp;
+    }
+
+    const updateLog = auditRows.find((l: any) => l.action === 'CUSTOMER_UPDATED') || auditRows[0];
+    if (updateLog) {
+      updatedByName = updateLog.actorName;
+      updatedById = updateLog.userId;
+      if (!customer.updatedAt) updatedAt = updateLog.timestamp;
+    }
+
+    customer.createdAt = createdAt;
+    customer.updatedAt = updatedAt;
+    customer.createdBy = createdById || customer.picId;
+    customer.createdByName = createdByName || customer.picName || 'System';
+    customer.updatedBy = updatedById || customer.picId;
+    customer.updatedByName = updatedByName || customer.picName || customer.createdByName || 'System';
+
     const [contacts]: any = await pool.query('SELECT * FROM customer_contacts WHERE customerId = ? ORDER BY isPrimary DESC, createdAt ASC', [id]);
     const [addresses]: any = await pool.query('SELECT * FROM customer_addresses WHERE customerId = ? ORDER BY isPrimary DESC', [id]);
 
@@ -223,6 +260,300 @@ customersRoutes.get('/:id', async (req: any, res: any) => {
     res.json(customer);
   } catch (err: any) {
     console.error(`GET /api/customers/${id} error:`, err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// GET /api/customers/:id/timeline - Customer chronological timeline events
+customersRoutes.get('/:id/timeline', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { id } = req.params;
+  const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
+  const pageSize = Math.max(1, parseInt(req.query.pageSize as string, 10) || 25);
+
+  try {
+    const [cRows]: any = await pool.query('SELECT id, name, code, createdAt FROM customers WHERE id = ? AND tenantId = ?', [id, targetTenant]);
+    if (cRows.length === 0) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+    const customer = cRows[0];
+
+    // 1. Visits
+    const [visitRows]: any = await pool.query(`
+      SELECT v.id, v.title, v.visitDate, v.result, v.nextAction, v.statusId, vp.name as purposeName
+      FROM visits v
+      LEFT JOIN visit_purposes vp ON vp.id = v.purposeId
+      WHERE v.customerId = ? AND v.tenantId = ?
+    `, [id, targetTenant]);
+
+    // 2. Tasks
+    const [taskRows]: any = await pool.query(`
+      SELECT t.id, t.title, t.description, t.dueDate, t.createdAt, t.taskType, ts.name as statusName
+      FROM tasks t
+      LEFT JOIN task_statuses ts ON ts.id = t.statusId
+      WHERE t.customerId = ? AND t.tenantId = ?
+    `, [id, targetTenant]);
+
+    // 3. Follow-ups
+    const [followUpRows]: any = await pool.query(`
+      SELECT f.id, f.title, f.notes, f.outcome, f.followUpDate, f.createdAt, ft.name as typeName
+      FROM follow_ups f
+      LEFT JOIN follow_up_types ft ON ft.id = f.typeId
+      WHERE f.customerId = ? AND f.tenantId = ?
+    `, [id, targetTenant]);
+
+    // 4. Projects
+    const [projectRows]: any = await pool.query(`
+      SELECT p.id, p.title, p.value, p.createdAt, ps.name as stageName
+      FROM projects p
+      LEFT JOIN project_stages ps ON ps.id = p.stageId
+      WHERE p.customerId = ? AND p.tenantId = ?
+    `, [id, targetTenant]);
+
+    // 5. Activities
+    const [activityRows]: any = await pool.query(`
+      SELECT a.id, a.subject, a.description, a.occurredAt, at.name as typeName
+      FROM activities a
+      LEFT JOIN activity_types at ON at.id = a.typeId
+      WHERE (a.customerId = ? OR (a.entityType = 'CUSTOMER' AND a.entityId = ?)) AND a.tenantId = ?
+    `, [id, id, targetTenant]);
+
+    const allEvents: any[] = [];
+    const seenKeys = new Set<string>();
+
+    const addEvent = (ev: any) => {
+      if (!seenKeys.has(ev.stableEventKey)) {
+        seenKeys.add(ev.stableEventKey);
+        ev.id = ev.stableEventKey;
+        ev.type = ev.eventType;
+        ev.subject = ev.title;
+        ev.occurredAt = ev.eventTimestamp;
+        ev.description = ev.details;
+        allEvents.push(ev);
+      }
+    };
+
+    // Add visits
+    for (const v of visitRows) {
+      addEvent({
+        eventType: 'VISIT',
+        sourceId: v.id,
+        eventTimestamp: v.visitDate ? new Date(v.visitDate).toISOString() : new Date().toISOString(),
+        stableEventKey: `VISIT-${v.id}`,
+        title: v.title || 'Client Visit',
+        subType: v.purposeName || 'Visit',
+        details: v.result || v.nextAction || ''
+      });
+    }
+
+    // Add tasks
+    for (const t of taskRows) {
+      addEvent({
+        eventType: 'TASK',
+        sourceId: t.id,
+        eventTimestamp: t.dueDate ? new Date(t.dueDate).toISOString() : (t.createdAt ? new Date(t.createdAt).toISOString() : new Date().toISOString()),
+        stableEventKey: `TASK-${t.id}`,
+        title: t.title || 'Task',
+        subType: t.statusName || t.taskType || 'Task',
+        details: t.description || ''
+      });
+    }
+
+    // Add follow-ups
+    for (const f of followUpRows) {
+      addEvent({
+        eventType: 'FOLLOW_UP',
+        sourceId: f.id,
+        eventTimestamp: f.followUpDate ? new Date(f.followUpDate).toISOString() : (f.createdAt ? new Date(f.createdAt).toISOString() : new Date().toISOString()),
+        stableEventKey: `FOLLOWUP-${f.id}`,
+        title: f.title || 'Follow-up',
+        subType: f.typeName || 'Follow-up',
+        details: f.notes || f.outcome || ''
+      });
+    }
+
+    // Add projects
+    for (const p of projectRows) {
+      addEvent({
+        eventType: 'PROJECT',
+        sourceId: p.id,
+        eventTimestamp: p.createdAt ? new Date(p.createdAt).toISOString() : new Date().toISOString(),
+        stableEventKey: `PROJECT-${p.id}`,
+        title: p.title || 'Sales Project',
+        subType: p.stageName || 'Project',
+        details: p.value ? `Value: Rp ${Number(p.value).toLocaleString('id-ID')}` : ''
+      });
+    }
+
+    // Add activities
+    for (const a of activityRows) {
+      addEvent({
+        eventType: 'ACTIVITY',
+        sourceId: a.id,
+        eventTimestamp: a.occurredAt ? new Date(a.occurredAt).toISOString() : new Date().toISOString(),
+        stableEventKey: `ACTIVITY-${a.id}`,
+        title: a.subject || 'Activity',
+        subType: a.typeName || 'Activity',
+        details: a.description || ''
+      });
+    }
+
+    // Add customer creation event
+    addEvent({
+      eventType: 'CUSTOMER',
+      sourceId: customer.id,
+      eventTimestamp: customer.createdAt ? new Date(customer.createdAt).toISOString() : new Date().toISOString(),
+      stableEventKey: `CUS-CREATE-${customer.id}`,
+      title: `${customer.name} Created`,
+      subType: 'CREATE',
+      details: `Customer account established (${customer.code || customer.id})`
+    });
+
+    // Sort descending by timestamp
+    allEvents.sort((a, b) => new Date(b.eventTimestamp).getTime() - new Date(a.eventTimestamp).getTime());
+
+    const total = allEvents.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const offset = (page - 1) * pageSize;
+    const pagedData = allEvents.slice(offset, offset + pageSize);
+    const hasNextPage = page < totalPages;
+
+    res.json({
+      data: pagedData,
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalItems: total,
+        totalPages,
+        hasNextPage
+      }
+    });
+  } catch (err: any) {
+    console.error(`GET /api/customers/${id}/timeline error:`, err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// GET /api/customers/:id/next-action - Determine next scheduled action for customer
+customersRoutes.get('/:id/next-action', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { id } = req.params;
+
+  try {
+    const [cRows]: any = await pool.query('SELECT id FROM customers WHERE id = ? AND tenantId = ?', [id, targetTenant]);
+    if (cRows.length === 0) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+
+    // Check next upcoming task
+    const [nextTask]: any = await pool.query(`
+      SELECT t.id, t.title, t.dueDate as actionDate, 'TASK' as type, u.name as picName
+      FROM tasks t
+      LEFT JOIN users u ON u.id = t.picId
+      LEFT JOIN task_statuses ts ON ts.id = t.statusId
+      WHERE t.customerId = ? AND t.tenantId = ?
+        AND (ts.code NOT IN ('TSK_COMPLETED', 'TSK_CANCELLED') OR ts.code IS NULL)
+        AND t.dueDate >= CURDATE()
+      ORDER BY t.dueDate ASC LIMIT 1
+    `, [id, targetTenant]);
+
+    // Check next upcoming follow-up
+    const [nextFollowUp]: any = await pool.query(`
+      SELECT f.id, f.title, f.followUpDate as actionDate, 'FOLLOW_UP' as type, u.name as picName
+      FROM follow_ups f
+      LEFT JOIN users u ON u.id = f.picId
+      WHERE f.customerId = ? AND f.tenantId = ?
+        AND (f.status = 'PENDING' OR f.status IS NULL)
+        AND f.followUpDate >= CURDATE()
+      ORDER BY f.followUpDate ASC LIMIT 1
+    `, [id, targetTenant]);
+
+    // Check next upcoming visit
+    const [nextVisit]: any = await pool.query(`
+      SELECT v.id, v.title, v.visitDate as actionDate, 'VISIT' as type, u.name as picName
+      FROM visits v
+      LEFT JOIN users u ON u.id = v.picId
+      WHERE v.customerId = ? AND v.tenantId = ?
+        AND v.visitDate >= CURDATE()
+      ORDER BY v.visitDate ASC LIMIT 1
+    `, [id, targetTenant]);
+
+    const candidates = [nextTask[0], nextFollowUp[0], nextVisit[0]].filter(Boolean);
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => new Date(a.actionDate).getTime() - new Date(b.actionDate).getTime());
+      return res.json({ nextAction: candidates[0] });
+    }
+
+    res.json({ nextAction: null });
+  } catch (err: any) {
+    console.error(`GET /api/customers/${id}/next-action error:`, err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// GET /api/customers/:id/contacts - Customer contacts list
+customersRoutes.get('/:id/contacts', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { id } = req.params;
+
+  try {
+    const [contacts]: any = await pool.query(
+      'SELECT * FROM customer_contacts WHERE customerId = ? ORDER BY isPrimary DESC, createdAt ASC',
+      [id]
+    );
+    res.json(contacts);
+  } catch (err: any) {
+    console.error(`GET /api/customers/${id}/contacts error:`, err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// GET /api/customers/:id/addresses - Customer addresses list
+customersRoutes.get('/:id/addresses', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { id } = req.params;
+
+  try {
+    const [addresses]: any = await pool.query(
+      'SELECT * FROM customer_addresses WHERE customerId = ? ORDER BY isPrimary DESC',
+      [id]
+    );
+    res.json(addresses);
+  } catch (err: any) {
+    console.error(`GET /api/customers/${id}/addresses error:`, err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
@@ -342,8 +673,8 @@ customersRoutes.post('/', async (req: any, res: any) => {
     // 1. Insert into customers table
     await conn.query(`
       INSERT INTO customers (
-        id, tenantId, code, name, typeId, statusId, industry, website, phone, email, notes, picId, createdAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        id, tenantId, code, name, typeId, statusId, industry, website, phone, email, notes, picId, createdAt, updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
     `, [
       customerId, targetTenant, code, name, resolvedTypeId, resolvedStatusId, industry, website, phone, email, notes, resolvedPicId
     ]);
@@ -540,7 +871,7 @@ customersRoutes.put('/:id', async (req: any, res: any) => {
 
     await conn.query(`
       UPDATE customers
-      SET name = ?, typeId = ?, statusId = ?, industry = ?, website = ?, phone = ?, email = ?, notes = ?, picId = ?
+      SET name = ?, typeId = ?, statusId = ?, industry = ?, website = ?, phone = ?, email = ?, notes = ?, picId = ?, updatedAt = NOW()
       WHERE id = ? AND tenantId = ?
     `, [name, resolvedTypeId, resolvedStatusId, industry, website, phone, email, notes, resolvedPicId, id, targetTenant]);
 
@@ -559,6 +890,35 @@ customersRoutes.put('/:id', async (req: any, res: any) => {
           VALUES (?, ?, ?, ?, 'Primary Contact', ?, ?, 1, NOW(), NOW())
         `, [contactId, targetTenant, id, String(data.contactPerson).trim(), email, phone]);
       }
+    }
+
+    if (data.address || data.streetAddress || data.city || data.province || data.postalCode) {
+      const addrStr = data.streetAddress ? String(data.streetAddress).trim() : (data.address ? String(data.address).trim() : null);
+      const cityStr = data.city ? String(data.city).trim() : null;
+      const provStr = data.province ? String(data.province).trim() : null;
+      const postStr = data.postalCode ? String(data.postalCode).trim() : null;
+      const [exAddr]: any = await conn.query('SELECT id FROM customer_addresses WHERE customerId = ? AND isPrimary = 1', [id]);
+      if (exAddr.length > 0) {
+        await conn.query(`
+          UPDATE customer_addresses
+          SET address = ?, city = ?, province = ?, postalCode = ?
+          WHERE id = ?
+        `, [addrStr, cityStr, provStr, postStr, exAddr[0].id]);
+      } else {
+        const addrId = 'ADDR-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+        await conn.query(`
+          INSERT INTO customer_addresses (id, customerId, type, address, city, province, postalCode, country, isPrimary)
+          VALUES (?, ?, 'OFFICE', ?, ?, ?, ?, 'Indonesia', 1)
+        `, [addrId, id, addrStr, cityStr, provStr, postStr]);
+      }
+    }
+
+    if (resolvedPicId && resolvedPicId !== existing[0].picId) {
+      const assignId = 'CAS-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+      await conn.query(`
+        INSERT INTO customer_assignments (id, customerId, userId, role, assignedAt)
+        VALUES (?, ?, ?, 'PRIMARY_PIC', NOW())
+      `, [assignId, id, resolvedPicId]);
     }
 
     await conn.commit();

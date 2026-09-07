@@ -27,3 +27,18 @@ genericRoutes.get('/activities', async (req: any, res: any) => {
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+
+genericRoutes.get('/customer_contacts', async (req: any, res: any) => {
+  const customerId = req.query.customerId;
+  if (!customerId) return res.json([]);
+  try {
+    const [rows]: any = await pool.query(
+      'SELECT * FROM customer_contacts WHERE customerId = ? ORDER BY isPrimary DESC, createdAt ASC',
+      [customerId]
+    );
+    res.json(rows);
+  } catch (err: any) {
+    console.error('GET /api/customer_contacts error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});

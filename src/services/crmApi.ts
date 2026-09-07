@@ -35,13 +35,18 @@ export const crmApi = {
   
   fetchCustomerContacts: async (customerId: string) => {
     try {
-      const url = `${API_BASE}/customer_contacts?customerId=${customerId}`;
+      const url = `${API_BASE}/customers/${customerId}/contacts`;
       const res = await fetch(url, { headers: getAuthHeaders() });
-      if (!res.ok) throw new Error('Failed to fetch customer contacts');
+      if (!res.ok) {
+        const fallbackRes = await fetch(`${API_BASE}/customer_contacts?customerId=${customerId}`, { headers: getAuthHeaders() });
+        if (!fallbackRes.ok) return [];
+        const fallbackData = await fallbackRes.json();
+        return Array.isArray(fallbackData) ? fallbackData : (fallbackData.data || []);
+      }
       const data = await res.json();
       return Array.isArray(data) ? data : (data.data || []);
     } catch(err) {
-      console.error(err);
+      console.error('[crmApi.fetchCustomerContacts error]', err);
       return [];
     }
   },
@@ -170,7 +175,7 @@ export const crmApi = {
     if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch customers`);
     const data = await res.json();
     if (Array.isArray(data)) {
-      return { data, pagination: { totalItems: data.length, totalPages: 1, page: 1, pageSize: data.length } };
+      return { data, pagination: { totalItems: data.length, totalPages: 1, page: 1, pageSize: data.length, hasNextPage: false, hasPreviousPage: false } };
     }
     return data;
   },

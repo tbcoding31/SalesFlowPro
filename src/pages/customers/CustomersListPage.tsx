@@ -73,6 +73,36 @@ export const CustomersListPage: React.FC = () => {
 
       const mapped: ExtendedCustomerItem[] = customersList.map((c: any, idx: number) => {
         const pic = usersList.find(u => u.id === c.picId);
+
+        const resolveStatus = (): 'Active' | 'Pending' | 'Inactive' => {
+          const sName = (c.statusName || '').toUpperCase();
+          const sCode = (c.statusCode || '').toUpperCase();
+          const rawStatus = (c.status || '').toUpperCase();
+          const rawStatusId = (c.statusId || '').toUpperCase();
+
+          if (sCode.includes('ACTIVE') || sName.includes('ACTIVE') || rawStatus === 'ACTIVE' || rawStatus === 'CUSTOMER' || sName.includes('CUSTOMER') || rawStatusId.includes('ACTIVE')) {
+            return 'Active';
+          }
+          if (sCode.includes('PROSPECT') || sName.includes('PROSPECT') || sCode.includes('PENDING') || sName.includes('PENDING') || rawStatus === 'PROSPECT' || rawStatus === 'PENDING') {
+            return 'Pending';
+          }
+          if (sCode.includes('INACTIVE') || sName.includes('INACTIVE') || rawStatus === 'INACTIVE' || sCode.includes('CHURN')) {
+            return 'Inactive';
+          }
+
+          // Fallback check in master data customerStatuses if loaded
+          const matched = customerStatuses.find(cs => cs.id === c.statusId || cs.codeValue === c.statusId || cs.codeValue === c.statusCode);
+          if (matched) {
+            const ml = matched.label.toUpperCase();
+            const mc = matched.codeValue.toUpperCase();
+            if (mc.includes('ACTIVE') || ml.includes('ACTIVE')) return 'Active';
+            if (mc.includes('PROSPECT') || ml.includes('PROSPECT') || mc.includes('PENDING') || ml.includes('PENDING')) return 'Pending';
+            if (mc.includes('INACTIVE') || ml.includes('INACTIVE')) return 'Inactive';
+          }
+
+          return 'Active';
+        };
+
         return {
           id: c.id,
           code: c.code,
@@ -80,19 +110,19 @@ export const CustomersListPage: React.FC = () => {
           industry: c.industry || 'General',
           avatarBg: idx % 3 === 0 ? 'bg-[#6161ff]' : idx % 3 === 1 ? 'bg-[#f97316]' : 'bg-[#94a3b8]',
           avatarText: (c.name || 'CU').substring(0, 2).toUpperCase(),
-          status: c.status === 'ACTIVE' || c.status === 'CUSTOMER' || c.statusId === 'ACTIVE' ? 'Active' as const : c.status === 'PROSPECT' || c.statusId === 'PROSPECT' ? 'Pending' as const : 'Inactive' as const,
+          status: resolveStatus(),
           contactPersonName: (c.contacts && c.contacts.length > 0) ? c.contacts[0].name : (c.contactPerson || 'Contact Person'),
           contactPersonEmail: c.email || 'info@company.com',
-          picName: pic?.name || c.assignedPicName || 'Unassigned',
-          picAvatar: pic?.avatarUrl || c.assignedPicAvatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
-          picIsUnassigned: !pic?.name && (!c.assignedPicName || c.assignedPicName === 'Unassigned'),
+          picName: c.picName || pic?.name || c.assignedPicName || 'Unassigned',
+          picAvatar: c.picAvatar || pic?.avatarUrl || c.assignedPicAvatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
+          picIsUnassigned: !c.picName && !pic?.name && (!c.assignedPicName || c.assignedPicName === 'Unassigned'),
           lastVisit: c.lastVisitAt || '-',
           followUpDate: c.nextFollowUpAt || '-',
           followUpStatus: c.nextFollowUpAt ? 'scheduled' as const : 'none' as const,
-          tasksCount: 0,
-          oppsCount: 0,
+          tasksCount: c.tasksCount !== undefined ? Number(c.tasksCount) : 0,
+          oppsCount: c.oppsCount !== undefined ? Number(c.oppsCount) : 0,
           updatedAt: c.updatedAt || 'Recently',
-          type: c.type || c.typeId,
+          type: c.typeName || c.typeCode || c.type || c.typeId || 'Enterprise',
         };
       });
       setItems(mapped);
@@ -221,26 +251,12 @@ export const CustomersListPage: React.FC = () => {
     setCustomerToDelete(null);
   };
 
-  // Filter logic
+  // Filter logic: server handles search, status, and pic filtering; client applies local type filter if set
   const filteredItems = items.filter((item) => {
-    const matchesSearch =
-      item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.industry.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.contactPersonName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.contactPersonEmail.toLowerCase().includes(searchQuery.toLowerCase());
-
-    const matchesStatus =
-      statusFilter === 'All' || item.status.toLowerCase() === statusFilter.toLowerCase();
-
-    const matchesType =
-      typeFilter === 'Any' || item.type.toLowerCase().includes(typeFilter.toLowerCase());
-
-    const matchesPic =
-      picFilter === 'All' ||
-      (picFilter === 'Me' && (item.picName === 'Ahmad' || item.picName === currentUser?.name)) ||
-      (picFilter !== 'Me' && picFilter !== 'All' && item.picName.toLowerCase().includes(picFilter.toLowerCase()));
-
-    return matchesSearch && matchesStatus && matchesType && matchesPic;
+    if (typeFilter !== 'Any' && item.type) {
+      if (!String(item.type).toLowerCase().includes(typeFilter.toLowerCase())) return false;
+    }
+    return true;
   });
 
   const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -387,12 +403,12 @@ export const CustomersListPage: React.FC = () => {
           <div className="relative">
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }}
               className="bg-white border border-[#E1E1E1] text-[#1a1c1c] text-xs font-medium rounded-lg pl-3 pr-8 py-1.5 shadow-2xs appearance-none cursor-pointer focus:outline-none focus:border-[#4744e5]"
             >
               <option value="All">Status: All</option>
               {customerStatuses.map(s => (
-                <option key={s.id} value={s.code_value}>Status: {s.label}</option>
+                <option key={s.id} value={s.codeValue || s.id}>Status: {s.label}</option>
               ))}
             </select>
             <span className="material-symbols-outlined text-[16px] text-[#767587] absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
@@ -404,12 +420,12 @@ export const CustomersListPage: React.FC = () => {
           <div className="relative">
             <select
               value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value)}
+              onChange={(e) => { setTypeFilter(e.target.value); setCurrentPage(1); }}
               className="bg-white border border-[#E1E1E1] text-[#1a1c1c] text-xs font-medium rounded-lg pl-3 pr-8 py-1.5 shadow-2xs appearance-none cursor-pointer focus:outline-none focus:border-[#4744e5]"
             >
               <option value="Any">Type: Any</option>
               {customerTypes.map(t => (
-                <option key={t.id} value={t.code_value}>Type: {t.label}</option>
+                <option key={t.id} value={t.codeValue || t.label}>Type: {t.label}</option>
               ))}
             </select>
             <span className="material-symbols-outlined text-[16px] text-[#767587] absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
@@ -421,14 +437,14 @@ export const CustomersListPage: React.FC = () => {
           <div className="relative">
             <select
               value={picFilter}
-              onChange={(e) => setPicFilter(e.target.value)}
+              onChange={(e) => { setPicFilter(e.target.value); setCurrentPage(1); }}
               className="bg-white border border-[#E1E1E1] text-[#1a1c1c] text-xs font-medium rounded-lg pl-3 pr-8 py-1.5 shadow-2xs appearance-none cursor-pointer focus:outline-none focus:border-[#4744e5]"
             >
-              <option value="Me">PIC: Me</option>
               <option value="All">PIC: All</option>
-              <option value="Ahmad">PIC: Ahmad</option>
-              <option value="Rina">PIC: Rina</option>
-              <option value="Unassigned">PIC: Unassigned</option>
+              {currentUser && <option value={currentUser.id}>PIC: Me ({currentUser.name})</option>}
+              {tenantUsers.map(u => (
+                <option key={u.id} value={u.id}>PIC: {u.name}</option>
+              ))}
             </select>
             <span className="material-symbols-outlined text-[16px] text-[#767587] absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none">
               expand_more

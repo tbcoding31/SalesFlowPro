@@ -35,7 +35,7 @@ export const CustomerAttentionTab: React.FC<CustomerAttentionTabProps> = ({
       {/* Direct Customer Signals */}
       {customerAttentionSignals.map((sig, idx) => (
         <div
-          key={`c-sig-${idx}`}
+          key={sig.code || `c-sig-${idx}`}
           className={`p-2.5 rounded-lg border text-xs flex items-start justify-between gap-3 ${
             sig.severity === 'CRITICAL' ? 'bg-rose-50 border-rose-200 text-rose-900' : 'bg-white border-amber-200 text-amber-900'
           }`}
