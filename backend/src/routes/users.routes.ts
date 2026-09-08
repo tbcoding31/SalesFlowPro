@@ -41,7 +41,17 @@ usersRoutes.get('/', async (req: any, res: any) => {
             WHERE tasks.tenantId = tu.tenantId 
             AND tasks.picId = u.id 
             AND (ts.code NOT IN ('TSK_COMPLETED', 'TSK_CANCELLED') OR ts.code IS NULL)
-          ) AS taskCount, 
+            AND tasks.statusId NOT IN ('COMPLETED', 'CANCELLED', 'TS-3', 'TS-4')
+          ) AS taskCount,
+          (
+            SELECT COUNT(tasks.id) 
+            FROM tasks 
+            LEFT JOIN task_statuses ts ON ts.id = tasks.statusId
+            WHERE tasks.tenantId = tu.tenantId 
+            AND tasks.picId = u.id 
+            AND (ts.code NOT IN ('TSK_COMPLETED', 'TSK_CANCELLED') OR ts.code IS NULL)
+            AND tasks.statusId NOT IN ('COMPLETED', 'CANCELLED', 'TS-3', 'TS-4')
+          ) AS activeTasksCount, 
         tu.isPrimary,
         r.id AS role, 
         r.name AS roleName,

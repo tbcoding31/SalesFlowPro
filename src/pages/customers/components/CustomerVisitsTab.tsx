@@ -393,7 +393,7 @@ export const CustomerVisitsTab: React.FC<CustomerVisitsTabProps> = ({ customerId
 
                             {(v.status || v.statusCode) !== 'COMPLETED' && (v.status || v.statusCode) !== 'CANCELLED' && (
                               <button
-                                onClick={() => navigate(buildVisitEditUrl(v.id, { from: 'list' }))}
+                                onClick={() => navigate(buildVisitEditUrl(v.id, { from: 'list', entry: 'list' }))}
                                 title="Edit Visit"
                                 className="p-1.5 hover:bg-[#e0e7ff] rounded text-[#4744e5] cursor-pointer"
                               >

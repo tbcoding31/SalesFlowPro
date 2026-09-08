@@ -1,9 +1,12 @@
-export type VisitViewMode = 'list' | 'calendar';
+export type VisitOrigin = 'list' | 'calendar';
+export type VisitViewMode = VisitOrigin;
+export type VisitEditEntry = 'list' | 'calendar' | 'detail' | 'direct';
 
 export interface VisitNavigationContext {
   origin: VisitViewMode;
   from?: VisitViewMode;
   month?: string; // YYYY-MM
+  entry?: VisitEditEntry;
 }
 
 const MONTH_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -41,8 +44,8 @@ export function parseYearMonth(monthStr: string | null | undefined): Date {
 }
 
 /**
- * Resolves the visit navigation context (origin view and optional month) from URLSearchParams.
- * Safely defaults to 'list' for missing or invalid parameters.
+ * Resolves the visit navigation context (origin view, optional month, and entry path) from URLSearchParams.
+ * Safely defaults to 'list' for missing or invalid parameters, and 'direct' for missing entry.
  */
 export function resolveVisitOrigin(
   searchParams: URLSearchParams | string | undefined | null
@@ -56,7 +59,15 @@ export function resolveVisitOrigin(
   const origin: VisitViewMode = rawFrom === 'calendar' ? 'calendar' : 'list';
   const month = sanitizeMonthParam(params.get('month'));
 
-  return { origin, from: origin, month };
+  let entry: VisitEditEntry = 'direct';
+  const rawEntry = (params.get('entry') || '').toLowerCase().trim();
+  if (rawEntry === 'list' || rawEntry === 'calendar' || rawEntry === 'detail' || rawEntry === 'direct') {
+    entry = rawEntry as VisitEditEntry;
+  } else if (!params.has('entry')) {
+    entry = 'direct';
+  }
+
+  return { origin, from: origin, month, entry };
 }
 
 /**
@@ -95,20 +106,24 @@ export function buildVisitDetailUrl(
 }
 
 /**
- * Builds the URL for Edit Visit (/visits/:id/edit) preserving origin context.
+ * Builds the URL for Edit Visit (/visits/:id/edit) preserving origin context and entry path.
  */
 export function buildVisitEditUrl(
   id: string,
-  context?: Partial<VisitNavigationContext>
+  context?: Partial<VisitNavigationContext> & { entry?: VisitEditEntry }
 ): string {
   const resolvedMode = context?.origin || context?.from;
   const from: VisitViewMode = resolvedMode === 'calendar' ? 'calendar' : 'list';
   const month = sanitizeMonthParam(context?.month);
+  const entry: VisitEditEntry = context?.entry || (from === 'calendar' ? 'calendar' : 'list');
 
   const query = new URLSearchParams();
   query.set('from', from);
   if (from === 'calendar' && month) {
     query.set('month', month);
+  }
+  if (entry) {
+    query.set('entry', entry);
   }
   return `/visits/${id}/edit?${query.toString()}`;
 }

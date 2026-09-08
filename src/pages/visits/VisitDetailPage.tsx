@@ -249,7 +249,7 @@ export const VisitDetailPage: React.FC = () => {
             {/* Edit Visit button */}
             {statusStr !== 'COMPLETED' && (
               <button
-                onClick={() => navigate(buildVisitEditUrl(visit.id, navContext))}
+                onClick={() => navigate(buildVisitEditUrl(visit.id, { ...navContext, entry: 'detail' }))}
                 className="px-3.5 py-2 border border-[#E1E1E1] hover:bg-slate-50 text-[#1a1c1c] text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 font-['Hanken_Grotesk'] cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[16px]">edit</span>

@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { pool } from '../db';
 import { buildReportScopeWhere, validateTargetTenant } from '../utils/scope';
 import { logAudit } from '../utils/audit';
+import { syncVisitAssignmentTasks } from '../services/taskAssignment.service';
 
 export const visitsRoutes = Router();
 
@@ -331,6 +332,7 @@ visitsRoutes.post('/', async (req: any, res: any) => {
         }
       }
     }
+    await syncVisitAssignmentTasks(conn, visitId, targetTenant);
 
     await conn.commit();
 
@@ -487,6 +489,7 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
         }
       }
     }
+    await syncVisitAssignmentTasks(pool, id, targetTenant);
 
     await logAudit(
       targetTenant,
@@ -581,6 +584,8 @@ visitsRoutes.post('/:id/cancel', async (req: any, res: any) => {
       'CRM'
     );
 
+    await syncVisitAssignmentTasks(conn, id, targetTenant);
+
     await conn.commit();
 
     res.json({
@@ -673,6 +678,8 @@ visitsRoutes.post('/:id/reschedule', async (req: any, res: any) => {
       req.get('User-Agent'),
       'CRM'
     );
+
+    await syncVisitAssignmentTasks(conn, id, targetTenant);
 
     await conn.commit();
 

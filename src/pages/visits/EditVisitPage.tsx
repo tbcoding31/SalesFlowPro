@@ -20,8 +20,10 @@ export const EditVisitPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const navContext = useMemo(() => resolveVisitOrigin(searchParams), [searchParams]);
+  const entry = navContext.entry || 'direct';
   const visitsUrl = useMemo(() => buildVisitsUrl(navContext), [navContext]);
   const detailUrl = useMemo(() => buildVisitDetailUrl(id || '', navContext), [id, navContext]);
+  const returnUrl = useMemo(() => (entry === 'detail' ? detailUrl : visitsUrl), [entry, detailUrl, visitsUrl]);
   const { currentUser } = useAuth();
   const tenantId = currentUser?.tenantId;
 
@@ -154,9 +156,10 @@ export const EditVisitPage: React.FC = () => {
 
   // Compute workload for users
   const usersWithWorkload = useMemo<UserWorkloadInfo[]>(() => {
-    return rawUsers.map((u, index) => {
-      const activeTasks = u.activeTasksCount ?? (index === 0 ? 8 : (index * 5 + 3) % 15);
-      const overdueTasks = index === 0 ? 2 : (index * 2) % 4;
+    return rawUsers.map((u) => {
+      // Authoritative active task count from tasks table
+      const activeTasks = u.activeTasksCount ?? (u as any).taskCount ?? 0;
+      const overdueTasks = (u as any).overdueTasksCount ?? 0;
       let workloadLevel: 'Low' | 'Medium' | 'High' = 'Medium';
       if (activeTasks > 10) workloadLevel = 'High';
       else if (activeTasks < 5) workloadLevel = 'Low';
@@ -274,7 +277,7 @@ export const EditVisitPage: React.FC = () => {
 
       setToastMessage('Visit updated successfully!');
       setTimeout(() => {
-        navigate(detailUrl);
+        navigate(returnUrl);
       }, 500);
     } catch (err: any) {
       console.error('[EditVisitPage save error]', err);
@@ -335,10 +338,14 @@ export const EditVisitPage: React.FC = () => {
               <Link to={visitsUrl} className="hover:text-[#4744e5] transition-colors">
                 Visits
               </Link>
-              <span className="material-symbols-outlined text-[14px]">chevron_right</span>
-              <Link to={detailUrl} className="hover:text-[#4744e5] transition-colors">
-                {id}
-              </Link>
+              {entry === 'detail' && (
+                <>
+                  <span className="material-symbols-outlined text-[14px]">chevron_right</span>
+                  <Link to={detailUrl} className="hover:text-[#4744e5] transition-colors">
+                    {id}
+                  </Link>
+                </>
+              )}
               <span className="material-symbols-outlined text-[14px]">chevron_right</span>
               <span className="text-[#1a1c1c]">Edit Visit</span>
             </div>
@@ -369,11 +376,11 @@ export const EditVisitPage: React.FC = () => {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => navigate(detailUrl)}
+              onClick={() => navigate(returnUrl)}
               className="px-4 py-2 border border-[#E1E1E1] hover:bg-slate-50 text-[#1a1c1c] text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 font-['Hanken_Grotesk'] cursor-pointer"
             >
               <span className="material-symbols-outlined text-[16px]">arrow_back</span>
-              <span>Back to Visit</span>
+              <span>{entry === 'detail' ? 'Back to Visit' : 'Back to Visits'}</span>
             </button>
           </div>
         </div>
@@ -919,7 +926,7 @@ export const EditVisitPage: React.FC = () => {
         <div className="flex flex-col sm:flex-row items-center justify-end gap-3 pt-2">
           <button
             type="button"
-            onClick={() => navigate(detailUrl)}
+            onClick={() => navigate(returnUrl)}
             className="w-full sm:w-auto px-5 py-2.5 border border-[#E1E1E1] hover:bg-slate-100 text-[#555468] text-xs font-bold rounded-xl transition-all cursor-pointer font-['Hanken_Grotesk'] text-center"
           >
             Cancel

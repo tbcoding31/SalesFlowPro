@@ -89,10 +89,10 @@ export const CreateVisitPage: React.FC = () => {
 
   // Compute stats/workload for PIC dropdown results
   const usersWithWorkload = useMemo<UserWorkloadInfo[]>(() => {
-    return rawUsers.map((u, index) => {
-      // Deterministic realistic workload based on user ID / index for consistency
-      const activeTasks = u.activeTasksCount ?? (index === 0 ? 8 : (index * 5 + 3) % 15);
-      const overdueTasks = index === 0 ? 2 : (index * 2) % 4;
+    return rawUsers.map((u) => {
+      // Authoritative active task count from tasks table
+      const activeTasks = u.activeTasksCount ?? (u as any).taskCount ?? 0;
+      const overdueTasks = (u as any).overdueTasksCount ?? 0;
       let workloadLevel: 'Low' | 'Medium' | 'High' = 'Medium';
       if (activeTasks > 10) workloadLevel = 'High';
       else if (activeTasks < 5) workloadLevel = 'Low';

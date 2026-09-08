@@ -902,7 +902,7 @@ export const VisitsPage: React.FC = () => {
                                 <button
                                   onClick={() => {
                                     setActiveActionMenuId(null);
-                                    navigate(buildVisitEditUrl(v.id, { from: 'list' }));
+                                    navigate(buildVisitEditUrl(v.id, { from: 'list', entry: 'list' }));
                                   }}
                                   className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-50 text-[#1a1c1c] cursor-pointer"
                                 >
@@ -1537,6 +1537,7 @@ export const VisitsPage: React.FC = () => {
                         buildVisitEditUrl(id, {
                           from: 'calendar',
                           month: formatYearMonth(calendarCurrentDate),
+                          entry: 'calendar',
                         })
                       );
                     }
