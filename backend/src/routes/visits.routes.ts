@@ -80,9 +80,16 @@ visitsRoutes.get('/', async (req: any, res: any) => {
 
     const selectSql = `
       SELECT 
-        v.*,
+        v.id, v.tenantId, v.title, v.customerId, v.relatedProjectId, v.purposeId, v.statusId,
+        DATE_FORMAT(v.visitDate, '%Y-%m-%d') as visitDate,
+        TIME_FORMAT(v.startTime, '%H:%i') as startTime,
+        TIME_FORMAT(v.endTime, '%H:%i') as endTime,
+        v.location, v.notes, v.result, v.cancellationReason, v.nextAction, v.picId,
+        v.createdAt, v.updatedAt, v.completedAt,
         vs.code as statusCode, vs.name as statusName,
+        vs.code as status,
         vp.code as purposeCode, vp.name as purposeName,
+        vp.name as purpose,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
         c.name as customerName, c.code as customerCode
       FROM visits v
@@ -134,9 +141,16 @@ visitsRoutes.get('/:id', async (req: any, res: any) => {
   try {
     const [rows]: any = await pool.query(`
       SELECT 
-        v.*,
+        v.id, v.tenantId, v.title, v.customerId, v.relatedProjectId, v.purposeId, v.statusId,
+        DATE_FORMAT(v.visitDate, '%Y-%m-%d') as visitDate,
+        TIME_FORMAT(v.startTime, '%H:%i') as startTime,
+        TIME_FORMAT(v.endTime, '%H:%i') as endTime,
+        v.location, v.notes, v.result, v.cancellationReason, v.nextAction, v.picId,
+        v.createdAt, v.updatedAt, v.completedAt,
         vs.code as statusCode, vs.name as statusName,
+        vs.code as status,
         vp.code as purposeCode, vp.name as purposeName,
+        vp.name as purpose,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
         c.name as customerName, c.code as customerCode,
         (SELECT address FROM customer_addresses ca WHERE ca.customerId = c.id ORDER BY ca.isPrimary DESC LIMIT 1) as customerAddress,
@@ -287,7 +301,8 @@ visitsRoutes.post('/', async (req: any, res: any) => {
   const visitTitle = (title && String(title).trim()) ? String(title).trim() : `Client Visit - ${customer.name}`;
   const loc = location ? String(location).trim() : null;
   const resText = result ? String(result).trim() : null;
-  const nextAct = nextAction ? String(nextAction).trim() : (notes ? String(notes).trim() : null);
+  const notesText = notes ? String(notes).trim() : null;
+  const nextAct = nextAction ? String(nextAction).trim() : null;
   const sTime = startTime ? String(startTime).trim() : null;
   const eTime = endTime ? String(endTime).trim() : null;
 
@@ -298,11 +313,11 @@ visitsRoutes.post('/', async (req: any, res: any) => {
     await conn.query(`
       INSERT INTO visits (
         id, tenantId, title, customerId, relatedProjectId, purposeId, statusId,
-        visitDate, startTime, endTime, location, result, nextAction, picId, createdAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        visitDate, startTime, endTime, location, notes, result, nextAction, picId, createdAt, updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
     `, [
       visitId, targetTenant, visitTitle, customer.id, resolvedProjectId, resolvedPurposeId, resolvedStatusId,
-      visitDate, sTime, eTime, loc, resText, nextAct, resolvedPicId
+      visitDate, sTime, eTime, loc, notesText, resText, nextAct, resolvedPicId
     ]);
 
     if (Array.isArray(additionalPicIds) && additionalPicIds.length > 0) {
@@ -335,6 +350,13 @@ visitsRoutes.post('/', async (req: any, res: any) => {
       success: true,
       id: visitId,
       message: 'Visit scheduled successfully',
+      statusCode: 'PLANNED',
+      statusName: 'Planned',
+      visitDate,
+      startTime: sTime,
+      endTime: eTime,
+      title: visitTitle,
+      location: loc,
       data: {
         id: visitId,
         tenantId: targetTenant,
@@ -345,7 +367,10 @@ visitsRoutes.post('/', async (req: any, res: any) => {
         visitDate,
         startTime: sTime,
         endTime: eTime,
-        statusId: resolvedStatusId
+        location: loc,
+        statusId: resolvedStatusId,
+        statusCode: 'PLANNED',
+        statusName: 'Planned'
       }
     });
   } catch (err: any) {
@@ -379,11 +404,23 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
     }
     const current = existing[0];
 
+    // Status transition enforcement:
+    // 1. COMPLETED visits cannot be mutated
+    if (current.statusId === 'VS-2') {
+      return res.status(400).json({ error: 'Completed visits cannot be modified' });
+    }
+
+    // 2. CANCELLED visits cannot be modified via standard PUT (must use /reschedule)
+    if (current.statusId === 'VS-3') {
+      return res.status(400).json({ error: 'Cancelled visits cannot be edited. Use /reschedule to reactivate this visit.' });
+    }
+
     const title = data.title !== undefined ? String(data.title).trim() : current.title;
     const visitDate = data.visitDate !== undefined ? data.visitDate : current.visitDate;
     const startTime = data.startTime !== undefined ? data.startTime : current.startTime;
     const endTime = data.endTime !== undefined ? data.endTime : current.endTime;
     const location = data.location !== undefined ? data.location : current.location;
+    const notes = data.notes !== undefined ? data.notes : current.notes;
     const result = data.result !== undefined ? data.result : current.result;
     const nextAction = data.nextAction !== undefined ? data.nextAction : current.nextAction;
 
@@ -391,7 +428,14 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
     if (data.statusId || data.status) {
       const sVal = String(data.statusId || data.status).trim();
       const [sRows]: any = await pool.query('SELECT id FROM visit_statuses WHERE id = ? OR code = ? OR name = ? LIMIT 1', [sVal, sVal, sVal]);
-      if (sRows.length > 0) statusId = sRows[0].id;
+      if (sRows.length > 0) {
+        const candidateStatusId = sRows[0].id;
+        // Do not allow setting CANCELLED via PUT (must use /cancel)
+        if (candidateStatusId === 'VS-3' && current.statusId !== 'VS-3') {
+          return res.status(400).json({ error: 'To cancel a visit, please use POST /api/visits/:id/cancel' });
+        }
+        statusId = candidateStatusId;
+      }
     }
 
     let purposeId = current.purposeId;
@@ -412,11 +456,13 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
       if (uRows.length > 0) picId = uRows[0].userId;
     }
 
+    const completedAtVal = (statusId === 'VS-2' && !current.completedAt) ? new Date() : current.completedAt;
+
     await pool.query(`
       UPDATE visits
-      SET title = ?, visitDate = ?, startTime = ?, endTime = ?, location = ?, result = ?, nextAction = ?, statusId = ?, purposeId = ?, picId = ?
+      SET title = ?, visitDate = ?, startTime = ?, endTime = ?, location = ?, notes = ?, result = ?, nextAction = ?, statusId = ?, purposeId = ?, picId = ?, completedAt = ?, updatedAt = NOW()
       WHERE id = ? AND tenantId = ?
-    `, [title, visitDate, startTime, endTime, location, result, nextAction, statusId, purposeId, picId, id, targetTenant]);
+    `, [title, visitDate, startTime, endTime, location, notes, result, nextAction, statusId, purposeId, picId, completedAtVal, id, targetTenant]);
 
     await logAudit(
       targetTenant,
@@ -430,14 +476,295 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
       'CRM'
     );
 
-    res.json({ success: true, id });
+    res.json({
+      success: true,
+      id,
+      title,
+      location,
+      visitDate,
+      startTime,
+      endTime,
+      notes,
+      result,
+      nextAction,
+      statusId
+    });
   } catch (err: any) {
     console.error(`PUT /api/visits/${id} error:`, err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
-// DELETE /api/visits/:id - Delete visit
+// POST /api/visits/:id/cancel - Business cancellation of a visit (never physical delete)
+visitsRoutes.post('/:id/cancel', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { id } = req.params;
+  const reasonText = (req.body && (req.body.reason || req.body.cancellationReason)) || null;
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [rows]: any = await conn.query('SELECT * FROM visits WHERE id = ? AND tenantId = ? FOR UPDATE', [id, targetTenant]);
+    if (rows.length === 0) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Visit not found' });
+    }
+    const current = rows[0];
+
+    // Transition invariants:
+    // 1. Cannot cancel already cancelled visit -> 409 Conflict
+    if (current.statusId === 'VS-3') {
+      await conn.rollback();
+      return res.status(409).json({ error: 'Visit is already cancelled' });
+    }
+
+    // 2. Cannot cancel completed visit -> 400 Bad Request
+    if (current.statusId === 'VS-2') {
+      await conn.rollback();
+      return res.status(400).json({ error: 'Completed visits cannot be cancelled' });
+    }
+
+    const cancelReasonText = reasonText ? String(reasonText).trim() : null;
+
+    await conn.query(`
+      UPDATE visits
+      SET statusId = 'VS-3', cancellationReason = ?, updatedAt = NOW()
+      WHERE id = ? AND tenantId = ?
+    `, [cancelReasonText, id, targetTenant]);
+
+    await logAudit(
+      targetTenant,
+      actorUserId,
+      'VISIT_CANCELLED',
+      'Visit',
+      id,
+      cancelReasonText ? `Visit '${current.title}' cancelled. Reason: ${cancelReasonText}` : `Visit '${current.title}' cancelled.`,
+      req.ip,
+      req.get('User-Agent'),
+      'CRM'
+    );
+
+    await conn.commit();
+
+    res.json({
+      success: true,
+      id,
+      message: 'Visit cancelled successfully',
+      statusId: 'VS-3',
+      statusCode: 'CANCELLED',
+      statusName: 'Cancelled',
+      cancellationReason: cancelReasonText
+    });
+  } catch (err: any) {
+    await conn.rollback();
+    console.error(`POST /api/visits/${id}/cancel error:`, err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  } finally {
+    conn.release();
+  }
+});
+
+// POST /api/visits/:id/reschedule - Reschedule a visit (event-driven, resets cancelled to planned)
+visitsRoutes.post('/:id/reschedule', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { id } = req.params;
+  const { visitDate, startTime, endTime, reason } = req.body || {};
+
+  if (!visitDate) {
+    return res.status(400).json({ error: 'New visit date is required', code: 'MISSING_VISIT_DATE' });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [rows]: any = await conn.query(`
+      SELECT 
+        v.*,
+        DATE_FORMAT(v.visitDate, '%Y-%m-%d') as formattedVisitDate
+      FROM visits v
+      WHERE v.id = ? AND v.tenantId = ?
+      FOR UPDATE
+    `, [id, targetTenant]);
+
+    if (rows.length === 0) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Visit not found' });
+    }
+    const current = rows[0];
+
+    // Transition invariant: Completed visits cannot be rescheduled
+    if (current.statusId === 'VS-2') {
+      await conn.rollback();
+      return res.status(400).json({ error: 'Completed visits cannot be rescheduled' });
+    }
+
+    const oldDate = current.formattedVisitDate;
+    const oldStart = current.startTime ? String(current.startTime).substring(0, 5) : '';
+    const oldEnd = current.endTime ? String(current.endTime).substring(0, 5) : '';
+
+    const newStart = startTime ? String(startTime).trim() : current.startTime;
+    const newEnd = endTime ? String(endTime).trim() : current.endTime;
+    const rescheduleReasonText = reason ? String(reason).trim() : null;
+
+    // Rescheduling sets statusId = 'VS-1' (PLANNED) and clears cancellationReason
+    await conn.query(`
+      UPDATE visits
+      SET visitDate = ?, startTime = ?, endTime = ?, statusId = 'VS-1', cancellationReason = NULL, updatedAt = NOW()
+      WHERE id = ? AND tenantId = ?
+    `, [visitDate, newStart, newEnd, id, targetTenant]);
+
+    const auditDesc = `Rescheduled from ${oldDate} (${oldStart}-${oldEnd}) to ${visitDate} (${newStart ? newStart.substring(0, 5) : ''}-${newEnd ? newEnd.substring(0, 5) : ''}). Reason: ${rescheduleReasonText || 'N/A'}`;
+
+    await logAudit(
+      targetTenant,
+      actorUserId,
+      'VISIT_RESCHEDULED',
+      'Visit',
+      id,
+      auditDesc,
+      req.ip,
+      req.get('User-Agent'),
+      'CRM'
+    );
+
+    await conn.commit();
+
+    res.json({
+      success: true,
+      id,
+      message: 'Visit rescheduled successfully',
+      statusId: 'VS-1',
+      statusCode: 'PLANNED',
+      statusName: 'Planned',
+      visitDate,
+      startTime: newStart,
+      endTime: newEnd
+    });
+  } catch (err: any) {
+    await conn.rollback();
+    console.error(`POST /api/visits/${id}/reschedule error:`, err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  } finally {
+    conn.release();
+  }
+});
+
+// GET /api/visits/:id/history - Activity history from authoritative audit_logs
+visitsRoutes.get('/:id/history', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { id } = req.params;
+
+  try {
+    const [rows]: any = await pool.query(`
+      SELECT 
+        a.id, a.action, a.description, a.timestamp, a.userId,
+        u.name as userName, u.email as userEmail, u.avatar as userAvatar
+      FROM audit_logs a
+      LEFT JOIN users u ON u.id = a.userId
+      WHERE a.tenantId = ? AND a.entity = 'Visit' AND a.entityId = ?
+      ORDER BY a.timestamp DESC
+    `, [targetTenant, id]);
+
+    res.json(rows);
+  } catch (err: any) {
+    console.error(`GET /api/visits/${id}/history error:`, err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// GET /api/visits/:id/tasks - Related tasks
+visitsRoutes.get('/:id/tasks', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { id } = req.params;
+
+  try {
+    const [rows]: any = await pool.query(`
+      SELECT 
+        t.*,
+        ts.code as statusCode, ts.name as statusName,
+        tp.code as priorityCode, tp.name as priorityName
+      FROM tasks t
+      LEFT JOIN task_statuses ts ON ts.id = t.statusId
+      LEFT JOIN task_priorities tp ON tp.id = t.priorityId
+      WHERE t.tenantId = ? AND t.relatedVisitId = ?
+      ORDER BY t.dueDate ASC, t.createdAt DESC
+    `, [targetTenant, id]);
+
+    res.json(rows);
+  } catch (err: any) {
+    console.error(`GET /api/visits/${id}/tasks error:`, err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// GET /api/visits/:id/followups - Related follow-ups
+visitsRoutes.get('/:id/followups', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { id } = req.params;
+
+  try {
+    const [rows]: any = await pool.query(`
+      SELECT 
+        f.*,
+        ft.name as typeName
+      FROM follow_ups f
+      LEFT JOIN follow_up_types ft ON ft.id = f.typeId
+      WHERE f.tenantId = ? AND f.relatedVisitId = ?
+      ORDER BY f.followUpDate ASC, f.createdAt DESC
+    `, [targetTenant, id]);
+
+    res.json(rows);
+  } catch (err: any) {
+    console.error(`GET /api/visits/${id}/followups error:`, err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// DELETE /api/visits/:id - Delete visit (Administrative removal only, not business cancellation)
 visitsRoutes.delete('/:id', async (req: any, res: any) => {
   const actorRole = (req as any).userRole;
   const actorTenant = (req as any).userTenantId;

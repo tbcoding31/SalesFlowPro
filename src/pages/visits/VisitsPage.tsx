@@ -1,14 +1,24 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { Visit, Customer, User, VisitStatus } from '../../types';
 import { crmApi } from '../../services/crmApi';
 import { usersApi } from '../../services/usersApi';
+import { formatDate, formatTime } from '../../utils/formatters';
 
 export const VisitsPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant, currentUser } = useAuth();
   const tenantId = currentTenant?.id ;
+
+  // Action Menu State
+  const [activeActionMenuId, setActiveActionMenuId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleOutsideClick = () => setActiveActionMenuId(null);
+    window.addEventListener('click', handleOutsideClick);
+    return () => window.removeEventListener('click', handleOutsideClick);
+  }, []);
 
   // Data state
   const [projects, setProjects] = useState<any[]>([]);
@@ -96,8 +106,8 @@ export const VisitsPage: React.FC = () => {
   const [cancelReason, setCancelReason] = useState('');
 
   // Calendar Month Navigation & Selected Date
-  const [calendarCurrentDate, setCalendarCurrentDate] = useState(new Date(2026, 7, 1)); // August 2026
-  const [selectedCalendarDate, setSelectedCalendarDate] = useState<string>('2026-08-11');
+  const [calendarCurrentDate, setCalendarCurrentDate] = useState<Date>(() => new Date());
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
 
   // Calendar specific sidebar filters
   const [calStatusFilter, setCalStatusFilter] = useState<{ [key: string]: boolean }>({
@@ -105,8 +115,7 @@ export const VisitsPage: React.FC = () => {
     CONFIRMED: true,
     PLANNED: true,
     IN_PROGRESS: true,
-    RESCHEDULED: true,
-    CANCELLED: false,
+    CANCELLED: true,
   });
 
   const [calPicFilter, setCalPicFilter] = useState<{ [key: string]: boolean }>({});
@@ -116,7 +125,8 @@ export const VisitsPage: React.FC = () => {
   const uniquePurposes = useMemo(() => {
     const set = new Set<string>();
     visits.forEach((v) => {
-      if (v.purpose) set.add(v.purpose);
+      const p = v.purposeName || v.purpose;
+      if (p) set.add(p);
     });
     return Array.from(set);
   }, [visits]);
@@ -251,12 +261,12 @@ export const VisitsPage: React.FC = () => {
       }
 
       // Status filter
-      if (statusFilter !== 'ALL' && v.status !== statusFilter) {
+      if (statusFilter !== 'ALL' && v.status !== statusFilter && v.statusCode !== statusFilter) {
         return false;
       }
 
       // Purpose filter
-      if (purposeFilter !== 'ALL' && v.purpose !== purposeFilter) {
+      if (purposeFilter !== 'ALL' && v.purpose !== purposeFilter && v.purposeName !== purposeFilter) {
         return false;
       }
 
@@ -271,7 +281,8 @@ export const VisitsPage: React.FC = () => {
         const diffDays = (vDate.getTime() - today.getTime()) / (1000 * 3600 * 24);
         if (diffDays < -1 || diffDays > 7) return false;
       } else if (dateRangeFilter === 'MONTH') {
-        if (!v.visitDate.startsWith('2026-08')) return false;
+        const currentMonthPrefix = new Date().toISOString().slice(0, 7);
+        if (!v.visitDate.startsWith(currentMonthPrefix)) return false;
       } else if (dateRangeFilter === 'CUSTOM' && customStartDate && customEndDate) {
         if (v.visitDate < customStartDate || v.visitDate > customEndDate) return false;
       }
@@ -394,25 +405,24 @@ export const VisitsPage: React.FC = () => {
   };
 
   // Handler: Submit Reschedule
-  const handleConfirmReschedule = (e: React.FormEvent) => {
+  const handleConfirmReschedule = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!reschedulingVisit) return;
 
-    const updatedVisit: Partial<Visit> = {
-      ...reschedulingVisit,
+    const res = await crmApi.rescheduleVisit(reschedulingVisit.id, {
       visitDate: rescheduleDate,
       startTime: rescheduleStartTime,
       endTime: rescheduleEndTime,
-      status: 'RESCHEDULED',
-      notes: reschedulingVisit.notes
-        ? `${reschedulingVisit.notes}\n[Rescheduled to ${rescheduleDate}]: ${rescheduleReason}`
-        : `[Rescheduled to ${rescheduleDate}]: ${rescheduleReason}`,
-    };
-
-    crmApi.updateRecord('visits', reschedulingVisit.id, updatedVisit).then(() => {
-      reloadVisits();
-      setReschedulingVisit(null);
+      reason: rescheduleReason,
     });
+
+    if (!res.success) {
+      alert(res.error || 'Failed to reschedule visit');
+      return;
+    }
+
+    reloadVisits();
+    setReschedulingVisit(null);
   };
 
   // Handler: Open Cancel Modal
@@ -422,65 +432,62 @@ export const VisitsPage: React.FC = () => {
   };
 
   // Handler: Submit Cancel
-  const handleConfirmCancel = (e: React.FormEvent) => {
+  const handleConfirmCancel = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!cancellingVisit) return;
 
-    const updatedVisit: Partial<Visit> = {
-      ...cancellingVisit,
-      status: 'CANCELLED',
-      notes: cancellingVisit.notes
-        ? `${cancellingVisit.notes}\n[Cancelled]: ${cancelReason}`
-        : `[Cancelled]: ${cancelReason}`,
-    };
+    const res = await crmApi.cancelVisit(cancellingVisit.id, cancelReason);
+    if (!res.success) {
+      alert(res.error || 'Failed to cancel visit');
+      return;
+    }
 
-    crmApi.updateRecord('visits', cancellingVisit.id, updatedVisit).then(() => {
-      reloadVisits();
-      setCancellingVisit(null);
-    });
+    reloadVisits();
+    setCancellingVisit(null);
   };
 
   // Helper: Status Badge Styling
-  const renderStatusBadge = (status: VisitStatus) => {
-    switch (status) {
+  const renderStatusBadge = (status: string | undefined | null) => {
+    const s = (status || '').toUpperCase();
+    switch (s) {
       case 'PLANNED':
         return (
-          <span className="inline-flex items-center gap-1.2 px-2.5 py-1 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
             <span className="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
             Planned
           </span>
         );
       case 'CONFIRMED':
         return (
-          <span className="inline-flex items-center gap-1.2 px-2.5 py-1 rounded-md text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
             Confirmed
           </span>
         );
       case 'IN_PROGRESS':
         return (
-          <span className="inline-flex items-center gap-1.2 px-2.5 py-1 rounded-md text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
             <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
             In Progress
           </span>
         );
       case 'COMPLETED':
         return (
-          <span className="inline-flex items-center gap-1.2 px-2.5 py-1 rounded-md text-[11px] font-bold bg-green-50 text-green-700 border border-green-200">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-green-50 text-green-700 border border-green-200">
             <span className="material-symbols-outlined text-[13px] text-green-600">check_circle</span>
             Completed
           </span>
         );
       case 'CANCELLED':
         return (
-          <span className="inline-flex items-center gap-1.2 px-2.5 py-1 rounded-md text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
             <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
             Cancelled
           </span>
         );
       case 'RESCHEDULED':
         return (
-          <span className="inline-flex items-center gap-1.2 px-2.5 py-1 rounded-md text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
             <span className="material-symbols-outlined text-[13px] text-amber-600">update</span>
             Rescheduled
           </span>
@@ -488,7 +495,7 @@ export const VisitsPage: React.FC = () => {
       default:
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-bold bg-gray-100 text-gray-700">
-            {status}
+            {status || '—'}
           </span>
         );
     }
@@ -778,7 +785,7 @@ export const VisitsPage: React.FC = () => {
                       {/* 1. Date */}
                       <td className="px-5 py-4 whitespace-nowrap font-medium text-[#1a1c1c]">
                         <Link to={`/visits/${v.id}`} className="block hover:opacity-80 transition-opacity group/link">
-                          <div className="font-semibold group-hover/link:text-[#4744e5] transition-colors">{v.visitDate}</div>
+                          <div className="font-semibold group-hover/link:text-[#4744e5] transition-colors">{formatDate(v.visitDate)}</div>
                           <div className="text-[10px] text-[#767587] font-mono group-hover/link:text-[#4744e5] transition-colors">{v.id}</div>
                         </Link>
                       </td>
@@ -790,7 +797,7 @@ export const VisitsPage: React.FC = () => {
                             schedule
                           </span>
                           <span>
-                            {v.startTime} - {v.endTime}
+                            {formatTime(v.startTime)} - {formatTime(v.endTime)}
                           </span>
                         </div>
                       </td>
@@ -811,7 +818,7 @@ export const VisitsPage: React.FC = () => {
                       {/* 4. Purpose */}
                       <td className="px-5 py-4">
                         <div className="font-semibold text-[#1a1c1c]">{v.title}</div>
-                        <div className="text-[11px] text-[#767587] mt-0.5">{v.purpose}</div>
+                        <div className="text-[11px] text-[#767587] mt-0.5">{v.purposeName || v.purpose || '—'}</div>
                       </td>
 
                       {/* 5. PIC */}
@@ -843,48 +850,82 @@ export const VisitsPage: React.FC = () => {
 
                       {/* 7. Status */}
                       <td className="px-5 py-4 whitespace-nowrap">
-                        {renderStatusBadge(v.status)}
+                        {renderStatusBadge(v.statusCode || v.status)}
                       </td>
 
-                      {/* 8. Actions */}
-                      <td className="px-5 py-4 whitespace-nowrap text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          {/* View */}
+                      {/* 8. Actions (Grouped Actions Menu [ ⋮ ]) */}
+                      <td className="px-5 py-4 whitespace-nowrap text-right relative">
+                        <div className="flex items-center justify-end">
                           <button
-                            onClick={() => navigate(`/visits/${v.id}`)}
-                            title="View Details"
-                            className="p-1.5 text-[#767587] hover:text-[#4744e5] hover:bg-[#f4f4ff] rounded-lg transition-colors cursor-pointer"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveActionMenuId(activeActionMenuId === v.id ? null : v.id);
+                            }}
+                            title="Actions"
+                            className="p-1.5 text-[#767587] hover:text-[#1a1c1c] hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
                           >
-                            <span className="material-symbols-outlined text-[18px]">visibility</span>
+                            <span className="material-symbols-outlined text-[18px]">more_vert</span>
                           </button>
 
-                          {/* Edit */}
-                          <button
-                            onClick={() => handleOpenEditModal(v)}
-                            title="Edit Visit"
-                            className="p-1.5 text-[#767587] hover:text-[#4744e5] hover:bg-[#f4f4ff] rounded-lg transition-colors cursor-pointer"
-                          >
-                            <span className="material-symbols-outlined text-[18px]">edit</span>
-                          </button>
-
-                          {/* Reschedule */}
-                          <button
-                            onClick={() => handleOpenRescheduleModal(v)}
-                            title="Reschedule Visit"
-                            className="p-1.5 text-[#767587] hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
-                          >
-                            <span className="material-symbols-outlined text-[18px]">calendar_clock</span>
-                          </button>
-
-                          {/* Cancel */}
-                          {v.status !== 'CANCELLED' && v.status !== 'COMPLETED' && (
-                            <button
-                              onClick={() => handleOpenCancelModal(v)}
-                              title="Cancel Visit"
-                              className="p-1.5 text-[#767587] hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                          {activeActionMenuId === v.id && (
+                            <div 
+                              className="absolute right-5 top-10 w-40 bg-white border border-[#E1E1E1] rounded-xl shadow-lg z-30 py-1 text-left text-xs font-semibold animate-fade-in"
+                              onClick={(e) => e.stopPropagation()}
                             >
-                              <span className="material-symbols-outlined text-[18px]">cancel</span>
-                            </button>
+                              {/* View Details */}
+                              <button
+                                onClick={() => {
+                                  setActiveActionMenuId(null);
+                                  navigate(`/visits/${v.id}`);
+                                }}
+                                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-50 text-[#1a1c1c] cursor-pointer"
+                              >
+                                <span className="material-symbols-outlined text-[16px] text-[#4744e5]">visibility</span>
+                                <span>View Details</span>
+                              </button>
+
+                              {/* Edit */}
+                              {v.status !== 'COMPLETED' && v.status !== 'CANCELLED' && v.statusCode !== 'COMPLETED' && v.statusCode !== 'CANCELLED' && (
+                                <button
+                                  onClick={() => {
+                                    setActiveActionMenuId(null);
+                                    handleOpenEditModal(v);
+                                  }}
+                                  className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-50 text-[#1a1c1c] cursor-pointer"
+                                >
+                                  <span className="material-symbols-outlined text-[16px] text-slate-600">edit</span>
+                                  <span>Edit Visit</span>
+                                </button>
+                              )}
+
+                              {/* Reschedule */}
+                              {v.status !== 'COMPLETED' && v.statusCode !== 'COMPLETED' && (
+                                <button
+                                  onClick={() => {
+                                    setActiveActionMenuId(null);
+                                    handleOpenRescheduleModal(v);
+                                  }}
+                                  className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-amber-50 text-amber-800 cursor-pointer"
+                                >
+                                  <span className="material-symbols-outlined text-[16px] text-amber-600">calendar_clock</span>
+                                  <span>Reschedule</span>
+                                </button>
+                              )}
+
+                              {/* Cancel */}
+                              {v.status !== 'CANCELLED' && v.status !== 'COMPLETED' && v.statusCode !== 'CANCELLED' && v.statusCode !== 'COMPLETED' && (
+                                <button
+                                  onClick={() => {
+                                    setActiveActionMenuId(null);
+                                    handleOpenCancelModal(v);
+                                  }}
+                                  className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-rose-50 text-rose-600 border-t border-slate-100 cursor-pointer"
+                                >
+                                  <span className="material-symbols-outlined text-[16px] text-rose-600">cancel</span>
+                                  <span>Cancel Visit</span>
+                                </button>
+                              )}
+                            </div>
                           )}
                         </div>
                       </td>
@@ -1758,7 +1799,7 @@ export const VisitsPage: React.FC = () => {
               <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl space-y-0.5">
                 <div className="font-bold text-rose-900">{cancellingVisit.title}</div>
                 <div className="text-[11px] text-rose-800">Customer: {cancellingVisit.customerName}</div>
-                <div className="text-[11px] text-rose-700">Scheduled: {cancellingVisit.visitDate}</div>
+                <div className="text-[11px] text-rose-700">Scheduled: {formatDate(cancellingVisit.visitDate)}</div>
               </div>
 
               <div>

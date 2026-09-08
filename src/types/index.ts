@@ -180,23 +180,38 @@ export interface Visit {
   tenantId: string;
   customerId: string;
   customerName: string;
-  customerCode: string;
+  customerCode?: string;
+  customerAddress?: string;
   picId: string;
   picName: string;
   picAvatar?: string;
+  picEmail?: string;
   title: string;
   taskType?: string;
-  purpose: string;
+  purposeId?: string;
+  purposeCode?: string;
+  purposeName?: string;
+  purpose: string; // @deprecated compatibility alias
+  statusId?: string;
+  statusCode?: string;
+  statusName?: string;
+  statusColor?: string;
+  status: VisitStatus; // @deprecated compatibility alias
   visitDate: string;
   date?: string;
   startTime: string;
   endTime: string;
   location: string;
-  status: VisitStatus;
   notes?: string;
-  result?: string;
-  nextAction?: string;
+  result?: string | null;
+  cancellationReason?: string | null;
+  nextAction?: string | null;
+  relatedProjectId?: string | null;
+  projectTitle?: string | null;
+  participants?: any[];
   createdAt: string;
+  updatedAt?: string;
+  completedAt?: string | null;
 }
 
 export type TaskPriority = string;

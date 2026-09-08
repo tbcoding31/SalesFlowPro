@@ -1,31 +1,69 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { Visit, VisitStatus } from '../../types';
 import { crmApi } from '../../services/crmApi';
+import { formatDate, formatTime, formatDuration, formatDateTime } from '../../utils/formatters';
 
 export const VisitDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { currentUser } = useAuth();
-  const tenantId = currentUser?.tenantId ;
+  const tenantId = currentUser?.tenantId;
 
   const [visit, setVisit] = useState<Visit | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Modals & Action States
+  const [currentStatus, setCurrentStatus] = useState<VisitStatus>('PLANNED');
+  const [notes, setNotes] = useState<string>('');
+
+  // Reschedule state
+  const [isRescheduleOpen, setIsRescheduleOpen] = useState(false);
+  const [newDate, setNewDate] = useState('');
+  const [newStartTime, setNewStartTime] = useState('09:00');
+  const [newEndTime, setNewEndTime] = useState('10:00');
+  const [rescheduleReason, setRescheduleReason] = useState('');
+
+  // Cancel State
+  const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+
+  // Activity History & Related Lists State
+  const [activityHistory, setActivityHistory] = useState<any[]>([]);
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [followups, setFollowups] = useState<any[]>([]);
+
+  // Toast
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3000);
+  };
 
   const loadData = async () => {
     if (!id) return;
     setIsLoading(true);
     try {
-      const v = await crmApi.fetchRecordById<Visit>('visits', id);
+      const [v, hist, tList, fList] = await Promise.all([
+        crmApi.fetchRecordById<Visit>('visits', id),
+        crmApi.fetchVisitHistory(id),
+        crmApi.fetchVisitTasks(id),
+        crmApi.fetchVisitFollowups(id)
+      ]);
+
       if (v) {
         setVisit(v);
-        setCurrentStatus(v.status);
+        setCurrentStatus((v.statusCode || v.status || 'PLANNED') as VisitStatus);
         setNotes(v.notes || '');
         setNewDate(v.visitDate);
-        setNewStartTime(v.startTime);
-        setNewEndTime(v.endTime);
+        setNewStartTime(v.startTime ? String(v.startTime).substring(0, 5) : '09:00');
+        setNewEndTime(v.endTime ? String(v.endTime).substring(0, 5) : '10:00');
       }
+      setActivityHistory(Array.isArray(hist) ? hist : []);
+      setTasks(Array.isArray(tList) ? tList : []);
+      setFollowups(Array.isArray(fList) ? fList : []);
     } catch (err) {
       console.error('Failed to load visit details:', err);
     } finally {
@@ -37,79 +75,68 @@ export const VisitDetailPage: React.FC = () => {
     loadData();
   }, [id, tenantId]);
 
-  // Modals & Action States
-  const [currentStatus, setCurrentStatus] = useState<VisitStatus>('PLANNED');
-  const [notes, setNotes] = useState<string>('');
-  
-  // Reschedule state
-  const [isRescheduleOpen, setIsRescheduleOpen] = useState(false);
-  const [newDate, setNewDate] = useState('');
-  const [newStartTime, setNewStartTime] = useState('09:00');
-  const [newEndTime, setNewEndTime] = useState('10:00');
-
-  // Cancel State
-  const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
-  const [cancelReason, setCancelReason] = useState('');
-
-  // Activity History State
-  const [activityHistory, setActivityHistory] = useState([
-    { id: '1', date: '2026-08-01 09:30', user: 'PIC', action: 'Scheduled initial visit' },
-  ]);
-
-  // Toast
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
-  };
-
   // Status Handlers
   const handleStartVisit = async () => {
     if (!visit) return;
-    setCurrentStatus('IN_PROGRESS');
-    const updated = { ...visit, status: 'IN_PROGRESS' as VisitStatus };
-    await crmApi.updateRecord('visits', visit.id, updated);
-    loadData();
-    setActivityHistory([
-      ...activityHistory,
-      { id: Date.now().toString(), date: new Date().toLocaleString(), user: currentUser?.name || 'User', action: 'Marked visit as In Progress (Started)' },
-    ]);
+    const res = await crmApi.updateRecord('visits', visit.id, {
+      statusId: 'VS-5',
+      status: 'IN_PROGRESS'
+    });
+    if (res.error) {
+      showToast(res.error);
+      return;
+    }
+    await loadData();
     showToast('Visit started! Status updated to In Progress.');
   };
 
-  const handleRescheduleSubmit = async () => {
+  const handleRescheduleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     if (!visit) return;
-    setCurrentStatus('RESCHEDULED');
-    const updated = {
-      ...visit,
-      status: 'RESCHEDULED' as VisitStatus,
+
+    const res = await crmApi.rescheduleVisit(visit.id, {
       visitDate: newDate,
       startTime: newStartTime,
       endTime: newEndTime,
-    };
-    await crmApi.updateRecord('visits', visit.id, updated);
-    loadData();
+      reason: rescheduleReason
+    });
+
+    if (!res.success) {
+      showToast(res.error || 'Failed to reschedule visit');
+      return;
+    }
+
+    await loadData();
     setIsRescheduleOpen(false);
-    setActivityHistory([
-      ...activityHistory,
-      { id: Date.now().toString(), date: new Date().toLocaleString(), user: currentUser?.name || 'User', action: `Rescheduled visit to ${newDate} (${newStartTime}-${newEndTime})` },
-    ]);
+    setRescheduleReason('');
     showToast('Visit rescheduled successfully!');
   };
 
-  const handleCancelSubmit = async () => {
+  const handleCancelSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     if (!visit) return;
-    setCurrentStatus('CANCELLED');
-    const updated = { ...visit, status: 'CANCELLED' as VisitStatus, notes: `[Cancelled: ${cancelReason}] ${visit.notes || ''}` };
-    await crmApi.updateRecord('visits', visit.id, updated);
-    loadData();
+
+    const res = await crmApi.cancelVisit(visit.id, cancelReason);
+    if (!res.success) {
+      showToast(res.error || 'Failed to cancel visit');
+      return;
+    }
+
+    await loadData();
     setIsCancelModalOpen(false);
-    setActivityHistory([
-      ...activityHistory,
-      { id: Date.now().toString(), date: new Date().toLocaleString(), user: currentUser?.name || 'User', action: `Cancelled visit: ${cancelReason}` },
-    ]);
+    setCancelReason('');
     showToast('Visit has been cancelled.');
+  };
+
+  const handleSaveNotes = async () => {
+    if (!visit) return;
+    const res = await crmApi.updateRecord('visits', visit.id, { notes });
+    if (res.error) {
+      showToast(res.error);
+      return;
+    }
+    await loadData();
+    showToast('Visit notes updated!');
   };
 
   if (!visit && !isLoading) {
@@ -148,82 +175,83 @@ export const VisitDetailPage: React.FC = () => {
     if (currentStatus === 'CANCELLED') return 'cancelled';
     if (stepIdx < currentIdx) return 'completed';
     if (stepIdx === currentIdx) return 'active';
-    return 'pending';
+    return 'upcoming';
   };
 
+  const statusStr = (visit.statusCode || visit.status || 'PLANNED').toUpperCase();
+
   return (
-    <div className="space-y-6 font-['Inter',sans-serif] pb-16 max-w-7xl mx-auto">
-      {/* Toast Feedback */}
+    <div className="space-y-6 font-['Inter',sans-serif] pb-12">
+      {/* TOAST ALERT */}
       {toastMessage && (
-        <div className="fixed top-5 right-5 z-50 bg-[#1a1c1c] text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-3 border border-slate-700 animate-bounce">
-          <span className="material-symbols-outlined text-emerald-400 text-[20px]">check_circle</span>
-          <span className="text-xs font-bold">{toastMessage}</span>
+        <div className="fixed bottom-6 right-6 bg-[#1a1c1c] text-white px-4 py-2.5 rounded-xl shadow-lg text-xs font-bold flex items-center gap-2 z-50 animate-in fade-in slide-in-from-bottom-5">
+          <span className="material-symbols-outlined text-emerald-400 text-[18px]">check_circle</span>
+          <span>{toastMessage}</span>
         </div>
       )}
 
-      {/* HEADER SECTION */}
+      {/* TOP BAR / BREADCRUMB & PRIMARY INFO */}
       <div className="bg-white p-6 rounded-2xl border border-[#E1E1E1] shadow-2xs space-y-4">
-        {/* Breadcrumb */}
-        <div className="flex items-center gap-2 text-[11px] font-bold text-[#767587] uppercase tracking-wider font-['Hanken_Grotesk']">
-          <Link to="/visits" className="hover:text-[#4744e5] transition-colors flex items-center gap-1">
-            <span className="material-symbols-outlined text-[14px]">calendar_month</span>
-            <span>Visits</span>
-          </Link>
-          <span className="material-symbols-outlined text-[14px]">chevron_right</span>
-          <span className="text-[#1a1c1c]">Customer Visit Detail</span>
-        </div>
-
-        {/* Title & Top Actions */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-[#f0f0f4] pb-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-3">
-              <span className="text-xs font-extrabold text-[#767587] uppercase tracking-wider font-['Hanken_Grotesk']">
-                Customer Visit
-              </span>
-              <span
-                className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wide ${
-                  currentStatus === 'COMPLETED'
-                    ? 'bg-emerald-100 text-emerald-800'
-                    : currentStatus === 'CONFIRMED'
-                    ? 'bg-indigo-100 text-indigo-800'
-                    : currentStatus === 'IN_PROGRESS'
-                    ? 'bg-blue-100 text-blue-800'
-                    : currentStatus === 'CANCELLED'
-                    ? 'bg-rose-100 text-rose-800'
-                    : 'bg-amber-100 text-amber-800'
-                }`}
-              >
-                {currentStatus}
+            <div className="flex items-center gap-2 text-[11px] font-bold text-[#767587] uppercase tracking-wider font-['Hanken_Grotesk'] mb-1">
+              <Link to="/" className="hover:text-[#4744e5] transition-colors">
+                Home
+              </Link>
+              <span className="material-symbols-outlined text-[14px]">chevron_right</span>
+              <Link to="/visits" className="hover:text-[#4744e5] transition-colors">
+                Visits
+              </Link>
+              <span className="material-symbols-outlined text-[14px]">chevron_right</span>
+              <span className="text-[#1a1c1c]">{visit.id}</span>
+            </div>
+
+            <div className="flex items-center gap-2.5">
+              <h1 className="text-2xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk'] tracking-tight">
+                {visit.customerName}
+              </h1>
+              <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-bold ${
+                statusStr === 'COMPLETED' ? 'bg-green-50 text-green-700 border border-green-200' :
+                statusStr === 'IN_PROGRESS' ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' :
+                statusStr === 'CONFIRMED' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                statusStr === 'CANCELLED' ? 'bg-rose-50 text-rose-700 border border-rose-200' :
+                'bg-slate-100 text-slate-700 border border-slate-200'
+              }`}>
+                {visit.statusName || visit.statusCode || visit.status}
               </span>
             </div>
-            <h1 className="text-2xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk'] tracking-tight mt-1">
-              {visit.customerName}
-            </h1>
             <p className="text-xs text-[#767587] mt-0.5">
-              Subject: <span className="font-semibold text-[#1a1c1c]">{visit.title || visit.purpose}</span> ({visit.customerCode})
+              Subject: <span className="font-semibold text-[#1a1c1c]">{visit.title}</span> {visit.customerCode ? `(${visit.customerCode})` : ''}
             </p>
           </div>
 
           {/* Action Buttons */}
           <div className="flex items-center gap-2.5 flex-wrap">
-            {currentStatus !== 'COMPLETED' && currentStatus !== 'CANCELLED' && (
+            {statusStr !== 'COMPLETED' && statusStr !== 'CANCELLED' && (
               <button
                 onClick={handleStartVisit}
-                disabled={currentStatus === 'IN_PROGRESS'}
+                disabled={statusStr === 'IN_PROGRESS'}
                 className={`px-4 py-2 text-xs font-extrabold rounded-xl transition-all shadow-xs flex items-center gap-1.5 font-['Hanken_Grotesk'] cursor-pointer ${
-                  currentStatus === 'IN_PROGRESS'
+                  statusStr === 'IN_PROGRESS'
                     ? 'bg-emerald-600 text-white opacity-80 cursor-default'
                     : 'bg-[#4744e5] hover:bg-[#322fce] text-white'
                 }`}
               >
                 <span className="material-symbols-outlined text-[16px]">play_arrow</span>
-                <span>{currentStatus === 'IN_PROGRESS' ? 'Visit In Progress' : 'Start Visit'}</span>
+                <span>{statusStr === 'IN_PROGRESS' ? 'Visit In Progress' : 'Start Visit'}</span>
               </button>
             )}
 
-            {currentStatus !== 'CANCELLED' && (
+            {/* Reschedule button available for PLANNED, CONFIRMED, and CANCELLED */}
+            {statusStr !== 'COMPLETED' && (
               <button
-                onClick={() => setIsRescheduleOpen(true)}
+                onClick={() => {
+                  setNewDate(visit.visitDate);
+                  setNewStartTime(visit.startTime ? String(visit.startTime).substring(0, 5) : '09:00');
+                  setNewEndTime(visit.endTime ? String(visit.endTime).substring(0, 5) : '10:00');
+                  setRescheduleReason('');
+                  setIsRescheduleOpen(true);
+                }}
                 className="px-3.5 py-2 border border-[#E1E1E1] hover:bg-slate-50 text-[#1a1c1c] text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 font-['Hanken_Grotesk'] cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[16px]">update</span>
@@ -231,13 +259,16 @@ export const VisitDetailPage: React.FC = () => {
               </button>
             )}
 
-            {currentStatus !== 'CANCELLED' && currentStatus !== 'COMPLETED' && (
+            {statusStr !== 'CANCELLED' && statusStr !== 'COMPLETED' && (
               <button
-                onClick={() => setIsCancelModalOpen(true)}
+                onClick={() => {
+                  setCancelReason('');
+                  setIsCancelModalOpen(true);
+                }}
                 className="px-3.5 py-2 border border-rose-200 hover:bg-rose-50 text-rose-600 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 font-['Hanken_Grotesk'] cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[16px]">cancel</span>
-                <span>Cancel</span>
+                <span>Cancel Visit</span>
               </button>
             )}
           </div>
@@ -291,43 +322,60 @@ export const VisitDetailPage: React.FC = () => {
         </div>
       </div>
 
-      {/* COMPLETED BANNER (WHEN STATUS IS COMPLETED) */}
-      {currentStatus === 'COMPLETED' && (
-        <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-5 shadow-2xs flex flex-col sm:flex-row items-center justify-between gap-4">
+      {/* CANCELLED BANNER */}
+      {statusStr === 'CANCELLED' && (
+        <div className="bg-rose-50 border-2 border-rose-300 rounded-2xl p-5 shadow-2xs flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
-              <span className="material-symbols-outlined text-[24px]">assignment_turned_in</span>
+            <div className="w-10 h-10 rounded-full bg-rose-100 text-rose-800 flex items-center justify-center shrink-0">
+              <span className="material-symbols-outlined text-[24px]">cancel</span>
             </div>
             <div>
-              <h3 className="font-extrabold text-sm text-[#1a1c1c] font-['Hanken_Grotesk']">
-                Visit Report Required
+              <h3 className="font-extrabold text-sm text-rose-900 font-['Hanken_Grotesk']">
+                This Visit is Cancelled
               </h3>
-              <p className="text-xs text-[#555468] mt-0.5">
-                This customer visit is completed. Please submit the final visit report and key action items for executive review.
+              <p className="text-xs text-rose-800 mt-0.5">
+                {visit.cancellationReason ? `Reason: ${visit.cancellationReason}` : 'This scheduled visit has been cancelled.'}
               </p>
             </div>
           </div>
-
           <button
-            onClick={() => navigate(`/visits/${visit.id}/report`)}
-            className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-extrabold rounded-xl shadow-xs transition-all flex items-center gap-2 shrink-0 cursor-pointer font-['Hanken_Grotesk']"
+            onClick={() => setIsRescheduleOpen(true)}
+            className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl transition-all shadow-xs cursor-pointer"
           >
-            <span className="material-symbols-outlined text-[18px]">edit_note</span>
-            <span>Complete Visit & Submit Report</span>
+            Reschedule Visit
           </button>
         </div>
       )}
 
-      {/* INFORMATION CARDS GRID */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-4">
-        {/* Customer */}
+      {/* COMPLETED BANNER */}
+      {statusStr === 'COMPLETED' && (
+        <div className="bg-emerald-50 border-2 border-emerald-300 rounded-2xl p-5 shadow-2xs flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
+              <span className="material-symbols-outlined text-[24px]">assignment_turned_in</span>
+            </div>
+            <div>
+              <h3 className="font-extrabold text-sm text-emerald-900 font-['Hanken_Grotesk']">
+                Visit Completed
+              </h3>
+              <p className="text-xs text-emerald-800 mt-0.5">
+                {visit.result ? `Outcome: ${visit.result}` : 'All meeting objectives and post-visit reports have been recorded.'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* METRIC / ESSENTIAL DATA CARDS (6 CARDS) */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        {/* Customer Account */}
         <div className="bg-white p-4 rounded-2xl border border-[#E1E1E1] shadow-2xs space-y-1">
           <div className="flex items-center gap-1.5 text-[#767587]">
             <span className="material-symbols-outlined text-[16px]">domain</span>
             <span className="text-[10px] font-extrabold uppercase tracking-wider font-['Hanken_Grotesk']">Customer</span>
           </div>
           <p className="text-xs font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk'] truncate">{visit.customerName}</p>
-          <p className="text-[10px] text-[#767587]">{visit.customerCode}</p>
+          <p className="text-[10px] text-[#767587]">{visit.customerCode || '—'}</p>
         </div>
 
         {/* Date */}
@@ -336,18 +384,20 @@ export const VisitDetailPage: React.FC = () => {
             <span className="material-symbols-outlined text-[16px]">calendar_today</span>
             <span className="text-[10px] font-extrabold uppercase tracking-wider font-['Hanken_Grotesk']">Date</span>
           </div>
-          <p className="text-xs font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">{visit.visitDate}</p>
-          <p className="text-[10px] text-[#767587]">Scheduled</p>
+          <p className="text-xs font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">{formatDate(visit.visitDate)}</p>
+          <p className="text-[10px] text-[#767587]">Scheduled Date</p>
         </div>
 
-        {/* Time */}
+        {/* Time & Computed Duration */}
         <div className="bg-white p-4 rounded-2xl border border-[#E1E1E1] shadow-2xs space-y-1">
           <div className="flex items-center gap-1.5 text-[#767587]">
             <span className="material-symbols-outlined text-[16px]">schedule</span>
             <span className="text-[10px] font-extrabold uppercase tracking-wider font-['Hanken_Grotesk']">Time</span>
           </div>
-          <p className="text-xs font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">{visit.startTime} - {visit.endTime}</p>
-          <p className="text-[10px] text-[#767587]">1.5 Hours duration</p>
+          <p className="text-xs font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">
+            {formatTime(visit.startTime)} - {formatTime(visit.endTime)}
+          </p>
+          <p className="text-[10px] text-[#767587]">{formatDuration(visit.startTime, visit.endTime)} duration</p>
         </div>
 
         {/* Location */}
@@ -356,8 +406,8 @@ export const VisitDetailPage: React.FC = () => {
             <span className="material-symbols-outlined text-[16px]">location_on</span>
             <span className="text-[10px] font-extrabold uppercase tracking-wider font-['Hanken_Grotesk']">Location</span>
           </div>
-          <p className="text-xs font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk'] truncate">{visit.location}</p>
-          <p className="text-[10px] text-[#767587]">On-site Visit</p>
+          <p className="text-xs font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk'] truncate">{visit.location || '—'}</p>
+          <p className="text-[10px] text-[#767587]">Meeting Venue</p>
         </div>
 
         {/* Purpose */}
@@ -366,8 +416,10 @@ export const VisitDetailPage: React.FC = () => {
             <span className="material-symbols-outlined text-[16px]">flag</span>
             <span className="text-[10px] font-extrabold uppercase tracking-wider font-['Hanken_Grotesk']">Purpose</span>
           </div>
-          <p className="text-xs font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">{visit.purpose}</p>
-          <p className="text-[10px] text-[#767587]">Primary Objective</p>
+          <p className="text-xs font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">
+            {visit.purposeName || visit.purpose || '—'}
+          </p>
+          <p className="text-[10px] text-[#767587]">{visit.purposeCode || 'Objective'}</p>
         </div>
 
         {/* PIC */}
@@ -379,42 +431,16 @@ export const VisitDetailPage: React.FC = () => {
           <div className="flex items-center gap-1.5">
             <img
               src={visit.picAvatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'}
-              alt={visit.picName}
+              alt={visit.picName || 'PIC'}
               className="w-4 h-4 rounded-full object-cover"
             />
-            <p className="text-xs font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk'] truncate">{visit.picName}</p>
+            <p className="text-xs font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk'] truncate">{visit.picName || '—'}</p>
           </div>
           <p className="text-[10px] text-[#767587]">Sales Lead</p>
         </div>
-
-        {/* Participants */}
-        <div className="bg-white p-4 rounded-2xl border border-[#E1E1E1] shadow-2xs space-y-1">
-          <div className="flex items-center gap-1.5 text-[#767587]">
-            <span className="material-symbols-outlined text-[16px]">group</span>
-            <span className="text-[10px] font-extrabold uppercase tracking-wider font-['Hanken_Grotesk']">Participants</span>
-          </div>
-          <div className="flex -space-x-1.5 pt-0.5">
-            <img
-              src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80"
-              alt="Sarah"
-              className="w-5 h-5 rounded-full object-cover border border-white"
-              title="Sarah Jenkins"
-            />
-            <img
-              src="https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80"
-              alt="Michael"
-              className="w-5 h-5 rounded-full object-cover border border-white"
-              title="Michael Rodriguez"
-            />
-            <span className="w-5 h-5 rounded-full bg-slate-100 border border-white text-[9px] font-bold text-[#555468] flex items-center justify-center">
-              +1
-            </span>
-          </div>
-          <p className="text-[10px] text-[#767587]">3 Team Members</p>
-        </div>
       </div>
 
-      {/* LOWER SECTION: NOTES, TASKS, FOLLOW-UPS, HISTORY */}
+      {/* LOWER SECTION: NOTES, ACTIVITY HISTORY, TASKS, FOLLOW-UPS */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* LEFT 2 COLS: NOTES & ACTIVITY HISTORY */}
         <div className="lg:col-span-2 space-y-6">
@@ -426,11 +452,7 @@ export const VisitDetailPage: React.FC = () => {
                 <span>Visit Notes</span>
               </h3>
               <button
-                onClick={async () => {
-                  const updated = { ...visit, notes };
-                  await crmApi.updateRecord('visits', visit.id, updated);
-                  showToast('Visit notes updated!');
-                }}
+                onClick={handleSaveNotes}
                 className="text-xs font-bold text-[#4744e5] hover:underline cursor-pointer"
               >
                 Save Notes
@@ -445,7 +467,7 @@ export const VisitDetailPage: React.FC = () => {
             />
           </div>
 
-          {/* Activity History Card */}
+          {/* Activity History Card (Authoritative from audit_logs) */}
           <div className="bg-white p-6 rounded-2xl border border-[#E1E1E1] shadow-2xs space-y-4">
             <div className="border-b border-[#f0f0f4] pb-3">
               <h3 className="font-extrabold text-sm text-[#1a1c1c] font-['Hanken_Grotesk'] flex items-center gap-2">
@@ -455,25 +477,64 @@ export const VisitDetailPage: React.FC = () => {
             </div>
 
             <div className="space-y-3">
-              {activityHistory.map((item) => (
-                <div key={item.id} className="flex gap-3 text-xs border-b border-slate-100 last:border-none pb-2.5">
-                  <div className="w-2 h-2 rounded-full bg-[#4744e5] mt-1.5 shrink-0" />
-                  <div>
-                    <p className="text-[#1a1c1c] font-medium">{item.action}</p>
-                    <div className="flex items-center gap-2 text-[10px] text-[#767587] mt-0.5">
-                      <span className="font-bold text-[#555468]">{item.user}</span>
-                      <span>•</span>
-                      <span>{item.date}</span>
+              {activityHistory.length === 0 ? (
+                <div className="text-center py-6 text-xs text-[#767587]">
+                  No activity history recorded
+                </div>
+              ) : (
+                activityHistory.map((item) => (
+                  <div key={item.id} className="flex gap-3 text-xs border-b border-slate-100 last:border-none pb-2.5">
+                    <div className="w-2 h-2 rounded-full bg-[#4744e5] mt-1.5 shrink-0" />
+                    <div>
+                      <p className="text-[#1a1c1c] font-medium">{item.description || item.action}</p>
+                      <div className="flex items-center gap-2 text-[10px] text-[#767587] mt-0.5">
+                        <span className="font-bold text-[#555468]">{item.userName || 'System'}</span>
+                        <span>•</span>
+                        <span>{formatDateTime(item.timestamp)}</span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         </div>
 
-        {/* RIGHT 1 COL: RELATED TASKS & FOLLOW-UPS */}
+        {/* RIGHT 1 COL: PARTICIPANTS, TASKS, FOLLOW-UPS */}
         <div className="space-y-6">
+          {/* Participants Card */}
+          <div className="bg-white p-6 rounded-2xl border border-[#E1E1E1] shadow-2xs space-y-3">
+            <div className="flex items-center justify-between border-b border-[#f0f0f4] pb-3">
+              <h3 className="font-extrabold text-sm text-[#1a1c1c] font-['Hanken_Grotesk'] flex items-center gap-2">
+                <span className="material-symbols-outlined text-[#4744e5] text-[18px]">group</span>
+                <span>Participants</span>
+              </h3>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-[#555468]">
+                {(visit.participants || []).length} Assigned
+              </span>
+            </div>
+
+            {(!visit.participants || visit.participants.length === 0) ? (
+              <p className="text-xs text-[#767587] py-2">No participants assigned</p>
+            ) : (
+              <div className="space-y-2">
+                {visit.participants.map((p: any) => (
+                  <div key={p.id} className="flex items-center gap-2 text-xs">
+                    <img
+                      src={p.userAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'}
+                      alt={p.userName || 'User'}
+                      className="w-6 h-6 rounded-full object-cover"
+                    />
+                    <div>
+                      <div className="font-semibold text-[#1a1c1c]">{p.userName}</div>
+                      <div className="text-[10px] text-[#767587]">{p.userEmail || p.role}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Related Tasks Card */}
           <div className="bg-white p-6 rounded-2xl border border-[#E1E1E1] shadow-2xs space-y-3">
             <div className="flex items-center justify-between border-b border-[#f0f0f4] pb-3">
@@ -482,35 +543,31 @@ export const VisitDetailPage: React.FC = () => {
                 <span>Related Tasks</span>
               </h3>
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-[#555468]">
-                2 Tasks
+                {tasks.length} {tasks.length === 1 ? 'Task' : 'Tasks'}
               </span>
             </div>
 
-            <div className="space-y-2.5">
-              <div className="p-3 border border-[#E1E1E1] rounded-xl hover:border-[#4744e5] transition-all text-xs space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">
-                    Prepare Q3 Deck
-                  </span>
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
-                    High
-                  </span>
-                </div>
-                <p className="text-[11px] text-[#767587]">Compile SLA performance data for PT Maju Jaya</p>
+            {tasks.length === 0 ? (
+              <div className="text-center py-4 text-xs text-[#767587]">
+                No tasks linked to this visit
               </div>
-
-              <div className="p-3 border border-[#E1E1E1] rounded-xl hover:border-[#4744e5] transition-all text-xs space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">
-                    Confirm Visitor Badges
-                  </span>
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">
-                    Normal
-                  </span>
-                </div>
-                <p className="text-[11px] text-[#767587]">Coordinate Cyber 2 Tower lobby registration</p>
+            ) : (
+              <div className="space-y-2.5">
+                {tasks.map((t: any) => (
+                  <div key={t.id} className="p-3 border border-[#E1E1E1] rounded-xl hover:border-[#4744e5] transition-all text-xs space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">
+                        {t.title}
+                      </span>
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">
+                        {t.priorityName || t.priorityId || 'Normal'}
+                      </span>
+                    </div>
+                    {t.description && <p className="text-[11px] text-[#767587]">{t.description}</p>}
+                  </div>
+                ))}
               </div>
-            </div>
+            )}
           </div>
 
           {/* Related Follow-ups Card */}
@@ -521,19 +578,31 @@ export const VisitDetailPage: React.FC = () => {
                 <span>Related Follow-ups</span>
               </h3>
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-[#555468]">
-                1 Scheduled
+                {followups.length} Scheduled
               </span>
             </div>
 
-            <div className="p-3 border border-[#E1E1E1] rounded-xl hover:border-[#4744e5] transition-all text-xs space-y-1">
-              <div className="flex items-center justify-between">
-                <span className="font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">
-                  Send Proposal Draft
-                </span>
-                <span className="text-[10px] text-[#4744e5] font-bold">Aug 14, 2026</span>
+            {followups.length === 0 ? (
+              <div className="text-center py-4 text-xs text-[#767587]">
+                No follow-ups linked to this visit
               </div>
-              <p className="text-[11px] text-[#767587]">Email revised license pricing model post-visit.</p>
-            </div>
+            ) : (
+              <div className="space-y-2.5">
+                {followups.map((f: any) => (
+                  <div key={f.id} className="p-3 border border-[#E1E1E1] rounded-xl hover:border-[#4744e5] transition-all text-xs space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk']">
+                        {f.title}
+                      </span>
+                      <span className="text-[10px] text-[#4744e5] font-bold">
+                        {formatDate(f.followUpDate)}
+                      </span>
+                    </div>
+                    {f.notes && <p className="text-[11px] text-[#767587]">{f.notes}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -554,11 +623,12 @@ export const VisitDetailPage: React.FC = () => {
               </button>
             </div>
 
-            <div className="space-y-3 text-xs">
+            <form onSubmit={handleRescheduleSubmit} className="space-y-3 text-xs">
               <div>
-                <label className="font-bold text-[#1a1c1c] block mb-1">New Date</label>
+                <label className="font-bold text-[#1a1c1c] block mb-1">New Date *</label>
                 <input
                   type="date"
+                  required
                   value={newDate}
                   onChange={(e) => setNewDate(e.target.value)}
                   className="w-full p-2.5 border border-[#E1E1E1] rounded-xl font-medium"
@@ -567,40 +637,54 @@ export const VisitDetailPage: React.FC = () => {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="font-bold text-[#1a1c1c] block mb-1">Start Time</label>
+                  <label className="font-bold text-[#1a1c1c] block mb-1">Start Time *</label>
                   <input
                     type="time"
+                    required
                     value={newStartTime}
                     onChange={(e) => setNewStartTime(e.target.value)}
                     className="w-full p-2.5 border border-[#E1E1E1] rounded-xl font-medium"
                   />
                 </div>
                 <div>
-                  <label className="font-bold text-[#1a1c1c] block mb-1">End Time</label>
+                  <label className="font-bold text-[#1a1c1c] block mb-1">End Time *</label>
                   <input
                     type="time"
+                    required
                     value={newEndTime}
                     onChange={(e) => setNewEndTime(e.target.value)}
                     className="w-full p-2.5 border border-[#E1E1E1] rounded-xl font-medium"
                   />
                 </div>
               </div>
-            </div>
 
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#f0f0f4]">
-              <button
-                onClick={() => setIsRescheduleOpen(false)}
-                className="px-4 py-2 border border-[#E1E1E1] text-xs font-bold rounded-xl hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleRescheduleSubmit}
-                className="px-4 py-2 bg-[#4744e5] text-white text-xs font-extrabold rounded-xl hover:bg-[#322fce]"
-              >
-                Confirm Reschedule
-              </button>
-            </div>
+              <div>
+                <label className="font-bold text-[#1a1c1c] block mb-1">Reason for Rescheduling</label>
+                <textarea
+                  rows={2}
+                  value={rescheduleReason}
+                  onChange={(e) => setRescheduleReason(e.target.value)}
+                  placeholder="e.g. Client requested postponement due to executive conflict..."
+                  className="w-full p-2.5 border border-[#E1E1E1] rounded-xl font-medium resize-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#f0f0f4]">
+                <button
+                  type="button"
+                  onClick={() => setIsRescheduleOpen(false)}
+                  className="px-4 py-2 border border-[#E1E1E1] text-xs font-bold rounded-xl hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-[#4744e5] text-white text-xs font-extrabold rounded-xl hover:bg-[#322fce]"
+                >
+                  Confirm Reschedule
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -621,7 +705,7 @@ export const VisitDetailPage: React.FC = () => {
               </button>
             </div>
 
-            <div className="space-y-3 text-xs">
+            <form onSubmit={handleCancelSubmit} className="space-y-3 text-xs">
               <p className="text-[#555468]">
                 Are you sure you want to cancel the visit with <span className="font-bold text-[#1a1c1c]">{visit.customerName}</span>?
               </p>
@@ -636,22 +720,23 @@ export const VisitDetailPage: React.FC = () => {
                   className="w-full p-2.5 border border-[#E1E1E1] rounded-xl font-medium resize-none"
                 />
               </div>
-            </div>
 
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#f0f0f4]">
-              <button
-                onClick={() => setIsCancelModalOpen(false)}
-                className="px-4 py-2 border border-[#E1E1E1] text-xs font-bold rounded-xl hover:bg-slate-50"
-              >
-                Close
-              </button>
-              <button
-                onClick={handleCancelSubmit}
-                className="px-4 py-2 bg-rose-600 text-white text-xs font-extrabold rounded-xl hover:bg-rose-700"
-              >
-                Confirm Cancellation
-              </button>
-            </div>
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#f0f0f4]">
+                <button
+                  type="button"
+                  onClick={() => setIsCancelModalOpen(false)}
+                  className="px-4 py-2 border border-[#E1E1E1] text-xs font-bold rounded-xl hover:bg-slate-50"
+                >
+                  Close
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-rose-600 text-white text-xs font-extrabold rounded-xl hover:bg-rose-700"
+                >
+                  Confirm Cancellation
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

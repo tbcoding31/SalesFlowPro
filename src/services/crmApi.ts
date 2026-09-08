@@ -469,6 +469,82 @@ export const crmApi = {
     }
   },
 
+  // Visit Lifecycle Endpoints
+  cancelVisit: async (id: string, reason?: string): Promise<{ success: boolean; error?: string; code?: string; data?: any }> => {
+    try {
+      const res = await fetch(`${API_BASE}/visits/${id}/cancel`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ reason })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to cancel visit', code: data.code };
+      }
+      return { success: true, data };
+    } catch (err: any) {
+      console.error('[crmApi.cancelVisit error]', err);
+      return { success: false, error: err.message || 'Network error' };
+    }
+  },
+
+  rescheduleVisit: async (
+    id: string,
+    payload: { visitDate: string; startTime?: string; endTime?: string; reason?: string }
+  ): Promise<{ success: boolean; error?: string; code?: string; data?: any }> => {
+    try {
+      const res = await fetch(`${API_BASE}/visits/${id}/reschedule`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to reschedule visit', code: data.code };
+      }
+      return { success: true, data };
+    } catch (err: any) {
+      console.error('[crmApi.rescheduleVisit error]', err);
+      return { success: false, error: err.message || 'Network error' };
+    }
+  },
+
+  fetchVisitHistory: async (id: string): Promise<any[]> => {
+    try {
+      const res = await fetch(`${API_BASE}/visits/${id}/history`, { headers: getAuthHeaders() });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
+    } catch (err) {
+      console.error('[crmApi.fetchVisitHistory error]', err);
+      return [];
+    }
+  },
+
+  fetchVisitTasks: async (id: string): Promise<any[]> => {
+    try {
+      const res = await fetch(`${API_BASE}/visits/${id}/tasks`, { headers: getAuthHeaders() });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
+    } catch (err) {
+      console.error('[crmApi.fetchVisitTasks error]', err);
+      return [];
+    }
+  },
+
+  fetchVisitFollowups: async (id: string): Promise<any[]> => {
+    try {
+      const res = await fetch(`${API_BASE}/visits/${id}/followups`, { headers: getAuthHeaders() });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
+    } catch (err) {
+      console.error('[crmApi.fetchVisitFollowups error]', err);
+      return [];
+    }
+  },
+
   // Project Commercial Stage Transition
   transitionProjectStage: async (
     projectId: string, 
