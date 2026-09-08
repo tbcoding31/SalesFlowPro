@@ -1,10 +1,11 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { masterDataApi } from '../../services/masterDataApi';
 import { Customer, User, VisitStatus, MasterDataItem } from '../../types';
 import { crmApi } from '../../services/crmApi';
 import { usersApi } from '../../services/usersApi';
+import { resolveVisitOrigin, buildVisitsUrl } from '../../utils/visitNavigation';
 
 interface UserWorkloadInfo {
   user: User;
@@ -15,6 +16,9 @@ interface UserWorkloadInfo {
 
 export const CreateVisitPage: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const navContext = useMemo(() => resolveVisitOrigin(searchParams), [searchParams]);
+  const visitsUrl = useMemo(() => buildVisitsUrl(navContext), [navContext]);
   const { currentUser } = useAuth();
   const tenantId = currentUser?.tenantId ;
 
@@ -221,7 +225,7 @@ export const CreateVisitPage: React.FC = () => {
       if (res.success) {
         setToastMessage(status === 'PLANNED' ? 'Visit draft saved successfully!' : 'Customer visit scheduled successfully!');
         setTimeout(() => {
-          navigate('/visits');
+          navigate(visitsUrl);
         }, 1200);
       } else {
         alert(`Failed to save visit: ${res.error || 'Unknown error'}`);
@@ -247,7 +251,7 @@ export const CreateVisitPage: React.FC = () => {
       <div className="bg-white p-6 rounded-2xl border border-[#E1E1E1] shadow-2xs">
         {/* Breadcrumb */}
         <div className="flex items-center gap-2 text-[11px] font-bold text-[#767587] uppercase tracking-wider font-['Hanken_Grotesk'] mb-2">
-          <Link to="/visits" className="hover:text-[#4744e5] transition-colors flex items-center gap-1">
+          <Link to={visitsUrl} className="hover:text-[#4744e5] transition-colors flex items-center gap-1">
             <span className="material-symbols-outlined text-[14px]">calendar_month</span>
             <span>Visits</span>
           </Link>
@@ -267,7 +271,7 @@ export const CreateVisitPage: React.FC = () => {
           </div>
 
           <button
-            onClick={() => navigate('/visits')}
+            onClick={() => navigate(visitsUrl)}
             className="px-3.5 py-1.5 border border-[#E1E1E1] text-[#555468] hover:bg-slate-50 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
           >
             <span className="material-symbols-outlined text-[16px]">arrow_back</span>
@@ -783,7 +787,7 @@ export const CreateVisitPage: React.FC = () => {
       <div className="flex flex-col sm:flex-row items-center justify-end gap-3 pt-2">
         <button
           type="button"
-          onClick={() => navigate('/visits')}
+          onClick={() => navigate(visitsUrl)}
           className="w-full sm:w-auto px-5 py-2.5 border border-[#E1E1E1] hover:bg-slate-100 text-[#555468] text-xs font-bold rounded-xl transition-all cursor-pointer font-['Hanken_Grotesk'] text-center"
         >
           Cancel

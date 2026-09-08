@@ -1,12 +1,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { Visit, VisitStatus } from '../../types';
 import { crmApi } from '../../services/crmApi';
+import { resolveVisitOrigin, buildVisitsUrl, buildVisitDetailUrl } from '../../utils/visitNavigation';
 
 export const VisitReportPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const navContext = useMemo(() => resolveVisitOrigin(searchParams), [searchParams]);
+  const visitsUrl = useMemo(() => buildVisitsUrl(navContext), [navContext]);
+  const detailUrl = useMemo(() => buildVisitDetailUrl(id || '', navContext), [id, navContext]);
   const { currentUser } = useAuth();
   const tenantId = currentUser?.tenantId ;
 
@@ -74,7 +79,7 @@ export const VisitReportPage: React.FC = () => {
       <div className="bg-white p-8 rounded-xl border border-[#E1E1E1] text-center max-w-lg mx-auto my-12">
         <h2 className="text-xl font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">Visit Not Found</h2>
         <p className="text-xs text-[#767587] mt-1">The requested visit report could not be found.</p>
-        <Link to="/visits" className="inline-block mt-4 px-4 py-2 bg-[#4744e5] text-white text-xs font-bold rounded-lg">
+        <Link to={visitsUrl} className="inline-block mt-4 px-4 py-2 bg-[#4744e5] text-white text-xs font-bold rounded-lg">
           Return to Visits
         </Link>
       </div>
@@ -104,13 +109,13 @@ export const VisitReportPage: React.FC = () => {
         </div>
         <div className="flex items-center gap-4 pt-4">
           <button
-            onClick={() => navigate(`/visits/${visit.id}`)}
+            onClick={() => navigate(detailUrl)}
             className="px-6 py-2.5 border border-[#E1E1E1] hover:bg-slate-50 text-[#1a1c1c] text-sm font-bold rounded-xl transition-all font-['Hanken_Grotesk']"
           >
             View Visit Details
           </button>
           <button
-            onClick={() => navigate('/visits')}
+            onClick={() => navigate(visitsUrl)}
             className="px-6 py-2.5 bg-[#4744e5] hover:bg-[#322fce] text-white text-sm font-extrabold rounded-xl shadow-md transition-all font-['Hanken_Grotesk']"
           >
             Back to All Visits
@@ -133,12 +138,12 @@ export const VisitReportPage: React.FC = () => {
       <div className="bg-white p-6 rounded-2xl border border-[#E1E1E1] shadow-2xs space-y-4">
         {/* Breadcrumb */}
         <div className="flex items-center gap-2 text-[11px] font-bold text-[#767587] uppercase tracking-wider font-['Hanken_Grotesk']">
-          <Link to="/visits" className="hover:text-[#4744e5] transition-colors flex items-center gap-1">
+          <Link to={visitsUrl} className="hover:text-[#4744e5] transition-colors flex items-center gap-1">
             <span className="material-symbols-outlined text-[14px]">calendar_month</span>
             <span>Visits</span>
           </Link>
           <span className="material-symbols-outlined text-[14px]">chevron_right</span>
-          <Link to={`/visits/${visit.id}`} className="hover:text-[#4744e5] transition-colors">
+          <Link to={detailUrl} className="hover:text-[#4744e5] transition-colors">
             {visit.customerName}
           </Link>
           <span className="material-symbols-outlined text-[14px]">chevron_right</span>
@@ -168,7 +173,7 @@ export const VisitReportPage: React.FC = () => {
             </div>
           </div>
           <button
-            onClick={() => navigate(`/visits/${visit.id}`)}
+            onClick={() => navigate(detailUrl)}
             className="px-3.5 py-1.5 border border-[#E1E1E1] text-[#555468] hover:bg-slate-50 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
           >
             <span className="material-symbols-outlined text-[16px]">arrow_back</span>

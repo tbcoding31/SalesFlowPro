@@ -1,13 +1,17 @@
-import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useParams, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { Visit, VisitStatus } from '../../types';
 import { crmApi } from '../../services/crmApi';
 import { formatDate, formatTime, formatDuration, formatDateTime } from '../../utils/formatters';
+import { resolveVisitOrigin, buildVisitsUrl, buildVisitEditUrl } from '../../utils/visitNavigation';
 
 export const VisitDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const navContext = useMemo(() => resolveVisitOrigin(searchParams), [searchParams]);
+  const visitsUrl = useMemo(() => buildVisitsUrl(navContext), [navContext]);
   const { currentUser } = useAuth();
   const tenantId = currentUser?.tenantId;
 
@@ -144,7 +148,7 @@ export const VisitDetailPage: React.FC = () => {
       <div className="bg-white p-8 rounded-xl border border-[#E1E1E1] text-center max-w-lg mx-auto my-12">
         <h2 className="text-xl font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">Visit Not Found</h2>
         <p className="text-xs text-[#767587] mt-1">The requested visit could not be found.</p>
-        <Link to="/visits" className="inline-block mt-4 px-4 py-2 bg-[#4744e5] text-white text-xs font-bold rounded-lg">
+        <Link to={visitsUrl} className="inline-block mt-4 px-4 py-2 bg-[#4744e5] text-white text-xs font-bold rounded-lg">
           Return to Visits
         </Link>
       </div>
@@ -199,7 +203,7 @@ export const VisitDetailPage: React.FC = () => {
                 Home
               </Link>
               <span className="material-symbols-outlined text-[14px]">chevron_right</span>
-              <Link to="/visits" className="hover:text-[#4744e5] transition-colors">
+              <Link to={visitsUrl} className="hover:text-[#4744e5] transition-colors">
                 Visits
               </Link>
               <span className="material-symbols-outlined text-[14px]">chevron_right</span>
@@ -245,7 +249,7 @@ export const VisitDetailPage: React.FC = () => {
             {/* Edit Visit button */}
             {statusStr !== 'COMPLETED' && (
               <button
-                onClick={() => navigate(`/visits/${visit.id}/edit`)}
+                onClick={() => navigate(buildVisitEditUrl(visit.id, navContext))}
                 className="px-3.5 py-2 border border-[#E1E1E1] hover:bg-slate-50 text-[#1a1c1c] text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 font-['Hanken_Grotesk'] cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[16px]">edit</span>

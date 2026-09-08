@@ -1,10 +1,18 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { Visit, Customer, User, VisitStatus } from '../../types';
 import { crmApi } from '../../services/crmApi';
 import { usersApi } from '../../services/usersApi';
 import { formatDate, formatTime } from '../../utils/formatters';
+import {
+  formatYearMonth,
+  parseYearMonth,
+  sanitizeMonthParam,
+  buildVisitDetailUrl,
+  buildVisitEditUrl,
+  buildScheduleVisitUrl,
+} from '../../utils/visitNavigation';
 
 export const VisitsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -65,8 +73,11 @@ export const VisitsPage: React.FC = () => {
     loadData();
   }, [tenantId]);
 
-  // View state
-  const [activeView, setActiveView] = useState<'list' | 'calendar'>('list');
+  // URL View & Month navigation state
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawView = (searchParams.get('view') || '').toLowerCase().trim();
+  const activeView: 'list' | 'calendar' = rawView === 'calendar' ? 'calendar' : 'list';
+  const urlMonth = sanitizeMonthParam(searchParams.get('month'));
 
   // Filter toolbar states
   const [dateRangeFilter, setDateRangeFilter] = useState<'ALL' | 'TODAY' | 'WEEK' | 'MONTH' | 'CUSTOM'>('ALL');
@@ -105,8 +116,48 @@ export const VisitsPage: React.FC = () => {
   const [cancelReason, setCancelReason] = useState('');
 
   // Calendar Month Navigation & Selected Date
-  const [calendarCurrentDate, setCalendarCurrentDate] = useState<Date>(() => new Date());
+  const [calendarCurrentDate, setCalendarCurrentDate] = useState<Date>(() => {
+    return urlMonth ? parseYearMonth(urlMonth) : new Date();
+  });
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+
+  // Sync calendarCurrentDate if urlMonth changes externally (e.g. Back/Forward)
+  useEffect(() => {
+    if (urlMonth) {
+      const parsed = parseYearMonth(urlMonth);
+      if (
+        parsed.getFullYear() !== calendarCurrentDate.getFullYear() ||
+        parsed.getMonth() !== calendarCurrentDate.getMonth()
+      ) {
+        setCalendarCurrentDate(parsed);
+      }
+    }
+  }, [urlMonth]);
+
+  const handleViewChange = (newView: 'list' | 'calendar') => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('view', newView);
+      if (newView === 'calendar') {
+        next.set('month', formatYearMonth(calendarCurrentDate));
+      } else {
+        next.delete('month');
+      }
+      return next;
+    });
+  };
+
+  const handleMonthChange = (newDate: Date) => {
+    setCalendarCurrentDate(newDate);
+    if (activeView === 'calendar') {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set('view', 'calendar');
+        next.set('month', formatYearMonth(newDate));
+        return next;
+      });
+    }
+  };
 
   // Calendar specific sidebar filters
   const [calStatusFilter, setCalStatusFilter] = useState<{ [key: string]: boolean }>({
@@ -530,7 +581,7 @@ export const VisitsPage: React.FC = () => {
           {/* View Switcher */}
           <div className="flex items-center p-1 bg-[#f4f4f6] rounded-xl border border-[#E1E1E1]">
             <button
-              onClick={() => setActiveView('list')}
+              onClick={() => handleViewChange('list')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                 activeView === 'list'
                   ? 'bg-white text-[#1a1c1c] shadow-2xs'
@@ -541,7 +592,7 @@ export const VisitsPage: React.FC = () => {
               <span>List</span>
             </button>
             <button
-              onClick={() => setActiveView('calendar')}
+              onClick={() => handleViewChange('calendar')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                 activeView === 'calendar'
                   ? 'bg-white text-[#1a1c1c] shadow-2xs'
@@ -555,7 +606,14 @@ export const VisitsPage: React.FC = () => {
 
           {/* Primary Schedule Visit Button */}
           <button
-            onClick={() => navigate('/visits/schedule')}
+            onClick={() =>
+              navigate(
+                buildScheduleVisitUrl({
+                  from: activeView,
+                  month: activeView === 'calendar' ? formatYearMonth(calendarCurrentDate) : undefined,
+                })
+              )
+            }
             className="px-4 py-2 bg-[#4744e5] hover:bg-[#322fce] text-white text-xs font-bold rounded-xl shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer font-['Hanken_Grotesk']"
           >
             <span className="material-symbols-outlined text-[18px]">add</span>
@@ -739,7 +797,7 @@ export const VisitsPage: React.FC = () => {
                     <tr key={v.id} className="hover:bg-[#fcfcfd] transition-colors group">
                       {/* 1. Date */}
                       <td className="px-5 py-4 whitespace-nowrap font-medium text-[#1a1c1c]">
-                        <Link to={`/visits/${v.id}`} className="block hover:opacity-80 transition-opacity group/link">
+                        <Link to={buildVisitDetailUrl(v.id, { from: 'list' })} className="block hover:opacity-80 transition-opacity group/link">
                           <div className="font-semibold group-hover/link:text-[#4744e5] transition-colors">{formatDate(v.visitDate)}</div>
                           <div className="text-[10px] text-[#767587] font-mono group-hover/link:text-[#4744e5] transition-colors">{v.id}</div>
                         </Link>
@@ -831,7 +889,7 @@ export const VisitsPage: React.FC = () => {
                               <button
                                 onClick={() => {
                                   setActiveActionMenuId(null);
-                                  navigate(`/visits/${v.id}`);
+                                  navigate(buildVisitDetailUrl(v.id, { from: 'list' }));
                                 }}
                                 className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-50 text-[#1a1c1c] cursor-pointer"
                               >
@@ -844,7 +902,7 @@ export const VisitsPage: React.FC = () => {
                                 <button
                                   onClick={() => {
                                     setActiveActionMenuId(null);
-                                    navigate(`/visits/${v.id}/edit`);
+                                    navigate(buildVisitEditUrl(v.id, { from: 'list' }));
                                   }}
                                   className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-50 text-[#1a1c1c] cursor-pointer"
                                 >
@@ -902,7 +960,7 @@ export const VisitsPage: React.FC = () => {
               <div className="flex items-center justify-between">
                 <button
                   onClick={() =>
-                    setCalendarCurrentDate(
+                    handleMonthChange(
                       new Date(calendarCurrentDate.getFullYear(), calendarCurrentDate.getMonth() - 1, 1)
                     )
                   }
@@ -915,7 +973,7 @@ export const VisitsPage: React.FC = () => {
                 </h3>
                 <button
                   onClick={() =>
-                    setCalendarCurrentDate(
+                    handleMonthChange(
                       new Date(calendarCurrentDate.getFullYear(), calendarCurrentDate.getMonth() + 1, 1)
                     )
                   }
@@ -1145,7 +1203,12 @@ export const VisitsPage: React.FC = () => {
                               key={v.id}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                navigate(`/visits/${v.id}`);
+                                navigate(
+                                  buildVisitDetailUrl(v.id, {
+                                    from: 'calendar',
+                                    month: formatYearMonth(calendarCurrentDate),
+                                  })
+                                );
                               }}
                               className="bg-white border border-[#E1E1E1] hover:border-[#4744e5] hover:shadow-md transition-all rounded-xl p-3 text-left shadow-2xs relative cursor-pointer group space-y-1"
                             >
@@ -1470,7 +1533,12 @@ export const VisitsPage: React.FC = () => {
                     if (viewingVisit) {
                       const id = viewingVisit.id;
                       setViewingVisit(null);
-                      navigate(`/visits/${id}/edit`);
+                      navigate(
+                        buildVisitEditUrl(id, {
+                          from: 'calendar',
+                          month: formatYearMonth(calendarCurrentDate),
+                        })
+                      );
                     }
                   }}
                   className="px-3 py-1.5 border border-[#E1E1E1] hover:bg-slate-50 rounded-lg text-xs font-semibold cursor-pointer flex items-center gap-1"

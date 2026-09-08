@@ -1,11 +1,12 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { masterDataApi } from '../../services/masterDataApi';
 import { Customer, User, MasterDataItem, Visit } from '../../types';
 import { crmApi } from '../../services/crmApi';
 import { usersApi } from '../../services/usersApi';
 import { formatDate } from '../../utils/formatters';
+import { resolveVisitOrigin, buildVisitsUrl, buildVisitDetailUrl } from '../../utils/visitNavigation';
 
 interface UserWorkloadInfo {
   user: User;
@@ -17,6 +18,10 @@ interface UserWorkloadInfo {
 export const EditVisitPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const navContext = useMemo(() => resolveVisitOrigin(searchParams), [searchParams]);
+  const visitsUrl = useMemo(() => buildVisitsUrl(navContext), [navContext]);
+  const detailUrl = useMemo(() => buildVisitDetailUrl(id || '', navContext), [id, navContext]);
   const { currentUser } = useAuth();
   const tenantId = currentUser?.tenantId;
 
@@ -269,7 +274,7 @@ export const EditVisitPage: React.FC = () => {
 
       setToastMessage('Visit updated successfully!');
       setTimeout(() => {
-        navigate(`/visits/${id}`);
+        navigate(detailUrl);
       }, 500);
     } catch (err: any) {
       console.error('[EditVisitPage save error]', err);
@@ -299,7 +304,7 @@ export const EditVisitPage: React.FC = () => {
         <h2 className="text-lg font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">Cannot Edit Visit</h2>
         <p className="text-xs text-[#767587]">{errorMessage}</p>
         <button
-          onClick={() => navigate('/visits')}
+          onClick={() => navigate(visitsUrl)}
           className="px-4 py-2 bg-[#4744e5] text-white text-xs font-bold rounded-xl hover:bg-[#3834d0]"
         >
           Back to Visits
@@ -327,8 +332,12 @@ export const EditVisitPage: React.FC = () => {
           <div>
             {/* Breadcrumb */}
             <div className="flex items-center gap-2 text-[11px] font-bold text-[#767587] uppercase tracking-wider font-['Hanken_Grotesk'] mb-1">
-              <Link to="/visits" className="hover:text-[#4744e5] transition-colors">
+              <Link to={visitsUrl} className="hover:text-[#4744e5] transition-colors">
                 Visits
+              </Link>
+              <span className="material-symbols-outlined text-[14px]">chevron_right</span>
+              <Link to={detailUrl} className="hover:text-[#4744e5] transition-colors">
+                {id}
               </Link>
               <span className="material-symbols-outlined text-[14px]">chevron_right</span>
               <span className="text-[#1a1c1c]">Edit Visit</span>
@@ -360,7 +369,7 @@ export const EditVisitPage: React.FC = () => {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => navigate(`/visits/${id}`)}
+              onClick={() => navigate(detailUrl)}
               className="px-4 py-2 border border-[#E1E1E1] hover:bg-slate-50 text-[#1a1c1c] text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 font-['Hanken_Grotesk'] cursor-pointer"
             >
               <span className="material-symbols-outlined text-[16px]">arrow_back</span>
@@ -910,7 +919,7 @@ export const EditVisitPage: React.FC = () => {
         <div className="flex flex-col sm:flex-row items-center justify-end gap-3 pt-2">
           <button
             type="button"
-            onClick={() => navigate(`/visits/${id}`)}
+            onClick={() => navigate(detailUrl)}
             className="w-full sm:w-auto px-5 py-2.5 border border-[#E1E1E1] hover:bg-slate-100 text-[#555468] text-xs font-bold rounded-xl transition-all cursor-pointer font-['Hanken_Grotesk'] text-center"
           >
             Cancel

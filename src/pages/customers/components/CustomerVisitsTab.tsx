@@ -4,6 +4,7 @@ import { Visit, User } from '../../../types';
 import { crmApi } from '../../../services/crmApi';
 import { useAuth } from '../../../context/AuthContext';
 import { formatDate, formatTimeRange } from '../../../utils/formatters';
+import { buildVisitDetailUrl, buildVisitEditUrl, buildScheduleVisitUrl } from '../../../utils/visitNavigation';
 
 export interface CustomerVisitsTabProps {
   customerId: string;
@@ -134,7 +135,7 @@ export const CustomerVisitsTab: React.FC<CustomerVisitsTabProps> = ({ customerId
             </p>
           </div>
           <button
-            onClick={() => navigate(`/visits/schedule?customerId=${customerId}`)}
+            onClick={() => navigate(`${buildScheduleVisitUrl({ from: 'list' })}&customerId=${customerId}`)}
             className="px-4 py-2 bg-[#4744e5] hover:bg-[#3834d0] text-white text-xs font-bold rounded-lg flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors self-start md:self-auto"
           >
             <span className="material-symbols-outlined text-[18px]">add</span>
@@ -383,7 +384,7 @@ export const CustomerVisitsTab: React.FC<CustomerVisitsTabProps> = ({ customerId
                         <td className="py-3 px-4 whitespace-nowrap text-center">
                           <div className="flex items-center justify-center gap-1">
                             <button
-                              onClick={() => navigate(`/visits/${v.id}`)}
+                              onClick={() => navigate(buildVisitDetailUrl(v.id, { from: 'list' }))}
                               title="View Visit Details"
                               className="p-1.5 hover:bg-[#f0f0f0] rounded text-[#464555] hover:text-[#1a1c1c] cursor-pointer"
                             >
@@ -392,7 +393,7 @@ export const CustomerVisitsTab: React.FC<CustomerVisitsTabProps> = ({ customerId
 
                             {(v.status || v.statusCode) !== 'COMPLETED' && (v.status || v.statusCode) !== 'CANCELLED' && (
                               <button
-                                onClick={() => navigate(`/visits/${v.id}/edit`)}
+                                onClick={() => navigate(buildVisitEditUrl(v.id, { from: 'list' }))}
                                 title="Edit Visit"
                                 className="p-1.5 hover:bg-[#e0e7ff] rounded text-[#4744e5] cursor-pointer"
                               >
