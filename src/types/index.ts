@@ -1177,3 +1177,21 @@ export interface CustomerTimelineEvent {
   subType: string;
   details: string;
 }
+
+export interface AppMenuItem {
+  id: string;
+  code: string;
+  label: string;
+  route: string | null;
+  iconKey: string | null;
+  parentId: string | null;
+  parentLabel?: string | null;
+  menuScope: 'PLATFORM' | 'TENANT';
+  menuType: 'GROUP' | 'ITEM' | 'SUBMENU';
+  displayOrder: number;
+  isActive: boolean | number;
+  roles?: string[];
+  children?: AppMenuItem[];
+  createdAt?: string;
+  updatedAt?: string;
+}

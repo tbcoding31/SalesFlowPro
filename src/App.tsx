@@ -18,6 +18,7 @@ import { TenantUsersPage } from './pages/admin/TenantUsersPage';
 import { CreateTenantUserPage } from './pages/admin/CreateTenantUserPage';
 import { RolesPermissionsPage } from './pages/admin/RolesPermissionsPage';
 import { MasterDataPage } from './pages/admin/MasterDataPage';
+import { MenuManagementPage } from './pages/admin/MenuManagementPage';
 
 // Sales CRM Pages
 import { TeamDashboard } from './pages/dashboard/TeamDashboard';
@@ -247,6 +248,22 @@ export default function App() {
             element={
               <ProtectedRoute requiredPermission="MANAGE_TENANT">
                 <MasterDataPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/menu-management"
+            element={
+              <ProtectedRoute requiredPlatformUser>
+                <MenuManagementPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/menus"
+            element={
+              <ProtectedRoute requiredPlatformUser>
+                <MenuManagementPage />
               </ProtectedRoute>
             }
           />

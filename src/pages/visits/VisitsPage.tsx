@@ -40,12 +40,31 @@ export const VisitsPage: React.FC = () => {
   const [totalItems, setTotalItems] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
 
-  
+  // URL View, Month & Scope navigation state
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawView = (searchParams.get('view') || '').toLowerCase().trim();
+  const activeView: 'list' | 'calendar' = rawView === 'calendar' ? 'calendar' : 'list';
+  const urlMonth = sanitizeMonthParam(searchParams.get('month'));
+
+  // Permissions & Scope
+  const canAccessAll = currentUser?.role === 'TENANT_ADMIN' || currentUser?.role === 'SUPERVISOR' || currentUser?.role === 'SUPER_ADMIN';
+  const requestedScope = searchParams.get('scope') || 'my';
+  const activeScope = (canAccessAll && requestedScope === 'all') ? 'all' : 'my';
+
+  const handleScopeChange = (newScope: 'my' | 'all') => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('scope', newScope);
+      return next;
+    });
+    setCurrentPage(1);
+  };
+
   const loadData = async (page = currentPage) => {
     setIsLoading(true);
     try {
       const [vRes, cList, pList] = await Promise.all([
-        crmApi.fetchVisits({ page, pageSize, search: searchQuery || undefined, tenantId }),
+        crmApi.fetchVisits({ page, pageSize, search: searchQuery || undefined, tenantId, scope: activeScope }),
         crmApi.fetchCollection('customers', tenantId),
         crmApi.fetchCollection('projects', tenantId)
       ]);
@@ -66,18 +85,7 @@ export const VisitsPage: React.FC = () => {
 
   React.useEffect(() => {
     loadData(1);
-  }, [tenantId, pageSize, searchQuery]);
-
-
-  React.useEffect(() => {
-    loadData();
-  }, [tenantId]);
-
-  // URL View & Month navigation state
-  const [searchParams, setSearchParams] = useSearchParams();
-  const rawView = (searchParams.get('view') || '').toLowerCase().trim();
-  const activeView: 'list' | 'calendar' = rawView === 'calendar' ? 'calendar' : 'list';
-  const urlMonth = sanitizeMonthParam(searchParams.get('month'));
+  }, [tenantId, pageSize, searchQuery, activeScope]);
 
   // Filter toolbar states
   const [dateRangeFilter, setDateRangeFilter] = useState<'ALL' | 'TODAY' | 'WEEK' | 'MONTH' | 'CUSTOM'>('ALL');
@@ -565,19 +573,56 @@ export const VisitsPage: React.FC = () => {
               Home
             </Link>
             <span className="material-symbols-outlined text-[14px]">chevron_right</span>
-            <span className="text-[#1a1c1c]">Visits</span>
+            <span className="text-[#1a1c1c]">{activeScope === 'all' ? 'All Visits' : 'My Visits'}</span>
           </div>
 
-          <h1 className="text-2xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk'] tracking-tight">
-            Visit Schedule
-          </h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk'] tracking-tight">
+              {activeScope === 'all' ? 'All Visits' : 'My Visits'}
+            </h1>
+            {canAccessAll && (
+              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider">
+                {activeScope === 'all' ? 'Tenant Wide' : 'Personal Scope'}
+              </span>
+            )}
+          </div>
           <p className="text-xs text-[#767587] mt-0.5">
-            Manage and track customer on-site visits across regions.
+            {activeScope === 'all'
+              ? 'Manage and monitor all customer on-site visits across your organization.'
+              : 'Manage and track your assigned customer on-site visits.'}
           </p>
         </div>
 
         {/* Primary Action & View Switcher Container */}
         <div className="flex items-center gap-3">
+          {/* Scope Switcher (Tenant Admin & Supervisor only) */}
+          {canAccessAll && (
+            <div className="flex bg-[#f3f3f3] p-1 rounded-xl border border-slate-200">
+              <button
+                onClick={() => handleScopeChange('my')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  activeScope === 'my'
+                    ? 'bg-white shadow-xs text-[#4744e5]'
+                    : 'text-[#767587] hover:text-[#1a1c1c]'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[15px]">person</span>
+                <span>My Visits</span>
+              </button>
+              <button
+                onClick={() => handleScopeChange('all')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  activeScope === 'all'
+                    ? 'bg-white shadow-xs text-[#4744e5]'
+                    : 'text-[#767587] hover:text-[#1a1c1c]'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[15px]">group</span>
+                <span>All Visits</span>
+              </button>
+            </div>
+          )}
+
           {/* View Switcher */}
           <div className="flex items-center p-1 bg-[#f4f4f6] rounded-xl border border-[#E1E1E1]">
             <button
@@ -611,6 +656,7 @@ export const VisitsPage: React.FC = () => {
                 buildScheduleVisitUrl({
                   from: activeView,
                   month: activeView === 'calendar' ? formatYearMonth(calendarCurrentDate) : undefined,
+                  scope: activeScope,
                 })
               )
             }
@@ -797,7 +843,7 @@ export const VisitsPage: React.FC = () => {
                     <tr key={v.id} className="hover:bg-[#fcfcfd] transition-colors group">
                       {/* 1. Date */}
                       <td className="px-5 py-4 whitespace-nowrap font-medium text-[#1a1c1c]">
-                        <Link to={buildVisitDetailUrl(v.id, { from: 'list' })} className="block hover:opacity-80 transition-opacity group/link">
+                        <Link to={buildVisitDetailUrl(v.id, { from: 'list', scope: activeScope })} className="block hover:opacity-80 transition-opacity group/link">
                           <div className="font-semibold group-hover/link:text-[#4744e5] transition-colors">{formatDate(v.visitDate)}</div>
                           <div className="text-[10px] text-[#767587] font-mono group-hover/link:text-[#4744e5] transition-colors">{v.id}</div>
                         </Link>
@@ -889,7 +935,7 @@ export const VisitsPage: React.FC = () => {
                               <button
                                 onClick={() => {
                                   setActiveActionMenuId(null);
-                                  navigate(buildVisitDetailUrl(v.id, { from: 'list' }));
+                                  navigate(buildVisitDetailUrl(v.id, { from: 'list', scope: activeScope }));
                                 }}
                                 className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-50 text-[#1a1c1c] cursor-pointer"
                               >
@@ -902,7 +948,7 @@ export const VisitsPage: React.FC = () => {
                                 <button
                                   onClick={() => {
                                     setActiveActionMenuId(null);
-                                    navigate(buildVisitEditUrl(v.id, { from: 'list', entry: 'list' }));
+                                    navigate(buildVisitEditUrl(v.id, { from: 'list', entry: 'list', scope: activeScope }));
                                   }}
                                   className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-50 text-[#1a1c1c] cursor-pointer"
                                 >
@@ -1207,6 +1253,7 @@ export const VisitsPage: React.FC = () => {
                                   buildVisitDetailUrl(v.id, {
                                     from: 'calendar',
                                     month: formatYearMonth(calendarCurrentDate),
+                                    scope: activeScope,
                                   })
                                 );
                               }}
@@ -1538,6 +1585,7 @@ export const VisitsPage: React.FC = () => {
                           from: 'calendar',
                           month: formatYearMonth(calendarCurrentDate),
                           entry: 'calendar',
+                          scope: activeScope,
                         })
                       );
                     }

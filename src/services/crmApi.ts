@@ -31,6 +31,7 @@ export interface QueryPaginationParams {
   sourceType?: string;
   relatedProjectId?: string;
   relatedVisitId?: string;
+  scope?: string;
 }
 
 export const crmApi = {
@@ -120,6 +121,7 @@ export const crmApi = {
       if (params.picId && params.picId !== 'ALL') q.set('picId', params.picId);
       if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
       if (params.customerId && params.customerId !== 'ALL') q.set('customerId', params.customerId);
+      if (params.scope) q.set('scope', params.scope);
     }
     const url = `${API_BASE}/visits${q.toString() ? '?' + q.toString() : ''}`;
     const res = await fetch(url, { headers: getAuthHeaders() });
@@ -315,6 +317,7 @@ export const crmApi = {
       if (params.relatedProjectId && params.relatedProjectId !== 'ALL') q.set('relatedProjectId', params.relatedProjectId);
       if (params.relatedVisitId && params.relatedVisitId !== 'ALL') q.set('relatedVisitId', params.relatedVisitId);
       if (params.sourceType && params.sourceType !== 'ALL') q.set('sourceType', params.sourceType);
+      if (params.scope) q.set('scope', params.scope);
     }
     const url = `${API_BASE}/tasks${q.toString() ? '?' + q.toString() : ''}`;
     const res = await fetch(url, { headers: getAuthHeaders() });

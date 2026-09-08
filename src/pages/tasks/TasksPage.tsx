@@ -110,6 +110,20 @@ export const TasksPage: React.FC = () => {
   const activeCategory = searchParams.get('category') || 'ALL';
   const activeProject = searchParams.get('project') || 'ALL';
 
+  // Permissions & Scope
+  const canAccessAll = currentUser?.role === 'TENANT_ADMIN' || currentUser?.role === 'SUPERVISOR' || currentUser?.role === 'SUPER_ADMIN';
+  const requestedScope = searchParams.get('scope') || 'my';
+  const activeScope = (canAccessAll && requestedScope === 'all') ? 'all' : 'my';
+
+  const handleScopeChange = (newScope: 'my' | 'all') => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('scope', newScope);
+      return next;
+    });
+    setCurrentPage(1);
+  };
+
   const loadData = async (page = currentPage) => {
     setIsLoading(true);
     try {
@@ -124,7 +138,8 @@ export const TasksPage: React.FC = () => {
           picId: picFilter !== 'ALL' ? picFilter : undefined,
           sourceType: sourceTypeFilter !== 'ALL' ? sourceTypeFilter : undefined,
           dueDate: dueDateFilter || undefined,
-          tenantId
+          tenantId,
+          scope: activeScope
         }),
         crmApi.fetchCollection<Customer>('customers', tenantId),
         crmApi.fetchCollection<Project>('projects', tenantId),
@@ -145,7 +160,7 @@ export const TasksPage: React.FC = () => {
 
   React.useEffect(() => {
     loadData(currentPage);
-  }, [tenantId, currentPage, pageSize, searchQuery, statusFilter, priorityFilter, customerFilter, picFilter, sourceTypeFilter, dueDateFilter]);
+  }, [tenantId, currentPage, pageSize, searchQuery, statusFilter, priorityFilter, customerFilter, picFilter, sourceTypeFilter, dueDateFilter, activeScope]);
 
   const [taskStatuses, setTaskStatuses] = useState<MasterDataItem[]>([]);
   const [taskPriorities, setTaskPriorities] = useState<MasterDataItem[]>([]);
@@ -356,15 +371,52 @@ export const TasksPage: React.FC = () => {
       {/* HEADER */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-2xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk'] tracking-tight">
-            My Tasks
-          </h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk'] tracking-tight">
+              {activeScope === 'all' ? 'All Tasks' : 'My Tasks'}
+            </h1>
+            {canAccessAll && (
+              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider">
+                {activeScope === 'all' ? 'Tenant Wide' : 'Personal Scope'}
+              </span>
+            )}
+          </div>
           <p className="text-xs text-[#767587] mt-0.5">
-            Manage your daily sales activities, follow-ups, and deliverables.
+            {activeScope === 'all'
+              ? 'Manage and monitor all tasks across your organization.'
+              : 'Manage your personal sales activities, follow-ups, and deliverables.'}
           </p>
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Scope Switcher (Tenant Admin & Supervisor only) */}
+          {canAccessAll && (
+            <div className="flex bg-[#f3f3f3] p-1 rounded-xl border border-slate-200">
+              <button
+                onClick={() => handleScopeChange('my')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  activeScope === 'my'
+                    ? 'bg-white shadow-xs text-[#4744e5]'
+                    : 'text-[#767587] hover:text-[#1a1c1c]'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[15px]">person</span>
+                <span>My Tasks</span>
+              </button>
+              <button
+                onClick={() => handleScopeChange('all')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  activeScope === 'all'
+                    ? 'bg-white shadow-xs text-[#4744e5]'
+                    : 'text-[#767587] hover:text-[#1a1c1c]'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[15px]">group</span>
+                <span>All Tasks</span>
+              </button>
+            </div>
+          )}
+
           {/* View Mode Toggle */}
           <div className="flex bg-[#f3f3f3] p-1 rounded-xl">
             <button 

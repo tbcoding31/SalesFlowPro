@@ -80,7 +80,9 @@ const TASK_SELECT_FIELDS = `
   t.completedAt
 `;
 
-// GET /api/tasks - List tasks with pagination, customerId, status, search, relatedProjectId, relatedVisitId, sourceType
+import { normalizeSemanticRole } from './navigation.routes';
+
+// GET /api/tasks - List tasks with pagination, customerId, status, search, relatedProjectId, relatedVisitId, sourceType, scope
 tasksRoutes.get('/', async (req: any, res: any) => {
   const actorRole = (req as any).userRole;
   const actorTenant = (req as any).userTenantId;
@@ -94,13 +96,38 @@ tasksRoutes.get('/', async (req: any, res: any) => {
   const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
   if (targetTenant === false) return;
 
-  const { where, params } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 't.picId');
+  const semanticRole = normalizeSemanticRole(actorRole, isPlatformUser);
+  const { customerId, picId, status, priority, search, page, pageSize, relatedProjectId, relatedVisitId, sourceType, dueDate, scope } = req.query;
+
+  // Scope Enforcement (All Tasks vs My Tasks)
+  let where: string;
+  let params: any[];
+
+  if (scope === 'all') {
+    // ONLY TENANT_ADMIN and SUPERVISOR (or SUPER_ADMIN) are permitted
+    if (semanticRole !== 'TENANT_ADMIN' && semanticRole !== 'SUPERVISOR' && semanticRole !== 'SUPER_ADMIN') {
+      return res.status(403).json({
+        error: 'Access denied: All Tasks scope is restricted to Tenant Admin and Supervisor',
+        code: 'SCOPE_ACCESS_DENIED'
+      });
+    }
+    // SPECIAL SUPERVISOR OVERRIDE: Tenant-wide visibility
+    where = 'WHERE t.tenantId = ?';
+    params = [targetTenant];
+  } else if (scope === 'my') {
+    // MY TASKS: Current authenticated user is assignee
+    where = 'WHERE t.tenantId = ? AND t.picId = ?';
+    params = [targetTenant, actorUserId];
+  } else {
+    // If scope is not explicitly provided, use standard report/role-based scoping
+    const scoped = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 't.picId');
+    where = scoped.where;
+    params = scoped.params;
+  }
 
   try {
     let extraWhere = '';
     const extraParams: any[] = [];
-
-    const { customerId, picId, status, priority, search, page, pageSize, relatedProjectId, relatedVisitId, sourceType, dueDate } = req.query;
 
     if (customerId && customerId !== 'ALL') {
       extraWhere += ' AND t.customerId = ?';

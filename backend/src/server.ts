@@ -26,6 +26,8 @@ import { permissionsRoutes } from './routes/permissions.routes';
 import { teamsRoutes } from './routes/teams.routes';
 import { tenantUsersRoutes } from './routes/tenant_users.routes';
 import { onboardingRoutes } from './routes/onboarding.routes';
+import { navigationRoutes } from './routes/navigation.routes';
+import { platformMenusRoutes } from './routes/platformMenus.routes';
 
 import { authMiddleware } from './middleware/auth';
 import { tenantMiddleware } from './middleware/tenant';
@@ -66,6 +68,8 @@ app.use('/api/master-data', authMiddleware, masterDataRoutes);
 app.use('/api/system/integrations', authMiddleware, integrationsRoutes);
 app.use('/api/system', authMiddleware, systemRoutes);
 app.use('/api/notifications', authMiddleware, notificationsRoutes);
+app.use('/api/navigation', authMiddleware, navigationRoutes);
+app.use('/api/platform/menus', authMiddleware, platformMenusRoutes);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Endpoint Not Found', path: req.originalUrl }));
 

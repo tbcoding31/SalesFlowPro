@@ -7,6 +7,7 @@ export interface VisitNavigationContext {
   from?: VisitViewMode;
   month?: string; // YYYY-MM
   entry?: VisitEditEntry;
+  scope?: string;
 }
 
 const MONTH_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -58,6 +59,7 @@ export function resolveVisitOrigin(
   const rawFrom = (params.get('from') || params.get('view') || '').toLowerCase().trim();
   const origin: VisitViewMode = rawFrom === 'calendar' ? 'calendar' : 'list';
   const month = sanitizeMonthParam(params.get('month'));
+  const scope = params.get('scope') || undefined;
 
   let entry: VisitEditEntry = 'direct';
   const rawEntry = (params.get('entry') || '').toLowerCase().trim();
@@ -67,11 +69,11 @@ export function resolveVisitOrigin(
     entry = 'direct';
   }
 
-  return { origin, from: origin, month, entry };
+  return { origin, from: origin, month, entry, scope };
 }
 
 /**
- * Builds the URL back to the main Visits page (/visits) preserving view and month.
+ * Builds the URL back to the main Visits page (/visits) preserving view, month, and scope.
  */
 export function buildVisitsUrl(context?: Partial<VisitNavigationContext>): string {
   const resolvedMode = context?.origin || context?.from;
@@ -83,11 +85,14 @@ export function buildVisitsUrl(context?: Partial<VisitNavigationContext>): strin
   if (view === 'calendar' && month) {
     query.set('month', month);
   }
+  if (context?.scope) {
+    query.set('scope', context.scope);
+  }
   return `/visits?${query.toString()}`;
 }
 
 /**
- * Builds the URL for Visit Detail (/visits/:id) preserving origin context.
+ * Builds the URL for Visit Detail (/visits/:id) preserving origin context and scope.
  */
 export function buildVisitDetailUrl(
   id: string,
@@ -102,11 +107,14 @@ export function buildVisitDetailUrl(
   if (from === 'calendar' && month) {
     query.set('month', month);
   }
+  if (context?.scope) {
+    query.set('scope', context.scope);
+  }
   return `/visits/${id}?${query.toString()}`;
 }
 
 /**
- * Builds the URL for Edit Visit (/visits/:id/edit) preserving origin context and entry path.
+ * Builds the URL for Edit Visit (/visits/:id/edit) preserving origin context, entry path, and scope.
  */
 export function buildVisitEditUrl(
   id: string,
@@ -125,11 +133,14 @@ export function buildVisitEditUrl(
   if (entry) {
     query.set('entry', entry);
   }
+  if (context?.scope) {
+    query.set('scope', context.scope);
+  }
   return `/visits/${id}/edit?${query.toString()}`;
 }
 
 /**
- * Builds the URL for Scheduling a Visit (/visits/schedule) preserving origin context.
+ * Builds the URL for Scheduling a Visit (/visits/schedule) preserving origin context and scope.
  */
 export function buildScheduleVisitUrl(
   context?: Partial<VisitNavigationContext> & { customerId?: string; defaultDate?: string }
@@ -148,6 +159,9 @@ export function buildScheduleVisitUrl(
   }
   if (context?.defaultDate) {
     query.set('date', context.defaultDate);
+  }
+  if (context?.scope) {
+    query.set('scope', context.scope);
   }
   return `/visits/schedule?${query.toString()}`;
 }

@@ -5,9 +5,11 @@ import { buildReportScopeWhere, validateTargetTenant } from '../utils/scope';
 import { logAudit } from '../utils/audit';
 import { syncVisitAssignmentTasks } from '../services/taskAssignment.service';
 
+import { normalizeSemanticRole } from './navigation.routes';
+
 export const visitsRoutes = Router();
 
-// GET /api/visits - List visits with pagination, customerId, status, search
+// GET /api/visits - List visits with pagination, customerId, status, search, scope
 visitsRoutes.get('/', async (req: any, res: any) => {
   const actorRole = (req as any).userRole;
   const actorTenant = (req as any).userTenantId;
@@ -21,13 +23,50 @@ visitsRoutes.get('/', async (req: any, res: any) => {
   const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
   if (targetTenant === false) return;
 
-  const { where, params } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'v.picId');
+  const semanticRole = normalizeSemanticRole(actorRole, isPlatformUser);
+  const { customerId, picId, status, search, page, pageSize, startDate, endDate, scope } = req.query;
+
+  // Scope Enforcement (All Visits vs My Visits)
+  let where: string;
+  let params: any[];
+
+  if (scope === 'all') {
+    // ONLY TENANT_ADMIN and SUPERVISOR (or SUPER_ADMIN) are permitted
+    if (semanticRole !== 'TENANT_ADMIN' && semanticRole !== 'SUPERVISOR' && semanticRole !== 'SUPER_ADMIN') {
+      return res.status(403).json({
+        error: 'Access denied: All Visits scope is restricted to Tenant Admin and Supervisor',
+        code: 'SCOPE_ACCESS_DENIED'
+      });
+    }
+    // SPECIAL SUPERVISOR OVERRIDE: Tenant-wide visibility
+    where = 'WHERE v.tenantId = ?';
+    params = [targetTenant];
+  } else if (scope === 'my') {
+    // MY VISITS: Current user is picId OR additional participant
+    where = `WHERE v.tenantId = ? AND (
+      v.picId = ? 
+      OR EXISTS (SELECT 1 FROM visit_participants vp WHERE vp.visitId = v.id AND vp.userId = ?)
+    )`;
+    params = [targetTenant, actorUserId, actorUserId];
+  } else {
+    // Contextual fallback:
+    if (customerId) {
+      const scoped = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'v.picId');
+      where = scoped.where;
+      params = scoped.params;
+    } else {
+      // Default fallback is 'my'
+      where = `WHERE v.tenantId = ? AND (
+        v.picId = ? 
+        OR EXISTS (SELECT 1 FROM visit_participants vp WHERE vp.visitId = v.id AND vp.userId = ?)
+      )`;
+      params = [targetTenant, actorUserId, actorUserId];
+    }
+  }
 
   try {
     let extraWhere = '';
     const extraParams: any[] = [];
-
-    const { customerId, picId, status, search, page, pageSize, startDate, endDate } = req.query;
 
     if (customerId && customerId !== 'ALL') {
       extraWhere += ' AND v.customerId = ?';
