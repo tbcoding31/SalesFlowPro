@@ -216,28 +216,44 @@ export interface Visit {
 
 export type TaskPriority = string;
 export type TaskStatus = string;
+export type TaskSourceType = 'MANUAL' | 'PROJECT_ASSIGNMENT' | 'VISIT_ASSIGNMENT' | string;
 
 export interface Task {
   id: string;
   tenantId: string;
   title: string;
+  description?: string | null;
+  sourceType?: TaskSourceType;
   taskType?: string;
-  description?: string;
-  customerId?: string;
-  customerName?: string;
-  customerCode?: string;
+  customerId?: string | null;
+  customerName?: string | null;
+  customerCode?: string | null;
   picId: string;
   picName: string;
-  picAvatar?: string;
-  priority: TaskPriority;
+  picEmail?: string | null;
+  picAvatar?: string | null;
+  statusId?: string;
+  statusCode?: string | null;
+  statusName?: string | null;
   status: TaskStatus;
-  dueDate: string;
+  statusColor?: string | null;
+  priorityId?: string | null;
+  priorityCode?: string | null;
+  priorityName?: string | null;
+  priority: TaskPriority;
+  priorityColor?: string | null;
+  dueDate?: string | null;
   createdAt: string;
-  completedAt?: string;
-  relatedProjectId?: string;
-  relatedTaskId?: string;
-  relatedVisitId?: string;
-  assignedToName?: string;
+  updatedAt?: string | null;
+  completedAt?: string | null;
+  relatedProjectId?: string | null;
+  projectName?: string | null;
+  projectCode?: string | null;
+  relatedTaskId?: string | null;
+  relatedVisitId?: string | null;
+  visitTitle?: string | null;
+  visitDate?: string | null;
+  assignedToName?: string | null;
 }
 
 export type FollowUpType =

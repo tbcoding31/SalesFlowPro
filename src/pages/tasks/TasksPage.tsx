@@ -2,19 +2,90 @@ import React, { useState, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { masterDataApi } from '../../services/masterDataApi';
-import { Task, Customer, Project, MasterDataItem } from '../../types';
+import { Task, Customer, Project, MasterDataItem, User } from '../../types';
 import { crmApi } from '../../services/crmApi';
+import { usersApi } from '../../services/usersApi';
+import { formatDate } from '../../utils/formatters';
+
+export function formatTaskSourceType(sourceType?: string | null): string {
+  const s = String(sourceType || '').toUpperCase();
+  if (s === 'PROJECT_ASSIGNMENT') return 'Project Assignment';
+  if (s === 'VISIT_ASSIGNMENT') return 'Visit Assignment';
+  return 'Manual Task';
+}
+
+export function getTaskSourceBadgeClass(sourceType?: string | null): string {
+  const s = String(sourceType || '').toUpperCase();
+  if (s === 'PROJECT_ASSIGNMENT') return 'bg-indigo-50 text-indigo-700 border-indigo-200';
+  if (s === 'VISIT_ASSIGNMENT') return 'bg-teal-50 text-teal-700 border-teal-200';
+  return 'bg-slate-50 text-slate-700 border-slate-200';
+}
+
+export function getTaskStatusLabel(task: Partial<Task>): string {
+  if (task.statusName) return task.statusName;
+  const s = String(task.status || task.statusId || '').toUpperCase();
+  if (s === 'COMPLETED' || s === 'TS-3' || s === 'TSK_COMPLETED') return 'Completed';
+  if (s === 'IN_PROGRESS' || s === 'TS-2' || s === 'TSK_INPROGRESS') return 'In Progress';
+  if (s === 'CANCELLED' || s === 'TS-4' || s === 'TSK_CANCELLED') return 'Cancelled';
+  if (s === 'REVIEW') return 'Review';
+  return 'To Do';
+}
+
+export function getTaskStatusBadgeClass(task: Partial<Task>): string {
+  const s = String(task.status || task.statusId || '').toUpperCase();
+  if (s === 'COMPLETED' || s === 'TS-3' || s === 'TSK_COMPLETED') {
+    return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+  }
+  if (s === 'IN_PROGRESS' || s === 'TS-2' || s === 'TSK_INPROGRESS') {
+    return 'bg-blue-50 text-blue-700 border-blue-200';
+  }
+  if (s === 'CANCELLED' || s === 'TS-4' || s === 'TSK_CANCELLED') {
+    return 'bg-slate-100 text-slate-600 border-slate-300';
+  }
+  if (s === 'REVIEW') {
+    return 'bg-purple-50 text-purple-700 border-purple-200';
+  }
+  return 'bg-slate-50 text-slate-700 border-slate-200';
+}
+
+export function getTaskPriorityLabel(task: Partial<Task>): string {
+  if (task.priorityName) return task.priorityName;
+  const p = String(task.priority || task.priorityId || '').toUpperCase();
+  if (p === 'URGENT' || p === 'TP-1' || p === 'PRI_URGENT') return 'Urgent';
+  if (p === 'HIGH' || p === 'TP-2' || p === 'PRI_HIGH') return 'High';
+  if (p === 'LOW' || p === 'TP-4' || p === 'PRI_LOW') return 'Low';
+  if (p === 'MEDIUM' || p === 'NORMAL' || p === 'TP-3' || p === 'PRI_MEDIUM') return 'Medium';
+  return p ? p : '—';
+}
+
+export function getTaskPriorityBadgeClass(task: Partial<Task>): string {
+  const p = String(task.priority || task.priorityId || '').toUpperCase();
+  if (p === 'URGENT' || p === 'TP-1' || p === 'PRI_URGENT') {
+    return 'bg-rose-100 text-rose-700';
+  }
+  if (p === 'HIGH' || p === 'TP-2' || p === 'PRI_HIGH') {
+    return 'bg-amber-100 text-amber-800';
+  }
+  if (p === 'LOW' || p === 'TP-4' || p === 'PRI_LOW') {
+    return 'bg-slate-100 text-slate-600';
+  }
+  if (p === 'MEDIUM' || p === 'NORMAL' || p === 'TP-3' || p === 'PRI_MEDIUM') {
+    return 'bg-blue-100 text-blue-700';
+  }
+  return 'bg-slate-100 text-slate-700';
+}
 
 export const TasksPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { currentTenant, currentUser } = useAuth();
-  const tenantId = currentTenant?.id ;
+  const tenantId = currentTenant?.id;
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [assignableUsers, setAssignableUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   // Filters
@@ -22,6 +93,8 @@ export const TasksPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [priorityFilter, setPriorityFilter] = useState('ALL');
   const [customerFilter, setCustomerFilter] = useState('ALL');
+  const [picFilter, setPicFilter] = useState('ALL');
+  const [sourceTypeFilter, setSourceTypeFilter] = useState('ALL');
   const [dueDateFilter, setDueDateFilter] = useState('');
   
   // Quick Filters (Tabs)
@@ -33,10 +106,14 @@ export const TasksPage: React.FC = () => {
   const [totalItems, setTotalItems] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
 
+  // Main Categories from URL
+  const activeCategory = searchParams.get('category') || 'ALL';
+  const activeProject = searchParams.get('project') || 'ALL';
+
   const loadData = async (page = currentPage) => {
     setIsLoading(true);
     try {
-      const [tRes, cList, pList] = await Promise.all([
+      const [tRes, cList, pList, uList] = await Promise.all([
         crmApi.fetchTasks({
           page,
           pageSize,
@@ -44,16 +121,21 @@ export const TasksPage: React.FC = () => {
           status: statusFilter !== 'ALL' ? statusFilter : undefined,
           priority: priorityFilter !== 'ALL' ? priorityFilter : undefined,
           customerId: customerFilter !== 'ALL' ? customerFilter : undefined,
+          picId: picFilter !== 'ALL' ? picFilter : undefined,
+          sourceType: sourceTypeFilter !== 'ALL' ? sourceTypeFilter : undefined,
+          dueDate: dueDateFilter || undefined,
           tenantId
         }),
         crmApi.fetchCollection<Customer>('customers', tenantId),
-        crmApi.fetchCollection<Project>('projects', tenantId)
+        crmApi.fetchCollection<Project>('projects', tenantId),
+        usersApi.fetchUsers(tenantId, true).catch(() => [])
       ]);
       setTasks(tRes.data || []);
       setTotalItems(tRes.pagination?.totalItems || 0);
       setTotalPages(tRes.pagination?.totalPages || 0);
-      setCustomers(cList);
-      setProjects(pList);
+      setCustomers(cList || []);
+      setProjects(pList || []);
+      setAssignableUsers(uList || []);
     } catch (err) {
       console.error('Failed to load tasks from database:', err);
     } finally {
@@ -63,19 +145,15 @@ export const TasksPage: React.FC = () => {
 
   React.useEffect(() => {
     loadData(currentPage);
-  }, [tenantId, currentPage, pageSize, searchQuery, statusFilter, priorityFilter, customerFilter]);
+  }, [tenantId, currentPage, pageSize, searchQuery, statusFilter, priorityFilter, customerFilter, picFilter, sourceTypeFilter, dueDateFilter]);
 
   const [taskStatuses, setTaskStatuses] = useState<MasterDataItem[]>([]);
   const [taskPriorities, setTaskPriorities] = useState<MasterDataItem[]>([]);
 
   React.useEffect(() => {
-    masterDataApi.fetchMasterData('task_statuses', tenantId).then(setTaskStatuses);
-    masterDataApi.fetchMasterData('task_priorities', tenantId).then(setTaskPriorities);
+    masterDataApi.fetchMasterData('task_statuses', tenantId).then(setTaskStatuses).catch(() => []);
+    masterDataApi.fetchMasterData('task_priorities', tenantId).then(setTaskPriorities).catch(() => []);
   }, [tenantId]);
-
-  // Main Categories
-  const activeCategory = searchParams.get('category') || 'VISIT';
-  const activeProject = searchParams.get('project') || 'ALL';
 
   const handleCategoryChange = (cat: string) => {
     setSearchParams({ category: cat, project: 'ALL' });
@@ -103,78 +181,120 @@ export const TasksPage: React.FC = () => {
     let completed = 0;
 
     tasks.forEach((t) => {
-      if (t.status === 'COMPLETED') {
+      const isCompleted = t.status === 'COMPLETED' || t.statusId === 'TS-3';
+      const isInProgress = t.status === 'IN_PROGRESS' || t.statusId === 'TS-2';
+      const isCancelled = t.status === 'CANCELLED' || t.statusId === 'TS-4';
+
+      if (isCompleted) {
         completed++;
-      } else {
-        if (t.status === 'IN_PROGRESS') inProgress++;
-        if (t.dueDate < today) overdue++;
-        if (t.dueDate === today) dueToday++;
+      } else if (!isCancelled) {
+        if (isInProgress) inProgress++;
+        if (t.dueDate && t.dueDate < today) overdue++;
+        if (t.dueDate && t.dueDate === today) dueToday++;
       }
     });
 
-    return { total: tasks.length, overdue, dueToday, inProgress, completed };
-  }, [tasks, today]);
+    return { total: totalItems || tasks.length, overdue, dueToday, inProgress, completed };
+  }, [tasks, totalItems, today]);
 
   // Filtering Logic
   const filteredTasks = useMemo(() => {
     return tasks.filter((t) => {
-      // 0. Only show tasks assigned to me
-      if (t.picId !== currentUser?.id) return false;
-      
-      // Category logic: VISIT vs PROJECT
+      // Category logic: ALL vs VISIT vs PROJECT vs MANUAL
       if (activeCategory === 'VISIT') {
-        // Show tasks mapped from visits OR linked to visits OR taskType === 'Visit'
-        // For simplicity, any task not linked to an project might be considered Visit or just normal task,
-        // but let's strictly filter:
-        if (!t.relatedVisitId && t.taskType !== 'Visit') return false;
+        const isVisitTask = t.sourceType === 'VISIT_ASSIGNMENT' || Boolean(t.relatedVisitId) || t.taskType === 'Visit';
+        if (!isVisitTask) return false;
       } else if (activeCategory === 'PROJECT') {
-        if (!t.relatedProjectId && t.taskType !== 'Project') return false;
+        const isProjectTask = t.sourceType === 'PROJECT_ASSIGNMENT' || Boolean(t.relatedProjectId) || t.taskType === 'Project';
+        if (!isProjectTask) return false;
         
         // Sub-filter by project
         if (activeProject !== 'ALL' && t.relatedProjectId !== activeProject) return false;
+      } else if (activeCategory === 'MANUAL') {
+        const isManualOnly = (t.sourceType === 'MANUAL' || !t.sourceType) && !t.relatedProjectId && !t.relatedVisitId;
+        if (!isManualOnly) return false;
       }
       
       // 1. Search Query
-      if (searchQuery && !t.title.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+      if (searchQuery) {
+        const q = searchQuery.trim().toLowerCase();
+        const combined = [
+          t.title,
+          t.id,
+          t.picName,
+          t.customerName,
+          t.customerCode,
+          t.projectName,
+          t.visitTitle,
+          t.sourceType,
+          t.statusName,
+          t.priorityName
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+
+        if (!combined.includes(q)) return false;
+      }
       
       // 2. Status
-      if (statusFilter !== 'ALL' && t.status !== statusFilter) return false;
+      if (statusFilter !== 'ALL') {
+        const sMatch = t.statusId === statusFilter || t.statusCode === statusFilter || t.status === statusFilter;
+        if (!sMatch) return false;
+      }
       
       // 3. Priority
-      if (priorityFilter !== 'ALL' && t.priority !== priorityFilter) return false;
+      if (priorityFilter !== 'ALL') {
+        const pMatch = t.priorityId === priorityFilter || t.priorityCode === priorityFilter || t.priority === priorityFilter;
+        if (!pMatch) return false;
+      }
+
+      // 4. Source Type
+      if (sourceTypeFilter !== 'ALL' && t.sourceType !== sourceTypeFilter) {
+        return false;
+      }
+
+      // 5. PIC / Assignee
+      if (picFilter !== 'ALL' && t.picId !== picFilter) {
+        return false;
+      }
       
-      // 4. Customer
+      // 6. Customer
       if (customerFilter !== 'ALL' && t.customerId !== customerFilter) return false;
       
-      // 5. Due Date
+      // 7. Due Date
       if (dueDateFilter && t.dueDate !== dueDateFilter) return false;
 
-      // 6. Quick Filters
+      // 8. Quick Filters
+      const isCompleted = t.status === 'COMPLETED' || t.statusId === 'TS-3';
+      const isCancelled = t.status === 'CANCELLED' || t.statusId === 'TS-4';
+
       if (quickFilter === 'OVERDUE') {
-        if (t.status === 'COMPLETED' || t.dueDate >= today) return false;
+        if (isCompleted || isCancelled || !t.dueDate || t.dueDate >= today) return false;
       }
       if (quickFilter === 'DUE_TODAY') {
-        if (t.status === 'COMPLETED' || t.dueDate !== today) return false;
+        if (isCompleted || isCancelled || !t.dueDate || t.dueDate !== today) return false;
       }
       if (quickFilter === 'UPCOMING') {
-        if (t.status === 'COMPLETED' || t.dueDate <= today) return false;
+        if (isCompleted || isCancelled || !t.dueDate || t.dueDate <= today) return false;
       }
       if (quickFilter === 'COMPLETED') {
-        if (t.status !== 'COMPLETED') return false;
+        if (!isCompleted) return false;
       }
 
       return true;
     });
-  }, [tasks, searchQuery, statusFilter, priorityFilter, customerFilter, dueDateFilter, quickFilter, today, currentUser?.id, activeCategory, activeProject]);
+  }, [tasks, searchQuery, statusFilter, priorityFilter, sourceTypeFilter, picFilter, customerFilter, dueDateFilter, quickFilter, today, activeCategory, activeProject]);
 
   const toggleTaskComplete = async (taskId: string) => {
     const task = tasks.find((t) => t.id === taskId);
     if (task) {
-      const isCurrentlyCompleted = task.status === 'COMPLETED';
+      const isCurrentlyCompleted = task.status === 'COMPLETED' || task.statusId === 'TS-3';
       const newStatus = isCurrentlyCompleted ? 'TODO' : 'COMPLETED';
+      const newStatusId = isCurrentlyCompleted ? 'TS-1' : 'TS-3';
       const res = await crmApi.updateRecord('tasks', taskId, {
         status: newStatus,
-        statusId: newStatus,
+        statusId: newStatusId,
         completedAt: isCurrentlyCompleted ? null : new Date().toISOString()
       });
       if (res.success) {
@@ -274,10 +394,20 @@ export const TasksPage: React.FC = () => {
 
       {/* CATEGORIES & SUB-CATEGORIES */}
       <div className="space-y-4">
-        <div className="flex items-center gap-2 border-b border-[#E1E1E1]">
+        <div className="flex items-center gap-2 border-b border-[#E1E1E1] overflow-x-auto">
+          <button
+            onClick={() => handleCategoryChange('ALL')}
+            className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${
+              activeCategory === 'ALL'
+                ? 'border-[#4744e5] text-[#4744e5]'
+                : 'border-transparent text-[#767587] hover:text-[#1a1c1c]'
+            }`}
+          >
+            All Tasks
+          </button>
           <button
             onClick={() => handleCategoryChange('VISIT')}
-            className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors ${
+            className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${
               activeCategory === 'VISIT'
                 ? 'border-[#4744e5] text-[#4744e5]'
                 : 'border-transparent text-[#767587] hover:text-[#1a1c1c]'
@@ -287,13 +417,23 @@ export const TasksPage: React.FC = () => {
           </button>
           <button
             onClick={() => handleCategoryChange('PROJECT')}
-            className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors ${
+            className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${
               activeCategory === 'PROJECT'
                 ? 'border-[#4744e5] text-[#4744e5]'
                 : 'border-transparent text-[#767587] hover:text-[#1a1c1c]'
             }`}
           >
             Project Tasks
+          </button>
+          <button
+            onClick={() => handleCategoryChange('MANUAL')}
+            className={`px-6 py-3 text-sm font-bold border-b-2 transition-colors whitespace-nowrap ${
+              activeCategory === 'MANUAL'
+                ? 'border-[#4744e5] text-[#4744e5]'
+                : 'border-transparent text-[#767587] hover:text-[#1a1c1c]'
+            }`}
+          >
+            Manual Tasks
           </button>
         </div>
 
@@ -375,7 +515,7 @@ export const TasksPage: React.FC = () => {
         </div>
 
         {/* Toolbar */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3">
           {/* Search */}
           <div className="relative">
             <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[#a0a0b0] text-[18px]">
@@ -414,6 +554,34 @@ export const TasksPage: React.FC = () => {
               <option value="ALL">All Priorities</option>
               {taskPriorities.map(p => (
                 <option key={p.id} value={p.code_value}>{p.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Source Type */}
+          <div>
+            <select
+              value={sourceTypeFilter}
+              onChange={(e) => setSourceTypeFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-[#E1E1E1] rounded-xl text-xs font-medium bg-white focus:outline-none focus:border-[#4744e5]"
+            >
+              <option value="ALL">All Sources</option>
+              <option value="MANUAL">Manual Task</option>
+              <option value="PROJECT_ASSIGNMENT">Project Assignment</option>
+              <option value="VISIT_ASSIGNMENT">Visit Assignment</option>
+            </select>
+          </div>
+
+          {/* PIC / Assignee */}
+          <div>
+            <select
+              value={picFilter}
+              onChange={(e) => setPicFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-[#E1E1E1] rounded-xl text-xs font-medium bg-white focus:outline-none focus:border-[#4744e5]"
+            >
+              <option value="ALL">All Assignees</option>
+              {assignableUsers.map(u => (
+                <option key={u.id} value={u.id}>{u.name}</option>
               ))}
             </select>
           </div>
@@ -457,7 +625,13 @@ export const TasksPage: React.FC = () => {
                   Task
                 </th>
                 <th className="px-5 py-4 font-extrabold text-[#767587] uppercase tracking-wider font-['Hanken_Grotesk'] text-[10px]">
+                  Source
+                </th>
+                <th className="px-5 py-4 font-extrabold text-[#767587] uppercase tracking-wider font-['Hanken_Grotesk'] text-[10px]">
                   Customer
+                </th>
+                <th className="px-5 py-4 font-extrabold text-[#767587] uppercase tracking-wider font-['Hanken_Grotesk'] text-[10px]">
+                  Project / Visit
                 </th>
                 <th className="px-5 py-4 font-extrabold text-[#767587] uppercase tracking-wider font-['Hanken_Grotesk'] text-[10px]">
                   Priority
@@ -469,10 +643,7 @@ export const TasksPage: React.FC = () => {
                   Due Date
                 </th>
                 <th className="px-5 py-4 font-extrabold text-[#767587] uppercase tracking-wider font-['Hanken_Grotesk'] text-[10px]">
-                  Related Visit
-                </th>
-                <th className="px-5 py-4 font-extrabold text-[#767587] uppercase tracking-wider font-['Hanken_Grotesk'] text-[10px]">
-                  Created By
+                  Assignee
                 </th>
                 <th className="px-5 py-4 w-20 text-right font-extrabold text-[#767587] uppercase tracking-wider font-['Hanken_Grotesk'] text-[10px]">
                   Actions
@@ -482,7 +653,7 @@ export const TasksPage: React.FC = () => {
             <tbody className="divide-y divide-[#f0f0f4]">
               {filteredTasks.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="text-center py-12">
+                  <td colSpan={10} className="text-center py-12">
                     <div className="flex flex-col items-center justify-center text-[#a0a0b0] space-y-2">
                       <span className="material-symbols-outlined text-[48px] opacity-20">inventory_2</span>
                       <p className="text-sm font-medium">No tasks found matching your criteria.</p>
@@ -491,8 +662,13 @@ export const TasksPage: React.FC = () => {
                 </tr>
               ) : (
                 filteredTasks.map((t) => {
-                  const isOverdue = t.dueDate < today && t.status !== 'COMPLETED';
-                  const isCompleted = t.status === 'COMPLETED';
+                  const isCompleted = t.status === 'COMPLETED' || t.statusId === 'TS-3';
+                  const isOverdue = Boolean(t.dueDate && t.dueDate < today && !isCompleted);
+                  const formattedDueDate = t.dueDate 
+                    ? (new Date(t.dueDate).toString() !== 'Invalid Date' 
+                        ? new Date(t.dueDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) 
+                        : t.dueDate) 
+                    : '—';
 
                   return (
                     <tr key={t.id} className={`hover:bg-[#fcfcfd] transition-colors group ${isCompleted ? 'bg-slate-50/50' : ''}`}>
@@ -509,68 +685,89 @@ export const TasksPage: React.FC = () => {
                       {/* Task */}
                       <td className="px-5 py-4">
                         <Link to={`/tasks/${t.id}`} className={`font-semibold hover:text-[#4744e5] hover:underline transition-colors ${isCompleted ? 'line-through text-[#a0a0b0]' : 'text-[#1a1c1c]'}`}>
-                          {t.title}
+                          {t.title || 'Untitled Task'}
                         </Link>
                         <div className="text-[10px] text-[#767587] font-mono mt-0.5">{t.id}</div>
                       </td>
 
+                      {/* Source */}
+                      <td className="px-5 py-4">
+                        <span className={getTaskSourceBadgeClass(t.sourceType)}>
+                          {formatTaskSourceType(t.sourceType)}
+                        </span>
+                      </td>
+
                       {/* Customer */}
                       <td className="px-5 py-4">
-                        <div className="font-semibold text-[#1a1c1c]">{t.customerName || '-'}</div>
+                        {t.customerName ? (
+                          t.customerId ? (
+                            <Link to={`/customers/${t.customerId}`} className="font-semibold text-[#1a1c1c] hover:text-[#4744e5] hover:underline">
+                              {t.customerName}
+                            </Link>
+                          ) : (
+                            <span className="font-semibold text-[#1a1c1c]">{t.customerName}</span>
+                          )
+                        ) : (
+                          <span className="text-[#a0a0b0]">—</span>
+                        )}
+                      </td>
+
+                      {/* Project / Visit */}
+                      <td className="px-5 py-4">
+                        {t.relatedProjectId ? (
+                          <Link to={`/projects/${t.relatedProjectId}`} className="font-semibold text-indigo-600 hover:text-indigo-800 hover:underline flex items-center gap-1">
+                            <span className="material-symbols-outlined text-[14px]">folder</span>
+                            <span className="truncate max-w-[140px]">{t.projectName || t.projectCode || t.relatedProjectId}</span>
+                          </Link>
+                        ) : t.relatedVisitId ? (
+                          <Link to={`/visits/${t.relatedVisitId}`} className="font-semibold text-sky-600 hover:text-sky-800 hover:underline flex items-center gap-1">
+                            <span className="material-symbols-outlined text-[14px]">calendar_today</span>
+                            <span className="truncate max-w-[140px]">{t.visitTitle || t.relatedVisitId}</span>
+                          </Link>
+                        ) : (
+                          <span className="text-[#a0a0b0]">—</span>
+                        )}
                       </td>
 
                       {/* Priority */}
                       <td className="px-5 py-4">
-                        <span
-                          className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-md ${
-                            t.priority === 'URGENT' ? 'bg-rose-100 text-rose-700'
-                            : t.priority === 'HIGH' ? 'bg-amber-100 text-amber-800'
-                            : t.priority === 'MEDIUM' ? 'bg-blue-100 text-blue-700'
-                            : 'bg-slate-100 text-slate-700'
-                          }`}
-                        >
-                          {t.priority}
+                        <span className={getTaskPriorityBadgeClass(t)}>
+                          {getTaskPriorityLabel(t)}
                         </span>
                       </td>
 
                       {/* Status */}
                       <td className="px-5 py-4">
-                        <span
-                          className={`px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded-full border ${
-                            t.status === 'COMPLETED' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                            : t.status === 'REVIEW' ? 'bg-purple-50 text-purple-700 border-purple-200'
-                            : t.status === 'IN_PROGRESS' ? 'bg-blue-50 text-blue-700 border-blue-200'
-                            : 'bg-slate-50 text-slate-700 border-slate-200'
-                          }`}
-                        >
-                          {t.status.replace('_', ' ')}
+                        <span className={getTaskStatusBadgeClass(t)}>
+                          {getTaskStatusLabel(t)}
                         </span>
                       </td>
 
                       {/* Due Date */}
                       <td className="px-5 py-4">
                         <div className={`font-semibold ${isOverdue ? 'text-rose-600' : 'text-[#1a1c1c]'}`}>
-                          {new Date(t.dueDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                          {formattedDueDate}
                         </div>
                         {isOverdue && (
                           <div className="text-[10px] font-bold text-rose-500 mt-0.5 uppercase tracking-wider">Overdue</div>
                         )}
                       </td>
 
-                      {/* Related Visit */}
-                      <td className="px-5 py-4 text-[#767587]">
-                        -
-                      </td>
-
-                      {/* Created By */}
+                      {/* Assignee / PIC */}
                       <td className="px-5 py-4">
                         <div className="flex items-center gap-2">
-                          <img
-                            src={currentUser?.avatarUrl || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'}
-                            alt={currentUser?.name || 'User'}
-                            className="w-6 h-6 rounded-full object-cover border border-[#E1E1E1]"
-                          />
-                          <span className="font-medium text-[#1a1c1c]">{currentUser?.name || 'You'}</span>
+                          {t.picAvatar ? (
+                            <img
+                              src={t.picAvatar}
+                              alt={t.picName || 'PIC'}
+                              className="w-6 h-6 rounded-full object-cover border border-[#E1E1E1]"
+                            />
+                          ) : (
+                            <div className="w-6 h-6 rounded-full bg-slate-200 text-[#464555] font-bold text-[10px] flex items-center justify-center border border-[#E1E1E1]">
+                              {(t.picName || 'U').charAt(0).toUpperCase()}
+                            </div>
+                          )}
+                          <span className="font-medium text-[#1a1c1c]">{t.picName || 'Unassigned'}</span>
                         </div>
                       </td>
 

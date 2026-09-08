@@ -28,6 +28,9 @@ export interface QueryPaginationParams {
   tenantId?: string;
   dueDate?: string;
   projectId?: string;
+  sourceType?: string;
+  relatedProjectId?: string;
+  relatedVisitId?: string;
 }
 
 export const crmApi = {
@@ -308,7 +311,10 @@ export const crmApi = {
       if (params.picId && params.picId !== 'ALL') q.set('picId', params.picId);
       if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
       if (params.dueDate) q.set('dueDate', params.dueDate);
-      if (params.projectId && params.projectId !== 'ALL') q.set('projectId', params.projectId);
+      if (params.projectId && params.projectId !== 'ALL') q.set('relatedProjectId', params.projectId);
+      if (params.relatedProjectId && params.relatedProjectId !== 'ALL') q.set('relatedProjectId', params.relatedProjectId);
+      if (params.relatedVisitId && params.relatedVisitId !== 'ALL') q.set('relatedVisitId', params.relatedVisitId);
+      if (params.sourceType && params.sourceType !== 'ALL') q.set('sourceType', params.sourceType);
     }
     const url = `${API_BASE}/tasks${q.toString() ? '?' + q.toString() : ''}`;
     const res = await fetch(url, { headers: getAuthHeaders() });

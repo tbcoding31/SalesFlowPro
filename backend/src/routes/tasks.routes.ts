@@ -6,6 +6,80 @@ import { logAudit } from '../utils/audit';
 
 export const tasksRoutes = Router();
 
+const TASK_JOIN_CLAUSES = `
+  LEFT JOIN task_statuses ts ON (
+    ts.id = t.statusId 
+    OR ts.code = t.statusId 
+    OR ts.code = CONCAT('TSK_', t.statusId)
+    OR (t.statusId = 'PENDING' AND ts.id = 'TS-1')
+    OR (t.statusId = 'TODO' AND ts.id = 'TS-1')
+    OR (t.statusId = 'IN_PROGRESS' AND ts.id = 'TS-2')
+    OR (t.statusId = 'COMPLETED' AND ts.id = 'TS-3')
+    OR (t.statusId = 'CANCELLED' AND ts.id = 'TS-4')
+  )
+  LEFT JOIN task_priorities tp ON (
+    tp.id = t.priorityId
+    OR tp.code = t.priorityId
+    OR tp.code = CONCAT('PRI_', t.priorityId)
+    OR (t.priorityId = 'URGENT' AND tp.id = 'TP-1')
+    OR (t.priorityId = 'HIGH' AND tp.id = 'TP-2')
+    OR (t.priorityId = 'NORMAL' AND tp.id = 'TP-3')
+    OR (t.priorityId = 'MEDIUM' AND tp.id = 'TP-3')
+    OR (t.priorityId = 'LOW' AND tp.id = 'TP-4')
+  )
+  LEFT JOIN users u ON u.id = t.picId
+  LEFT JOIN customers c ON c.id = t.customerId
+  LEFT JOIN projects p ON p.id = t.relatedProjectId
+  LEFT JOIN visits v ON v.id = t.relatedVisitId
+`;
+
+const TASK_SELECT_FIELDS = `
+  t.id,
+  t.tenantId,
+  t.title,
+  t.description,
+  COALESCE(t.sourceType, 'MANUAL') as sourceType,
+  COALESCE(ts.id, t.statusId) as statusId,
+  COALESCE(ts.code, t.statusId) as statusCode,
+  COALESCE(ts.name, t.statusId) as statusName,
+  ts.color as statusColor,
+  CASE 
+    WHEN ts.id = 'TS-3' OR t.statusId IN ('COMPLETED', 'TSK_COMPLETED') THEN 'COMPLETED'
+    WHEN ts.id = 'TS-2' OR t.statusId IN ('IN_PROGRESS', 'TSK_INPROGRESS') THEN 'IN_PROGRESS'
+    WHEN ts.id = 'TS-4' OR t.statusId IN ('CANCELLED', 'TSK_CANCELLED') THEN 'CANCELLED'
+    ELSE 'TODO'
+  END as status,
+  COALESCE(tp.id, t.priorityId) as priorityId,
+  COALESCE(tp.code, t.priorityId) as priorityCode,
+  COALESCE(tp.name, t.priorityId) as priorityName,
+  tp.color as priorityColor,
+  CASE
+    WHEN tp.id = 'TP-1' OR t.priorityId IN ('URGENT', 'PRI_URGENT') THEN 'URGENT'
+    WHEN tp.id = 'TP-2' OR t.priorityId IN ('HIGH', 'PRI_HIGH') THEN 'HIGH'
+    WHEN tp.id = 'TP-4' OR t.priorityId IN ('LOW', 'PRI_LOW') THEN 'LOW'
+    WHEN tp.id = 'TP-3' OR t.priorityId IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') THEN 'MEDIUM'
+    ELSE COALESCE(t.priorityId, 'MEDIUM')
+  END as priority,
+  t.picId,
+  COALESCE(u.name, 'Unassigned') as picName,
+  u.email as picEmail,
+  u.avatar as picAvatar,
+  t.customerId,
+  c.name as customerName,
+  c.code as customerCode,
+  t.relatedProjectId,
+  p.title as projectName,
+  p.id as projectCode,
+  t.relatedVisitId,
+  v.title as visitTitle,
+  DATE_FORMAT(v.visitDate, '%Y-%m-%d') as visitDate,
+  DATE_FORMAT(t.dueDate, '%Y-%m-%d') as dueDate,
+  t.taskType,
+  t.createdAt,
+  t.updatedAt,
+  t.completedAt
+`;
+
 // GET /api/tasks - List tasks with pagination, customerId, status, search, relatedProjectId, relatedVisitId, sourceType
 tasksRoutes.get('/', async (req: any, res: any) => {
   const actorRole = (req as any).userRole;
@@ -26,7 +100,7 @@ tasksRoutes.get('/', async (req: any, res: any) => {
     let extraWhere = '';
     const extraParams: any[] = [];
 
-    const { customerId, picId, status, priority, search, page, pageSize, relatedProjectId, relatedVisitId, sourceType } = req.query;
+    const { customerId, picId, status, priority, search, page, pageSize, relatedProjectId, relatedVisitId, sourceType, dueDate } = req.query;
 
     if (customerId && customerId !== 'ALL') {
       extraWhere += ' AND t.customerId = ?';
@@ -39,41 +113,63 @@ tasksRoutes.get('/', async (req: any, res: any) => {
     }
 
     if (status && status !== 'ALL') {
-      extraWhere += ' AND (t.statusId = ? OR ts.code = ? OR ts.name = ?)';
-      extraParams.push(status, status, status);
+      extraWhere += ` AND (
+        t.statusId = ? OR ts.code = ? OR ts.name = ? OR ts.id = ?
+        OR ( ? = 'COMPLETED' AND (ts.id = 'TS-3' OR t.statusId IN ('COMPLETED', 'TSK_COMPLETED')) )
+        OR ( ? = 'IN_PROGRESS' AND (ts.id = 'TS-2' OR t.statusId IN ('IN_PROGRESS', 'TSK_INPROGRESS')) )
+        OR ( ? = 'CANCELLED' AND (ts.id = 'TS-4' OR t.statusId IN ('CANCELLED', 'TSK_CANCELLED')) )
+        OR ( ? IN ('TODO', 'OPEN', 'PENDING') AND (ts.id = 'TS-1' OR t.statusId IN ('TODO', 'OPEN', 'PENDING', 'TSK_TODO')) )
+      )`;
+      extraParams.push(status, status, status, status, status, status, status, status);
     }
 
     if (priority && priority !== 'ALL') {
-      extraWhere += ' AND (t.priorityId = ? OR tp.code = ? OR tp.name = ?)';
-      extraParams.push(priority, priority, priority);
+      extraWhere += ` AND (
+        t.priorityId = ? OR tp.code = ? OR tp.name = ? OR tp.id = ?
+        OR ( ? = 'URGENT' AND (tp.id = 'TP-1' OR t.priorityId IN ('URGENT', 'PRI_URGENT')) )
+        OR ( ? = 'HIGH' AND (tp.id = 'TP-2' OR t.priorityId IN ('HIGH', 'PRI_HIGH')) )
+        OR ( ? = 'LOW' AND (tp.id = 'TP-4' OR t.priorityId IN ('LOW', 'PRI_LOW')) )
+        OR ( ? IN ('MEDIUM', 'NORMAL') AND (tp.id = 'TP-3' OR t.priorityId IN ('MEDIUM', 'NORMAL', 'PRI_MEDIUM')) )
+      )`;
+      extraParams.push(priority, priority, priority, priority, priority, priority, priority, priority);
     }
 
-    if (relatedProjectId) {
+    if (relatedProjectId && relatedProjectId !== 'ALL') {
       extraWhere += ' AND t.relatedProjectId = ?';
       extraParams.push(relatedProjectId);
     }
 
-    if (relatedVisitId) {
+    if (relatedVisitId && relatedVisitId !== 'ALL') {
       extraWhere += ' AND t.relatedVisitId = ?';
       extraParams.push(relatedVisitId);
     }
 
-    if (sourceType) {
+    if (sourceType && sourceType !== 'ALL') {
       extraWhere += ' AND t.sourceType = ?';
       extraParams.push(sourceType);
     }
 
+    if (dueDate) {
+      extraWhere += ' AND DATE_FORMAT(t.dueDate, "%Y-%m-%d") = ?';
+      extraParams.push(dueDate);
+    }
+
     if (search && typeof search === 'string' && search.trim()) {
-      extraWhere += ' AND (t.title LIKE ? OR t.description LIKE ?)';
+      extraWhere += ` AND (
+        t.title LIKE ? OR t.description LIKE ? OR t.id LIKE ?
+        OR c.name LIKE ? OR c.code LIKE ?
+        OR p.title LIKE ?
+        OR v.title LIKE ?
+        OR u.name LIKE ?
+      )`;
       const s = `%${search.trim()}%`;
-      extraParams.push(s, s);
+      extraParams.push(s, s, s, s, s, s, s, s);
     }
 
     const countSql = `
       SELECT COUNT(t.id) as total
       FROM tasks t
-      LEFT JOIN task_statuses ts ON ts.id = t.statusId
-      LEFT JOIN task_priorities tp ON tp.id = t.priorityId
+      ${TASK_JOIN_CLAUSES}
       ${where.replace(/WHERE tenantId/g, 'WHERE t.tenantId')}
       ${extraWhere}
     `;
@@ -90,16 +186,9 @@ tasksRoutes.get('/', async (req: any, res: any) => {
 
     const selectSql = `
       SELECT 
-        t.*,
-        ts.code as statusCode, ts.name as statusName, ts.color as statusColor,
-        tp.code as priorityCode, tp.name as priorityName, tp.color as priorityColor,
-        u.name as picName, u.email as picEmail, u.avatar as picAvatar,
-        c.name as customerName, c.code as customerCode
+        ${TASK_SELECT_FIELDS}
       FROM tasks t
-      LEFT JOIN task_statuses ts ON ts.id = t.statusId
-      LEFT JOIN task_priorities tp ON tp.id = t.priorityId
-      LEFT JOIN users u ON u.id = t.picId
-      LEFT JOIN customers c ON c.id = t.customerId
+      ${TASK_JOIN_CLAUSES}
       ${where.replace(/WHERE tenantId/g, 'WHERE t.tenantId')}
       ${extraWhere}
       ORDER BY t.dueDate ASC, t.createdAt DESC
@@ -144,16 +233,9 @@ tasksRoutes.get('/:id', async (req: any, res: any) => {
   try {
     const [rows]: any = await pool.query(`
       SELECT 
-        t.*,
-        ts.code as statusCode, ts.name as statusName, ts.color as statusColor,
-        tp.code as priorityCode, tp.name as priorityName, tp.color as priorityColor,
-        u.name as picName, u.email as picEmail, u.avatar as picAvatar,
-        c.name as customerName, c.code as customerCode
+        ${TASK_SELECT_FIELDS}
       FROM tasks t
-      LEFT JOIN task_statuses ts ON ts.id = t.statusId
-      LEFT JOIN task_priorities tp ON tp.id = t.priorityId
-      LEFT JOIN users u ON u.id = t.picId
-      LEFT JOIN customers c ON c.id = t.customerId
+      ${TASK_JOIN_CLAUSES}
       WHERE t.id = ? AND t.tenantId = ?
     `, [id, targetTenant]);
 
@@ -215,8 +297,8 @@ tasksRoutes.post('/', async (req: any, res: any) => {
   const statusCand = statusId || status;
   if (statusCand) {
     const [sRows]: any = await pool.query(
-      'SELECT id FROM task_statuses WHERE id = ? OR code = ? OR name = ? LIMIT 1',
-      [statusCand, statusCand, statusCand]
+      'SELECT id FROM task_statuses WHERE id = ? OR code = ? OR name = ? OR code = CONCAT("TSK_", ?) LIMIT 1',
+      [statusCand, statusCand, statusCand, statusCand]
     );
     if (sRows.length > 0) resolvedStatusId = sRows[0].id;
   }
@@ -226,8 +308,8 @@ tasksRoutes.post('/', async (req: any, res: any) => {
   const priCand = priorityId || priority;
   if (priCand) {
     const [pRows]: any = await pool.query(
-      'SELECT id FROM task_priorities WHERE id = ? OR code = ? OR name = ? LIMIT 1',
-      [priCand, priCand, priCand]
+      'SELECT id FROM task_priorities WHERE id = ? OR code = ? OR name = ? OR code = CONCAT("PRI_", ?) LIMIT 1',
+      [priCand, priCand, priCand, priCand]
     );
     if (pRows.length > 0) resolvedPriorityId = pRows[0].id;
   }
@@ -264,14 +346,20 @@ tasksRoutes.post('/', async (req: any, res: any) => {
       'CRM'
     );
 
+    const canonicalStatus = resolvedStatusId === 'TS-3' ? 'COMPLETED' : resolvedStatusId === 'TS-2' ? 'IN_PROGRESS' : resolvedStatusId === 'TS-4' ? 'CANCELLED' : 'TODO';
+    const canonicalPriority = resolvedPriorityId === 'TP-1' ? 'URGENT' : resolvedPriorityId === 'TP-2' ? 'HIGH' : resolvedPriorityId === 'TP-4' ? 'LOW' : 'MEDIUM';
+
     res.status(201).json({
       success: true,
       id: taskId,
       data: {
         id: taskId,
+        tenantId: targetTenant,
         title,
         statusId: resolvedStatusId,
+        status: canonicalStatus,
         priorityId: resolvedPriorityId,
+        priority: canonicalPriority,
         sourceType
       }
     });
@@ -312,8 +400,8 @@ tasksRoutes.put('/:id', async (req: any, res: any) => {
     const statusCand = data.statusId || data.status;
     if (statusCand) {
       const [sRows]: any = await pool.query(
-        'SELECT id FROM task_statuses WHERE id = ? OR code = ? OR name = ? LIMIT 1',
-        [statusCand, statusCand, statusCand]
+        'SELECT id FROM task_statuses WHERE id = ? OR code = ? OR name = ? OR code = CONCAT("TSK_", ?) LIMIT 1',
+        [statusCand, statusCand, statusCand, statusCand]
       );
       if (sRows.length > 0) statusId = sRows[0].id;
     }
@@ -322,8 +410,8 @@ tasksRoutes.put('/:id', async (req: any, res: any) => {
     const priCand = data.priorityId || data.priority;
     if (priCand) {
       const [pRows]: any = await pool.query(
-        'SELECT id FROM task_priorities WHERE id = ? OR code = ? OR name = ? LIMIT 1',
-        [priCand, priCand, priCand]
+        'SELECT id FROM task_priorities WHERE id = ? OR code = ? OR name = ? OR code = CONCAT("PRI_", ?) LIMIT 1',
+        [priCand, priCand, priCand, priCand]
       );
       if (pRows.length > 0) priorityId = pRows[0].id;
     }
@@ -343,9 +431,10 @@ tasksRoutes.put('/:id', async (req: any, res: any) => {
       }
     }
 
-    const completedAtVal = (statusId === 'TS-3' || statusId === 'COMPLETED') && !current.completedAt
-      ? new Date()
-      : current.completedAt;
+    const isCompleted = statusId === 'TS-3' || statusId === 'COMPLETED' || String(data.status).toUpperCase() === 'COMPLETED';
+    const completedAtVal = isCompleted
+      ? (current.completedAt || new Date())
+      : null;
 
     await pool.query(`
       UPDATE tasks 

@@ -136,16 +136,68 @@ projectsRoutes.get('/:id/summary', async (req: any, res: any) => {
     // Tasks related to project (both PROJECT_ASSIGNMENT and VISIT_ASSIGNMENT under this project)
     const [taskRows]: any = await pool.query(`
       SELECT 
-        t.*,
-        ts.code as statusCode, ts.name as statusName, ts.color as statusColor,
-        tp.code as priorityCode, tp.name as priorityName, tp.color as priorityColor,
-        u.name as picName, u.email as picEmail, u.avatar as picAvatar,
-        c.name as customerName
+        t.id, t.tenantId, t.title, t.description,
+        COALESCE(t.sourceType, 'MANUAL') as sourceType,
+        COALESCE(ts.id, t.statusId) as statusId,
+        COALESCE(ts.code, t.statusId) as statusCode,
+        COALESCE(ts.name, t.statusId) as statusName,
+        ts.color as statusColor,
+        CASE 
+          WHEN ts.id = 'TS-3' OR t.statusId IN ('COMPLETED', 'TSK_COMPLETED') THEN 'COMPLETED'
+          WHEN ts.id = 'TS-2' OR t.statusId IN ('IN_PROGRESS', 'TSK_INPROGRESS') THEN 'IN_PROGRESS'
+          WHEN ts.id = 'TS-4' OR t.statusId IN ('CANCELLED', 'TSK_CANCELLED') THEN 'CANCELLED'
+          ELSE 'TODO'
+        END as status,
+        COALESCE(tp.id, t.priorityId) as priorityId,
+        COALESCE(tp.code, t.priorityId) as priorityCode,
+        COALESCE(tp.name, t.priorityId) as priorityName,
+        tp.color as priorityColor,
+        CASE
+          WHEN tp.id = 'TP-1' OR t.priorityId IN ('URGENT', 'PRI_URGENT') THEN 'URGENT'
+          WHEN tp.id = 'TP-2' OR t.priorityId IN ('HIGH', 'PRI_HIGH') THEN 'HIGH'
+          WHEN tp.id = 'TP-4' OR t.priorityId IN ('LOW', 'PRI_LOW') THEN 'LOW'
+          WHEN tp.id = 'TP-3' OR t.priorityId IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') THEN 'MEDIUM'
+          ELSE COALESCE(t.priorityId, 'MEDIUM')
+        END as priority,
+        t.picId,
+        COALESCE(u.name, 'Unassigned') as picName,
+        u.email as picEmail,
+        u.avatar as picAvatar,
+        t.customerId,
+        c.name as customerName,
+        t.relatedProjectId,
+        t.relatedVisitId,
+        v.title as visitTitle,
+        DATE_FORMAT(v.visitDate, '%Y-%m-%d') as visitDate,
+        DATE_FORMAT(t.dueDate, '%Y-%m-%d') as dueDate,
+        t.taskType,
+        t.createdAt,
+        t.updatedAt,
+        t.completedAt
       FROM tasks t
-      LEFT JOIN task_statuses ts ON ts.id = t.statusId
-      LEFT JOIN task_priorities tp ON tp.id = t.priorityId
+      LEFT JOIN task_statuses ts ON (
+        ts.id = t.statusId 
+        OR ts.code = t.statusId 
+        OR ts.code = CONCAT('TSK_', t.statusId)
+        OR (t.statusId = 'PENDING' AND ts.id = 'TS-1')
+        OR (t.statusId = 'TODO' AND ts.id = 'TS-1')
+        OR (t.statusId = 'IN_PROGRESS' AND ts.id = 'TS-2')
+        OR (t.statusId = 'COMPLETED' AND ts.id = 'TS-3')
+        OR (t.statusId = 'CANCELLED' AND ts.id = 'TS-4')
+      )
+      LEFT JOIN task_priorities tp ON (
+        tp.id = t.priorityId
+        OR tp.code = t.priorityId
+        OR tp.code = CONCAT('PRI_', t.priorityId)
+        OR (t.priorityId = 'URGENT' AND tp.id = 'TP-1')
+        OR (t.priorityId = 'HIGH' AND tp.id = 'TP-2')
+        OR (t.priorityId = 'NORMAL' AND tp.id = 'TP-3')
+        OR (t.priorityId = 'MEDIUM' AND tp.id = 'TP-3')
+        OR (t.priorityId = 'LOW' AND tp.id = 'TP-4')
+      )
       LEFT JOIN users u ON u.id = t.picId
       LEFT JOIN customers c ON c.id = t.customerId
+      LEFT JOIN visits v ON v.id = t.relatedVisitId
       WHERE t.tenantId = ? AND t.relatedProjectId = ?
       ORDER BY t.dueDate ASC, t.createdAt DESC
     `, [targetTenant, id]);
@@ -201,16 +253,68 @@ projectsRoutes.get('/:id/tasks', async (req: any, res: any) => {
   try {
     const [rows]: any = await pool.query(`
       SELECT 
-        t.*,
-        ts.code as statusCode, ts.name as statusName, ts.color as statusColor,
-        tp.code as priorityCode, tp.name as priorityName, tp.color as priorityColor,
-        u.name as picName, u.email as picEmail, u.avatar as picAvatar,
-        c.name as customerName
+        t.id, t.tenantId, t.title, t.description,
+        COALESCE(t.sourceType, 'MANUAL') as sourceType,
+        COALESCE(ts.id, t.statusId) as statusId,
+        COALESCE(ts.code, t.statusId) as statusCode,
+        COALESCE(ts.name, t.statusId) as statusName,
+        ts.color as statusColor,
+        CASE 
+          WHEN ts.id = 'TS-3' OR t.statusId IN ('COMPLETED', 'TSK_COMPLETED') THEN 'COMPLETED'
+          WHEN ts.id = 'TS-2' OR t.statusId IN ('IN_PROGRESS', 'TSK_INPROGRESS') THEN 'IN_PROGRESS'
+          WHEN ts.id = 'TS-4' OR t.statusId IN ('CANCELLED', 'TSK_CANCELLED') THEN 'CANCELLED'
+          ELSE 'TODO'
+        END as status,
+        COALESCE(tp.id, t.priorityId) as priorityId,
+        COALESCE(tp.code, t.priorityId) as priorityCode,
+        COALESCE(tp.name, t.priorityId) as priorityName,
+        tp.color as priorityColor,
+        CASE
+          WHEN tp.id = 'TP-1' OR t.priorityId IN ('URGENT', 'PRI_URGENT') THEN 'URGENT'
+          WHEN tp.id = 'TP-2' OR t.priorityId IN ('HIGH', 'PRI_HIGH') THEN 'HIGH'
+          WHEN tp.id = 'TP-4' OR t.priorityId IN ('LOW', 'PRI_LOW') THEN 'LOW'
+          WHEN tp.id = 'TP-3' OR t.priorityId IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') THEN 'MEDIUM'
+          ELSE COALESCE(t.priorityId, 'MEDIUM')
+        END as priority,
+        t.picId,
+        COALESCE(u.name, 'Unassigned') as picName,
+        u.email as picEmail,
+        u.avatar as picAvatar,
+        t.customerId,
+        c.name as customerName,
+        t.relatedProjectId,
+        t.relatedVisitId,
+        v.title as visitTitle,
+        DATE_FORMAT(v.visitDate, '%Y-%m-%d') as visitDate,
+        DATE_FORMAT(t.dueDate, '%Y-%m-%d') as dueDate,
+        t.taskType,
+        t.createdAt,
+        t.updatedAt,
+        t.completedAt
       FROM tasks t
-      LEFT JOIN task_statuses ts ON ts.id = t.statusId
-      LEFT JOIN task_priorities tp ON tp.id = t.priorityId
+      LEFT JOIN task_statuses ts ON (
+        ts.id = t.statusId 
+        OR ts.code = t.statusId 
+        OR ts.code = CONCAT('TSK_', t.statusId)
+        OR (t.statusId = 'PENDING' AND ts.id = 'TS-1')
+        OR (t.statusId = 'TODO' AND ts.id = 'TS-1')
+        OR (t.statusId = 'IN_PROGRESS' AND ts.id = 'TS-2')
+        OR (t.statusId = 'COMPLETED' AND ts.id = 'TS-3')
+        OR (t.statusId = 'CANCELLED' AND ts.id = 'TS-4')
+      )
+      LEFT JOIN task_priorities tp ON (
+        tp.id = t.priorityId
+        OR tp.code = t.priorityId
+        OR tp.code = CONCAT('PRI_', t.priorityId)
+        OR (t.priorityId = 'URGENT' AND tp.id = 'TP-1')
+        OR (t.priorityId = 'HIGH' AND tp.id = 'TP-2')
+        OR (t.priorityId = 'NORMAL' AND tp.id = 'TP-3')
+        OR (t.priorityId = 'MEDIUM' AND tp.id = 'TP-3')
+        OR (t.priorityId = 'LOW' AND tp.id = 'TP-4')
+      )
       LEFT JOIN users u ON u.id = t.picId
       LEFT JOIN customers c ON c.id = t.customerId
+      LEFT JOIN visits v ON v.id = t.relatedVisitId
       WHERE t.tenantId = ? AND t.relatedProjectId = ?
       ORDER BY t.dueDate ASC, t.createdAt DESC
     `, [targetTenant, id]);
