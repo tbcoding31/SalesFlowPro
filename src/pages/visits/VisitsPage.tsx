@@ -80,7 +80,6 @@ export const VisitsPage: React.FC = () => {
   // Modal / Drawer states
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [viewingVisit, setViewingVisit] = useState<Visit | null>(null);
-  const [editingVisit, setEditingVisit] = useState<Visit | null>(null);
   const [reschedulingVisit, setReschedulingVisit] = useState<Visit | null>(null);
   const [cancellingVisit, setCancellingVisit] = useState<Visit | null>(null);
 
@@ -177,21 +176,90 @@ export const VisitsPage: React.FC = () => {
     return days;
   }, [calendarCurrentDate]);
 
-  // Calendar board filtered visits
-  const calendarBoardVisits = useMemo(() => {
+  // Filtered visits calculation (Unified authoritative pipeline across List, Main Calendar, and Mini Calendar)
+  const filteredVisits = useMemo(() => {
     return visits.filter((v) => {
-      // Status filter
-      if (calStatusFilter[v.status] === false) return false;
+      // Search filter
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchesTitle = v.title?.toLowerCase().includes(q);
+        const matchesCustomer = v.customerName?.toLowerCase().includes(q) || v.customerCode?.toLowerCase().includes(q);
+        const matchesLocation = v.location?.toLowerCase().includes(q);
+        const matchesPurpose = v.purpose?.toLowerCase().includes(q);
+        const matchesPic = v.picName?.toLowerCase().includes(q);
+        if (!matchesTitle && !matchesCustomer && !matchesLocation && !matchesPurpose && !matchesPic) {
+          return false;
+        }
+      }
 
-      // PIC filter
-      const activePicKeys = Object.keys(calPicFilter).filter((k) => calPicFilter[k]);
-      if (activePicKeys.length > 0 && !calPicFilter[v.picId]) return false;
+      // Customer filter
+      if (customerFilter !== 'ALL' && v.customerId !== customerFilter) {
+        return false;
+      }
+
+      // PIC dropdown filter
+      if (picFilter !== 'ALL' && v.picId !== picFilter) {
+        return false;
+      }
+
+      // Calendar PIC checkboxes filter
+      const activePicKeys = Object.keys(calPicFilter).filter((k) => calPicFilter[k] !== undefined);
+      if (activePicKeys.length > 0 && calPicFilter[v.picId] === false) {
+        return false;
+      }
+
+      // Status dropdown filter
+      const s = (v.statusCode || v.status || '').toUpperCase();
+      if (statusFilter !== 'ALL' && s !== statusFilter.toUpperCase()) {
+        return false;
+      }
+
+      // Calendar Status checkboxes filter
+      if (calStatusFilter[s] === false) {
+        return false;
+      }
+
+      // Purpose filter
+      if (purposeFilter !== 'ALL' && v.purpose !== purposeFilter && v.purposeName !== purposeFilter) {
+        return false;
+      }
+
+      // Date Range filter (only in list view)
+      if (activeView === 'list') {
+        if (dateRangeFilter === 'TODAY') {
+          const todayStr = new Date().toISOString().split('T')[0];
+          if (v.visitDate !== todayStr) return false;
+        } else if (dateRangeFilter === 'WEEK') {
+          const today = new Date();
+          const vDate = new Date(v.visitDate);
+          const diffDays = (vDate.getTime() - today.getTime()) / (1000 * 3600 * 24);
+          if (diffDays < -1 || diffDays > 7) return false;
+        } else if (dateRangeFilter === 'MONTH') {
+          const currentMonthPrefix = new Date().toISOString().slice(0, 7);
+          if (!v.visitDate.startsWith(currentMonthPrefix)) return false;
+        } else if (dateRangeFilter === 'CUSTOM' && customStartDate && customEndDate) {
+          if (v.visitDate < customStartDate || v.visitDate > customEndDate) return false;
+        }
+      }
 
       return true;
     });
-  }, [visits, calStatusFilter, calPicFilter]);
+  }, [
+    visits,
+    searchQuery,
+    customerFilter,
+    picFilter,
+    calPicFilter,
+    statusFilter,
+    calStatusFilter,
+    purposeFilter,
+    dateRangeFilter,
+    customStartDate,
+    customEndDate,
+    activeView,
+  ]);
 
-  // Main board week rows (Monday to Friday)
+  // Main board week rows (Monday to Friday, uses shared filteredVisits)
   const calendarBoardWeeks = useMemo(() => {
     const year = calendarCurrentDate.getFullYear();
     const month = calendarCurrentDate.getMonth();
@@ -214,7 +282,7 @@ export const VisitsPage: React.FC = () => {
         const dStr = String(dayDate.getDate()).padStart(2, '0');
         const dateStr = `${dayDate.getFullYear()}-${mStr}-${dStr}`;
 
-        const dayVisits = calendarBoardVisits.filter((v) => v.visitDate === dateStr);
+        const dayVisits = filteredVisits.filter((v) => v.visitDate === dateStr);
 
         weekDays.push({
           dayNumber: dayDate.getDate(),
@@ -232,74 +300,7 @@ export const VisitsPage: React.FC = () => {
     }
 
     return weeks;
-  }, [calendarCurrentDate, calendarBoardVisits]);
-
-  // Filtered visits calculation
-  const filteredVisits = useMemo(() => {
-    return visits.filter((v) => {
-      // Search filter
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const matchesTitle = v.title?.toLowerCase().includes(q);
-        const matchesCustomer = v.customerName?.toLowerCase().includes(q) || v.customerCode?.toLowerCase().includes(q);
-        const matchesLocation = v.location?.toLowerCase().includes(q);
-        const matchesPurpose = v.purpose?.toLowerCase().includes(q);
-        const matchesPic = v.picName?.toLowerCase().includes(q);
-        if (!matchesTitle && !matchesCustomer && !matchesLocation && !matchesPurpose && !matchesPic) {
-          return false;
-        }
-      }
-
-      // Customer filter
-      if (customerFilter !== 'ALL' && v.customerId !== customerFilter) {
-        return false;
-      }
-
-      // PIC filter
-      if (picFilter !== 'ALL' && v.picId !== picFilter) {
-        return false;
-      }
-
-      // Status filter
-      if (statusFilter !== 'ALL' && v.status !== statusFilter && v.statusCode !== statusFilter) {
-        return false;
-      }
-
-      // Purpose filter
-      if (purposeFilter !== 'ALL' && v.purpose !== purposeFilter && v.purposeName !== purposeFilter) {
-        return false;
-      }
-
-      // Date Range filter
-      if (dateRangeFilter === 'TODAY') {
-        const todayStr = new Date().toISOString().split('T')[0];
-        if (v.visitDate !== todayStr) return false;
-      } else if (dateRangeFilter === 'WEEK') {
-        // Simple 7-day range check
-        const today = new Date();
-        const vDate = new Date(v.visitDate);
-        const diffDays = (vDate.getTime() - today.getTime()) / (1000 * 3600 * 24);
-        if (diffDays < -1 || diffDays > 7) return false;
-      } else if (dateRangeFilter === 'MONTH') {
-        const currentMonthPrefix = new Date().toISOString().slice(0, 7);
-        if (!v.visitDate.startsWith(currentMonthPrefix)) return false;
-      } else if (dateRangeFilter === 'CUSTOM' && customStartDate && customEndDate) {
-        if (v.visitDate < customStartDate || v.visitDate > customEndDate) return false;
-      }
-
-      return true;
-    });
-  }, [
-    visits,
-    searchQuery,
-    customerFilter,
-    picFilter,
-    statusFilter,
-    purposeFilter,
-    dateRangeFilter,
-    customStartDate,
-    customEndDate,
-  ]);
+  }, [calendarCurrentDate, filteredVisits]);
 
   // Handler: Open Schedule Visit Modal
   const handleOpenScheduleModal = (defaultDate?: string) => {
@@ -348,52 +349,6 @@ export const VisitsPage: React.FC = () => {
     });
   };
 
-  // Handler: Open Edit Visit Modal
-  const handleOpenEditModal = (visit: Visit) => {
-    setEditingVisit(visit);
-    setFormCustomerId(visit.customerId);
-    setFormTitle(visit.title);
-    setFormPurpose(visit.purpose);
-    setFormVisitDate(visit.visitDate);
-    setFormStartTime(visit.startTime);
-    setFormEndTime(visit.endTime);
-    setFormLocation(visit.location);
-    setFormPicId(visit.picId);
-    setFormStatus(visit.status);
-    setFormNotes(visit.notes || '');
-  };
-
-  // Handler: Save Edit Visit
-  const handleSaveEdit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingVisit) return;
-
-    const cust = customers.find((c) => c.id === formCustomerId);
-    const assignedUser = users.find((u) => u.id === formPicId);
-
-    const updatedVisit: Partial<Visit> = {
-      ...editingVisit,
-      customerId: formCustomerId,
-      customerName: cust?.name || editingVisit.customerName,
-      customerCode: cust?.code || editingVisit.customerCode,
-      picId: formPicId,
-      picName: assignedUser?.name || editingVisit.picName,
-      picAvatar: assignedUser?.avatarUrl || editingVisit.picAvatar,
-      title: formTitle,
-      purpose: formPurpose,
-      visitDate: formVisitDate,
-      startTime: formStartTime,
-      endTime: formEndTime,
-      location: formLocation,
-      status: formStatus,
-      notes: formNotes,
-    };
-
-    crmApi.updateRecord('visits', editingVisit.id, updatedVisit).then(() => {
-      reloadVisits();
-      setEditingVisit(null);
-    });
-  };
 
   // Handler: Open Reschedule Modal
   const handleOpenRescheduleModal = (visit: Visit) => {
@@ -889,7 +844,7 @@ export const VisitsPage: React.FC = () => {
                                 <button
                                   onClick={() => {
                                     setActiveActionMenuId(null);
-                                    handleOpenEditModal(v);
+                                    navigate(`/visits/${v.id}/edit`);
                                   }}
                                   className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-50 text-[#1a1c1c] cursor-pointer"
                                 >
@@ -983,11 +938,14 @@ export const VisitsPage: React.FC = () => {
               <div className="grid grid-cols-7 gap-y-1 text-center text-xs">
                 {miniCalendarDays.map((item, idx) => {
                   const isSelected = item.dateStr === selectedCalendarDate;
+                  const dayVisits = filteredVisits.filter((v) => v.visitDate === item.dateStr);
+                  const hasVisits = dayVisits.length > 0;
                   return (
                     <button
                       key={idx}
                       onClick={() => setSelectedCalendarDate(item.dateStr)}
-                      className={`w-7 h-7 mx-auto rounded-full flex items-center justify-center text-xs font-semibold transition-all cursor-pointer ${
+                      title={hasVisits ? `${dayVisits.length} visit${dayVisits.length > 1 ? 's' : ''} on ${item.dateStr}` : undefined}
+                      className={`relative w-7 h-7 mx-auto rounded-full flex flex-col items-center justify-center text-xs font-semibold transition-all cursor-pointer ${
                         isSelected
                           ? 'bg-[#4744e5] text-white shadow-xs font-bold'
                           : item.isCurrentMonth
@@ -995,7 +953,14 @@ export const VisitsPage: React.FC = () => {
                           : 'text-[#c0c0d0]'
                       }`}
                     >
-                      {item.dayNumber}
+                      <span className="leading-none">{item.dayNumber}</span>
+                      {hasVisits && (
+                        <span
+                          className={`w-1 h-1 rounded-full absolute bottom-0.5 left-1/2 -translate-x-1/2 ${
+                            isSelected ? 'bg-white' : 'bg-[#4744e5]'
+                          }`}
+                        />
+                      )}
                     </button>
                   );
                 })}
@@ -1502,9 +1467,11 @@ export const VisitsPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    const v = viewingVisit;
-                    setViewingVisit(null);
-                    handleOpenEditModal(v);
+                    if (viewingVisit) {
+                      const id = viewingVisit.id;
+                      setViewingVisit(null);
+                      navigate(`/visits/${id}/edit`);
+                    }
                   }}
                   className="px-3 py-1.5 border border-[#E1E1E1] hover:bg-slate-50 rounded-lg text-xs font-semibold cursor-pointer flex items-center gap-1"
                 >
@@ -1533,154 +1500,6 @@ export const VisitsPage: React.FC = () => {
                 Done
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 3: EDIT VISIT */}
-      {editingVisit && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="bg-white rounded-2xl border border-[#E1E1E1] shadow-xl max-w-lg w-full p-6 space-y-4">
-            <div className="flex justify-between items-center border-b border-[#E1E1E1] pb-3">
-              <h2 className="text-lg font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">
-                Edit Visit Details
-              </h2>
-              <button
-                onClick={() => setEditingVisit(null)}
-                className="text-[#767587] hover:text-[#1a1c1c] p-1 rounded-lg cursor-pointer"
-              >
-                <span className="material-symbols-outlined">close</span>
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveEdit} className="space-y-3 text-xs">
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Customer Account</label>
-                <select
-                  value={formCustomerId}
-                  onChange={(e) => setFormCustomerId(e.target.value)}
-                  className="w-full px-3 py-2 border border-[#E1E1E1] rounded-xl text-xs bg-white text-[#1a1c1c]"
-                >
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} ({c.code})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Visit Title *</label>
-                <input
-                  type="text"
-                  required
-                  value={formTitle}
-                  onChange={(e) => setFormTitle(e.target.value)}
-                  className="w-full px-3 py-2 border border-[#E1E1E1] rounded-xl text-xs"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold text-[#1a1c1c] mb-1">Purpose</label>
-                  <input
-                    type="text"
-                    value={formPurpose}
-                    onChange={(e) => setFormPurpose(e.target.value)}
-                    className="w-full px-3 py-2 border border-[#E1E1E1] rounded-xl text-xs"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-bold text-[#1a1c1c] mb-1">Status</label>
-                  <select
-                    value={formStatus}
-                    onChange={(e) => setFormStatus(e.target.value as VisitStatus)}
-                    className="w-full px-3 py-2 border border-[#E1E1E1] rounded-xl text-xs bg-white font-semibold"
-                  >
-                    <option value="PLANNED">Planned</option>
-                    <option value="CONFIRMED">Confirmed</option>
-                    <option value="IN_PROGRESS">In Progress</option>
-                    <option value="COMPLETED">Completed</option>
-                    <option value="CANCELLED">Cancelled</option>
-                    <option value="RESCHEDULED">Rescheduled</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2">
-                <div>
-                  <label className="block font-bold text-[#1a1c1c] mb-1">Date</label>
-                  <input
-                    type="date"
-                    value={formVisitDate}
-                    onChange={(e) => setFormVisitDate(e.target.value)}
-                    className="w-full px-2 py-2 border border-[#E1E1E1] rounded-xl text-xs"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-bold text-[#1a1c1c] mb-1">Start Time</label>
-                  <input
-                    type="time"
-                    value={formStartTime}
-                    onChange={(e) => setFormStartTime(e.target.value)}
-                    className="w-full px-2 py-2 border border-[#E1E1E1] rounded-xl text-xs"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-bold text-[#1a1c1c] mb-1">End Time</label>
-                  <input
-                    type="time"
-                    value={formEndTime}
-                    onChange={(e) => setFormEndTime(e.target.value)}
-                    className="w-full px-2 py-2 border border-[#E1E1E1] rounded-xl text-xs"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Location Address</label>
-                <input
-                  type="text"
-                  value={formLocation}
-                  onChange={(e) => setFormLocation(e.target.value)}
-                  className="w-full px-3 py-2 border border-[#E1E1E1] rounded-xl text-xs"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-[#1a1c1c] mb-1">Assigned PIC</label>
-                <select
-                  value={formPicId}
-                  onChange={(e) => setFormPicId(e.target.value)}
-                  className="w-full px-3 py-2 border border-[#E1E1E1] rounded-xl text-xs bg-white"
-                >
-                  {users.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-3 border-t border-[#E1E1E1]">
-                <button
-                  type="button"
-                  onClick={() => setEditingVisit(null)}
-                  className="px-4 py-2 border border-[#E1E1E1] rounded-xl font-bold cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 bg-[#4744e5] text-white rounded-xl font-bold cursor-pointer"
-                >
-                  Save Changes
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}

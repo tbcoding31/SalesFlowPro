@@ -390,6 +390,16 @@ export const CustomerVisitsTab: React.FC<CustomerVisitsTabProps> = ({ customerId
                               <span className="material-symbols-outlined text-[18px]">visibility</span>
                             </button>
 
+                            {(v.status || v.statusCode) !== 'COMPLETED' && (v.status || v.statusCode) !== 'CANCELLED' && (
+                              <button
+                                onClick={() => navigate(`/visits/${v.id}/edit`)}
+                                title="Edit Visit"
+                                className="p-1.5 hover:bg-[#e0e7ff] rounded text-[#4744e5] cursor-pointer"
+                              >
+                                <span className="material-symbols-outlined text-[18px]">edit</span>
+                              </button>
+                            )}
+
                             {(v.status || v.statusCode) !== 'COMPLETED' && (
                               <button
                                 onClick={() => {

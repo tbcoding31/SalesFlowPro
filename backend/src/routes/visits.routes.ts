@@ -424,6 +424,17 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
     const result = data.result !== undefined ? data.result : current.result;
     const nextAction = data.nextAction !== undefined ? data.nextAction : current.nextAction;
 
+    let customerId = current.customerId;
+    if (data.customerId) {
+      const [cRows]: any = await pool.query(
+        'SELECT id, name FROM customers WHERE id = ? AND tenantId = ?',
+        [String(data.customerId).trim(), targetTenant]
+      );
+      if (cRows.length > 0) {
+        customerId = cRows[0].id;
+      }
+    }
+
     let statusId = current.statusId;
     if (data.statusId || data.status) {
       const sVal = String(data.statusId || data.status).trim();
@@ -460,9 +471,22 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
 
     await pool.query(`
       UPDATE visits
-      SET title = ?, visitDate = ?, startTime = ?, endTime = ?, location = ?, notes = ?, result = ?, nextAction = ?, statusId = ?, purposeId = ?, picId = ?, completedAt = ?, updatedAt = NOW()
+      SET customerId = ?, title = ?, visitDate = ?, startTime = ?, endTime = ?, location = ?, notes = ?, result = ?, nextAction = ?, statusId = ?, purposeId = ?, picId = ?, completedAt = ?, updatedAt = NOW()
       WHERE id = ? AND tenantId = ?
-    `, [title, visitDate, startTime, endTime, location, notes, result, nextAction, statusId, purposeId, picId, completedAtVal, id, targetTenant]);
+    `, [customerId, title, visitDate, startTime, endTime, location, notes, result, nextAction, statusId, purposeId, picId, completedAtVal, id, targetTenant]);
+
+    if (Array.isArray(data.additionalPicIds)) {
+      await pool.query('DELETE FROM visit_participants WHERE visitId = ?', [id]);
+      for (const pUserId of data.additionalPicIds) {
+        if (pUserId && pUserId !== picId) {
+          const partId = 'VPART-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+          await pool.query(`
+            INSERT INTO visit_participants (id, visitId, userId, role)
+            VALUES (?, ?, ?, 'PARTICIPANT')
+          `, [partId, id, pUserId]);
+        }
+      }
+    }
 
     await logAudit(
       targetTenant,
@@ -479,6 +503,7 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
     res.json({
       success: true,
       id,
+      customerId,
       title,
       location,
       visitDate,
@@ -487,6 +512,8 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
       notes,
       result,
       nextAction,
+      purposeId,
+      picId,
       statusId
     });
   } catch (err: any) {

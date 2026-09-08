@@ -28,6 +28,7 @@ import { CreateCustomerPage } from './pages/customers/CreateCustomerPage';
 import { EditCustomerPage } from './pages/customers/EditCustomerPage';
 import { VisitsPage } from './pages/visits/VisitsPage';
 import { CreateVisitPage } from './pages/visits/CreateVisitPage';
+import { EditVisitPage } from './pages/visits/EditVisitPage';
 import { VisitDetailPage } from './pages/visits/VisitDetailPage';
 import { VisitReportPage } from './pages/visits/VisitReportPage';
 import { CreateTaskPage } from './pages/tasks/CreateTaskPage';
@@ -304,6 +305,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <VisitsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/visits/:id/edit"
+            element={
+              <ProtectedRoute>
+                <EditVisitPage />
               </ProtectedRoute>
             }
           />
