@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   resolveProjectNavigation,
@@ -32,6 +32,33 @@ export const ProjectDetailPage: React.FC = () => {
   const [attentionSignals, setAttentionSignals] = useState<any[]>([]);
   const [commentText, setCommentText] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+
+  // UAT-BUG-061: Stage Advance, Close Modal, and Scroll Targets State
+  const [isAdvancing, setIsAdvancing] = useState(false);
+  const [showCloseModal, setShowCloseModal] = useState(false);
+  const [closeModalReason, setCloseModalReason] = useState('');
+  const [closeModalError, setCloseModalError] = useState('');
+
+  const tasksSectionRef = useRef<HTMLDivElement | null>(null);
+  const commentsSectionRef = useRef<HTMLDivElement | null>(null);
+  const commentInputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const handleScrollToTasks = () => {
+    if (tasksSectionRef.current) {
+      tasksSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  const handleScrollToComments = () => {
+    if (commentsSectionRef.current) {
+      commentsSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    setTimeout(() => {
+      if (commentInputRef.current) {
+        commentInputRef.current.focus();
+      }
+    }, 300);
+  };
 
   
   const loadTimeline = async (pageToLoad: number, append: boolean = false) => {
@@ -224,10 +251,79 @@ const loadData = async () => {
   };
 
   const currentStageIndex = pipelineStages.findIndex(s => s.key === project.stageId || s.code === (project.stageCode || project.stage));
+  const currentStage = currentStageIndex >= 0 ? pipelineStages[currentStageIndex] : null;
   const isLost = project.stageCommercialOutcome === 'LOST' || (project.stageCode || project.stage) === 'LOST';
   const isCancelled = project.stageCommercialOutcome === 'CANCELLED' || (project.stageCode || project.stage) === 'CANCELLED';
   const isTerminal = Boolean(project.stageIsTerminal);
   const isWon = Boolean(project.commercialWonAt);
+  const isCurrentlyWon = currentStage?.commercialOutcome === 'WON' || project.stageCommercialOutcome === 'WON';
+
+  const nextStage = (project as any)?.nextStage;
+  const canAdvance = Boolean((project as any)?.canAdvance);
+  const isNextStageTerminalClose = Boolean(
+    nextStage &&
+    nextStage.isTerminal === 1 &&
+    nextStage.phase === 'CLOSED' &&
+    nextStage.commercialOutcome === 'WON'
+  );
+
+  const handleAdvanceClick = () => {
+    if (!canAdvance) return;
+    if (isNextStageTerminalClose) {
+      setCloseModalReason('');
+      setCloseModalError('');
+      setShowCloseModal(true);
+      return;
+    }
+    executeAdvance();
+  };
+
+  const executeAdvance = async () => {
+    if (!project || isAdvancing) return;
+    setIsAdvancing(true);
+    try {
+      const res = await crmApi.advanceProjectStage(project.id);
+      if (!res.success) {
+        if (res.code === 'PROJECT_CLOSE_CONFIRMATION_REQUIRED' || res.requiresConfirmation) {
+          setCloseModalReason('');
+          setCloseModalError('');
+          setShowCloseModal(true);
+          return;
+        }
+        alert(res.error || 'Failed to advance stage');
+        return;
+      }
+      await loadData();
+    } catch (err: any) {
+      console.error('Failed to advance project stage', err);
+      alert(err.message || 'Failed to advance project stage');
+    } finally {
+      setIsAdvancing(false);
+    }
+  };
+
+  const handleConfirmClose = async () => {
+    if (!project || !closeModalReason.trim() || isAdvancing) return;
+    setIsAdvancing(true);
+    setCloseModalError('');
+    try {
+      const res = await crmApi.advanceProjectStage(project.id, {
+        confirmClose: true,
+        closeReason: closeModalReason.trim()
+      });
+      if (!res.success) {
+        setCloseModalError(res.error || 'Failed to close project');
+        return;
+      }
+      setShowCloseModal(false);
+      setCloseModalReason('');
+      await loadData();
+    } catch (err: any) {
+      setCloseModalError(err.message || 'Failed to close project');
+    } finally {
+      setIsAdvancing(false);
+    }
+  };
 
   const comments = activities.filter(a => a.subject === 'Comment');
   const historyActivities = activities.filter(a => a.subject !== 'Comment');
@@ -457,27 +553,74 @@ const loadData = async () => {
           )}
         </div>
 
-        <div className="bg-slate-50 border-t md:border-t-0 md:border-l border-slate-200 p-6 flex flex-row md:flex-col items-center justify-center gap-3 shrink-0">
+        <div className="bg-slate-50 border-t md:border-t-0 md:border-l border-slate-200 p-6 flex flex-row md:flex-col items-center justify-center gap-3 shrink-0 min-w-[200px]">
+          {/* PRIMARY: Edit Project */}
           <button 
+            disabled={isTerminal}
             onClick={() => {
-              // navigate(`/projects/${project.id}/edit`) with navigation context
-              navigate(buildProjectEditUrl(project.id, { entry: 'detail', from: navContext.from }));
+              if (!isTerminal) {
+                navigate(buildProjectEditUrl(project.id, { entry: 'detail', from: navContext.from }));
+              }
             }}
-            className="flex-1 w-full px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded-xl shadow-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
+            title={isTerminal ? 'Project is in a terminal stage and cannot be edited' : 'Edit Project Details'}
+            className={`flex-1 w-full px-4 py-2.5 text-sm font-bold rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2 ${
+              isTerminal
+                ? 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'
+                : 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'
+            }`}
           >
-            <span className="material-symbols-outlined text-[18px]">edit</span>
-            Edit
+            <span className="material-symbols-outlined text-[18px]">{isTerminal ? 'lock' : 'edit'}</span>
+            Edit Project
           </button>
-          <button className="flex-1 w-full px-4 py-2 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 text-sm font-bold rounded-xl shadow-sm transition-colors flex items-center justify-center gap-2">
-            <span className="material-symbols-outlined text-[18px]">swap_horiz</span>
-            Move Stage
-          </button>
-          <div className="flex-1 w-full flex gap-2">
-            <button className="flex-1 px-3 py-2 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 text-sm font-bold rounded-xl shadow-sm transition-colors flex items-center justify-center" title="Create Task">
-              <span className="material-symbols-outlined text-[18px]">task</span>
+
+          {/* SECONDARY: Advance Stage or Close Project */}
+          {isNextStageTerminalClose ? (
+            <button
+              disabled={isAdvancing}
+              onClick={handleAdvanceClick}
+              title="Close & Complete Project"
+              className="flex-1 w-full px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+            >
+              <span className="material-symbols-outlined text-[18px]">verified</span>
+              {isAdvancing ? 'Closing...' : 'Close Project'}
             </button>
-            <button className="flex-1 px-3 py-2 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 text-sm font-bold rounded-xl shadow-sm transition-colors flex items-center justify-center" title="Create Follow-up">
-              <span className="material-symbols-outlined text-[18px]">forum</span>
+          ) : (
+            <button
+              disabled={!canAdvance || isAdvancing}
+              onClick={handleAdvanceClick}
+              title={canAdvance ? (nextStage ? `Advance to ${nextStage.name}` : 'Advance Stage') : 'Project is at final canonical stage'}
+              className={`flex-1 w-full px-4 py-2.5 text-sm font-bold rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2 ${
+                canAdvance && !isAdvancing
+                  ? 'bg-slate-800 hover:bg-slate-900 text-white cursor-pointer'
+                  : 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[18px]">
+                {canAdvance ? 'arrow_forward' : 'check_circle'}
+              </span>
+              {isAdvancing ? 'Advancing...' : (canAdvance && nextStage ? `Advance to ${nextStage.name}` : 'Final Stage Reached')}
+            </button>
+          )}
+
+          {/* TERTIARY: Tasks and Comments */}
+          <div className="flex-1 w-full grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={handleScrollToTasks}
+              className="px-3 py-2 bg-white border border-slate-200 hover:border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-bold rounded-xl shadow-2xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+              title="Scroll to Related Tasks"
+            >
+              <span className="material-symbols-outlined text-[16px] text-amber-500">task_alt</span>
+              Tasks
+            </button>
+            <button
+              type="button"
+              onClick={handleScrollToComments}
+              className="px-3 py-2 bg-white border border-slate-200 hover:border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-bold rounded-xl shadow-2xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+              title="Scroll to Comments"
+            >
+              <span className="material-symbols-outlined text-[16px] text-blue-500">chat_bubble</span>
+              Comments
             </button>
           </div>
         </div>
@@ -534,7 +677,7 @@ const loadData = async () => {
           </div>
         ) : (
           <div className="space-y-6">
-            {isWon && (
+            {isCurrentlyWon && (
               <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
@@ -745,7 +888,7 @@ const loadData = async () => {
           </div>
 
           {/* Tasks */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div id="project-tasks-section" ref={tasksSectionRef} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
               <h3 className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
                 <span className="material-symbols-outlined text-amber-500 text-[20px]">task_alt</span>
@@ -827,7 +970,7 @@ const loadData = async () => {
           </div>
 
           {/* Comments Section */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div id="project-comments-section" ref={commentsSectionRef} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-2 bg-white">
               <span className="material-symbols-outlined text-slate-500 text-[20px]">chat_bubble_outline</span>
               <h3 className="text-sm font-bold text-slate-900">Comments</h3>
@@ -842,6 +985,7 @@ const loadData = async () => {
                 <div className="flex-1">
                   <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50">
                     <textarea
+                      ref={commentInputRef}
                       placeholder="Add a comment or note..."
                       value={commentText}
                       onChange={(e) => setCommentText(e.target.value)}
@@ -972,6 +1116,75 @@ const loadData = async () => {
 
         </div>
       </div>
+
+      {/* Explicit Business Closure Modal (Gate 1 & Gate 2) */}
+      {showCloseModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 max-w-lg w-full p-6 space-y-5 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined text-2xl">verified</span>
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-slate-900">Close & Complete Project</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Project: {project.name}</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs text-slate-600 space-y-2">
+              <div className="font-semibold text-slate-700">Important Business Consequences:</div>
+              <ul className="list-disc list-inside space-y-1 text-slate-600">
+                <li>This action marks the project delivery lifecycle as completed and closed.</li>
+                <li>Normal project editing will be <strong>locked</strong>.</li>
+                <li>Reopening will require a dedicated administrative lifecycle action and reason.</li>
+              </ul>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-700 flex items-center gap-1">
+                Closure Reason <span className="text-rose-500">*</span>
+              </label>
+              <textarea
+                value={closeModalReason}
+                onChange={(e) => {
+                  setCloseModalReason(e.target.value);
+                  if (closeModalError) setCloseModalError('');
+                }}
+                placeholder="e.g., Project delivery completed and accepted by customer..."
+                rows={3}
+                className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none transition-shadow"
+              />
+              {closeModalError && (
+                <p className="text-xs font-semibold text-rose-600">{closeModalError}</p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={isAdvancing}
+                onClick={() => {
+                  setShowCloseModal(false);
+                  setCloseModalReason('');
+                  setCloseModalError('');
+                }}
+                className="px-4 py-2 border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-bold rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isAdvancing || !closeModalReason.trim()}
+                onClick={handleConfirmClose}
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                <span className="material-symbols-outlined text-base">check</span>
+                {isAdvancing ? 'Closing...' : 'Confirm & Close Project'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

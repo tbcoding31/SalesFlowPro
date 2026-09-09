@@ -5,6 +5,7 @@ import {
   resolveProjectNavigation,
   buildProjectDetailUrl,
   buildProjectEditUrl,
+  ProjectPipelinePhase,
 } from '../../utils/projectNavigation';
 import { useAuth } from '../../context/AuthContext';
 import { masterDataApi } from '../../services/masterDataApi';
@@ -96,7 +97,21 @@ export const ProjectsPage: React.FC = () => {
   const [transitionCancellationReason, setTransitionCancellationReason] = useState<string>('');
   const [transitionReopenReason, setTransitionReopenReason] = useState<string>('');
   const [isTransitioning, setIsTransitioning] = useState<boolean>(false);
-  const [kanbanPhase, setKanbanPhase] = useState<'ALL' | 'SALES' | 'DELIVERY' | 'CLOSED'>('SALES');
+  const kanbanPhase: ProjectPipelinePhase = navContext.phase;
+
+  const handlePhaseChange = (phase: ProjectPipelinePhase) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('phase', phase);
+    setSearchParams(next, { replace: true });
+  };
+
+  const matchesPhase = (stagePhase: string, selectedPhase: ProjectPipelinePhase) => {
+    if (selectedPhase === 'all') return true;
+    if (selectedPhase === 'sales') return stagePhase === 'SALES';
+    if (selectedPhase === 'delivery') return stagePhase === 'DELIVERY' || stagePhase === 'POST_LIVE';
+    if (selectedPhase === 'closed') return stagePhase === 'CLOSED';
+    return true;
+  };
 
   const handleCloseMenu = () => {
     setActiveMenuProject(null);
@@ -641,43 +656,43 @@ export const ProjectsPage: React.FC = () => {
             <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-bold">
               <button
                 type="button"
-                onClick={() => setKanbanPhase('SALES')}
+                onClick={() => handlePhaseChange('all')}
                 className={`px-3 py-1 rounded-lg transition-colors cursor-pointer ${
-                  kanbanPhase === 'SALES' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                  kanbanPhase === 'all' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                All Phases
+              </button>
+              <button
+                type="button"
+                onClick={() => handlePhaseChange('sales')}
+                className={`px-3 py-1 rounded-lg transition-colors cursor-pointer ${
+                  kanbanPhase === 'sales' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
                 }`}
               >
                 Sales Pipeline
               </button>
               <button
                 type="button"
-                onClick={() => setKanbanPhase('DELIVERY')}
+                onClick={() => handlePhaseChange('delivery')}
                 className={`px-3 py-1 rounded-lg transition-colors cursor-pointer ${
-                  kanbanPhase === 'DELIVERY' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                  kanbanPhase === 'delivery' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
                 }`}
               >
                 Delivery Pipeline
               </button>
               <button
                 type="button"
-                onClick={() => setKanbanPhase('CLOSED')}
+                onClick={() => handlePhaseChange('closed')}
                 className={`px-3 py-1 rounded-lg transition-colors cursor-pointer ${
-                  kanbanPhase === 'CLOSED' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                  kanbanPhase === 'closed' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
                 }`}
               >
                 Closed
               </button>
-              <button
-                type="button"
-                onClick={() => setKanbanPhase('ALL')}
-                className={`px-3 py-1 rounded-lg transition-colors cursor-pointer ${
-                  kanbanPhase === 'ALL' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                All Phases
-              </button>
             </div>
             <div className="text-xs text-slate-400 font-medium">
-              Showing {stagesToRender.filter(s => kanbanPhase === 'ALL' || s.phase === kanbanPhase).length} stages
+              Showing {stagesToRender.filter(s => matchesPhase(s.phase, kanbanPhase)).length} stages
             </div>
           </div>
 
@@ -745,7 +760,7 @@ export const ProjectsPage: React.FC = () => {
               );
             })()}
 
-            {stagesToRender.filter(s => kanbanPhase === 'ALL' || s.phase === kanbanPhase).map((stage) => {
+            {stagesToRender.filter(s => matchesPhase(s.phase, kanbanPhase)).map((stage) => {
               const stageOpps = projects.filter(o => o.stageId === stage.key || (o.stageCode && o.stageCode === stage.code));
               const stageValue = stageOpps.reduce((acc, curr) => acc + (Number(curr.value ?? curr.estimatedValue) || 0), 0);
               const isInactive = !stage.isActive;

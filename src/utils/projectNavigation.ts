@@ -1,10 +1,12 @@
 export type ProjectView = 'list' | 'pipeline';
 export type ProjectEntrySource = 'list' | 'pipeline' | 'detail' | 'direct';
+export type ProjectPipelinePhase = 'all' | 'sales' | 'delivery' | 'closed';
 
 export interface ProjectNavigationContext {
   view: ProjectView;
   from: ProjectView;
   entry: ProjectEntrySource;
+  phase: ProjectPipelinePhase;
 }
 
 /**
@@ -13,6 +15,7 @@ export interface ProjectNavigationContext {
  * - `view`: 'list' | 'pipeline' (defaults to fallbackView, which defaults to 'list').
  * - `from`: strictly 'list' | 'pipeline' (collection view authority). Never 'detail'.
  * - `entry`: strictly 'list' | 'pipeline' | 'detail' | 'direct' (immediate Edit entry path).
+ * - `phase`: strictly 'all' | 'sales' | 'delivery' | 'closed' (pipeline phase authority, defaults to 'all').
  * - When entry is missing/direct, fallback from is 'list' and entry is 'direct'.
  * - Contradictory states like from='detail'&entry='pipeline' are impossible.
  */
@@ -28,6 +31,7 @@ export function resolveProjectNavigation(
   const rawView = (params.get('view') || '').toLowerCase().trim();
   const rawFrom = (params.get('from') || '').toLowerCase().trim();
   const rawEntry = (params.get('entry') || '').toLowerCase().trim();
+  const rawPhase = (params.get('phase') || '').toLowerCase().trim();
 
   const view: ProjectView = rawView === 'pipeline' ? 'pipeline' : (rawView === 'list' ? 'list' : fallbackView);
 
@@ -47,15 +51,26 @@ export function resolveProjectNavigation(
     entry = rawFrom;
   }
 
-  return { view, from, entry };
+  const phase: ProjectPipelinePhase =
+    rawPhase === 'sales' ? 'sales' :
+    rawPhase === 'delivery' ? 'delivery' :
+    rawPhase === 'closed' ? 'closed' :
+    'all';
+
+  return { view, from, entry, phase };
 }
 
 /**
  * Builds the canonical URL for the project collection page with view parameter.
  */
-export function buildProjectsUrl(params?: { view?: ProjectView }): string {
+export function buildProjectsUrl(params?: { view?: ProjectView; phase?: ProjectPipelinePhase }): string {
   const view = params?.view || 'list';
-  return `/projects?view=${view}`;
+  const q = new URLSearchParams();
+  q.set('view', view);
+  if (params?.phase) {
+    q.set('phase', params.phase);
+  }
+  return `/projects?${q.toString()}`;
 }
 
 /**

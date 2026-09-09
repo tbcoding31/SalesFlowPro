@@ -239,6 +239,259 @@ projectsRoutes.get('/pipeline', async (req: any, res: any) => {
   }
 });
 
+export class StageTransitionError extends Error {
+  statusCode: number;
+  code: string;
+  data?: any;
+  constructor(statusCode: number, code: string, message: string, data?: any) {
+    super(message);
+    this.name = 'StageTransitionError';
+    this.statusCode = statusCode;
+    this.code = code;
+    this.data = data;
+  }
+}
+
+export function isStageTerminal(stage: { isTerminal?: number; phase?: string; commercialOutcome?: string }) {
+  if (!stage) return false;
+  return stage.isTerminal === 1 || stage.phase === 'CLOSED' || ['LOST', 'CANCELLED'].includes(stage.commercialOutcome || '');
+}
+
+export async function resolveNextForwardStage(executor: any, currentDisplayOrder: number) {
+  const [rows]: any = await executor.query(`
+    SELECT id, code, name, phase, commercialOutcome, isActive, isTerminal, displayOrder
+    FROM project_stages
+    WHERE isActive = 1
+      AND displayOrder > ?
+      AND commercialOutcome NOT IN ('LOST', 'CANCELLED')
+    ORDER BY displayOrder ASC
+    LIMIT 1
+  `, [currentDisplayOrder]);
+
+  return rows.length > 0 ? rows[0] : null;
+}
+
+export interface ProjectStageTransitionParams {
+  conn: any;
+  projectId: string;
+  targetTenant: string;
+  actorUserId: string;
+  actorIp?: string;
+  actorUserAgent?: string;
+  targetStage: string;
+  lossReason?: string;
+  cancellationReason?: string;
+  reopenReason?: string;
+  closeReason?: string;
+  confirmClose?: boolean;
+  notes?: string;
+}
+
+export async function executeProjectStageTransition(params: ProjectStageTransitionParams) {
+  const {
+    conn,
+    projectId,
+    targetTenant,
+    actorUserId,
+    actorIp,
+    actorUserAgent,
+    targetStage,
+    lossReason,
+    cancellationReason,
+    reopenReason,
+    closeReason,
+    confirmClose,
+    notes
+  } = params;
+
+  const [pRows]: any = await conn.query(`
+    SELECT p.*, ps.id as fromStageId, ps.code as fromStageCode, ps.name as fromStageName,
+           ps.phase as fromPhase, ps.commercialOutcome as fromOutcome,
+           ps.isTerminal as fromIsTerminal, ps.displayOrder as fromDisplayOrder
+    FROM projects p
+    LEFT JOIN project_stages ps ON ps.id = p.stageId
+    WHERE p.id = ? AND p.tenantId = ? FOR UPDATE
+  `, [projectId, targetTenant]);
+
+  if (pRows.length === 0) {
+    throw new StageTransitionError(404, 'NOT_FOUND', 'Project not found');
+  }
+  const currentProject = pRows[0];
+
+  // Strictly validate and resolve target stage against MySQL project_stages
+  const [sRows]: any = await conn.query(
+    'SELECT id, code, name, phase, commercialOutcome, isActive, isTerminal, probability, displayOrder FROM project_stages WHERE id = ? OR code = ? LIMIT 1',
+    [targetStage, targetStage]
+  );
+
+  if (sRows.length === 0) {
+    throw new StageTransitionError(400, 'INVALID_STAGE', `Invalid project stage: ${targetStage}`);
+  }
+
+  const targetStageRow = sRows[0];
+  if (!targetStageRow.isActive) {
+    throw new StageTransitionError(400, 'INACTIVE_STAGE', 'Target stage is inactive and cannot accept project transitions');
+  }
+
+  const resolvedStageId = targetStageRow.id;
+  const resolvedStageCode = targetStageRow.code;
+  const resolvedStageName = targetStageRow.name;
+  const targetOutcome = targetStageRow.commercialOutcome;
+  const targetPhase = targetStageRow.phase;
+  const targetIsTerminal = targetStageRow.isTerminal === 1;
+  const fromIsTerminal = currentProject.fromIsTerminal === 1;
+
+  // MANDATORY EXECUTION GATE: LOST IS PRE-WIN COMMERCIAL FAILURE ONLY
+  if (targetOutcome === 'LOST') {
+    if (currentProject.commercialWonAt !== null) {
+      throw new StageTransitionError(400, 'PROJECT_ALREADY_WON_CANNOT_BE_LOST', 'A project that has already been commercially won cannot be marked as LOST. Use CANCELLED instead.');
+    }
+    if (currentProject.fromPhase && currentProject.fromPhase !== 'SALES') {
+      throw new StageTransitionError(400, 'PROJECT_ALREADY_WON_CANNOT_BE_LOST', 'LOST stage is only applicable to projects within the pre-win SALES lifecycle.');
+    }
+    if (!lossReason || !String(lossReason).trim()) {
+      throw new StageTransitionError(400, 'LOSS_REASON_REQUIRED', 'A business loss reason is mandatory to mark a project as LOST.');
+    }
+  }
+
+  // Cancellation Reason Check
+  if (targetOutcome === 'CANCELLED') {
+    const cReason = cancellationReason || lossReason || notes;
+    if (!cReason || !String(cReason).trim()) {
+      throw new StageTransitionError(400, 'CANCELLATION_REASON_REQUIRED', 'A cancellation reason is mandatory to cancel a project.');
+    }
+  }
+
+  // Terminal Won Closure check (Gate 1):
+  // When targetStage.isTerminal === 1 AND targetStage.phase === 'CLOSED' AND targetStage.commercialOutcome === 'WON'
+  if (targetIsTerminal && targetPhase === 'CLOSED' && targetOutcome === 'WON') {
+    if (confirmClose !== true) {
+      throw new StageTransitionError(
+        409,
+        'PROJECT_CLOSE_CONFIRMATION_REQUIRED',
+        'Explicit confirmation is required to close and complete this project.',
+        {
+          requiresConfirmation: true,
+          nextStage: {
+            id: resolvedStageId,
+            code: resolvedStageCode,
+            name: resolvedStageName,
+            phase: targetPhase,
+            commercialOutcome: targetOutcome,
+            isTerminal: 1
+          }
+        }
+      );
+    }
+    if (!closeReason || !String(closeReason).trim()) {
+      throw new StageTransitionError(
+        400,
+        'PROJECT_CLOSE_REASON_REQUIRED',
+        'An explicit close reason is required to close and complete this project.'
+      );
+    }
+  }
+
+  // Reopen Check: from terminal to non-terminal
+  const isReopen = fromIsTerminal && !targetIsTerminal;
+  if (isReopen) {
+    if (!reopenReason || !String(reopenReason).trim()) {
+      throw new StageTransitionError(400, 'REOPEN_REASON_REQUIRED', 'An explicit business reason is required to reopen a project from a terminal stage.');
+    }
+  }
+
+  // Atomic Commercial Won Milestone Recognition: stamp NOW() only if commercialWonAt is NULL
+  if (targetOutcome === 'WON' && !currentProject.commercialWonAt) {
+    await conn.query(
+      'UPDATE projects SET stageId = ?, commercialWonAt = NOW() WHERE id = ? AND tenantId = ?',
+      [resolvedStageId, projectId, targetTenant]
+    );
+  } else {
+    await conn.query(
+      'UPDATE projects SET stageId = ? WHERE id = ? AND tenantId = ?',
+      [resolvedStageId, projectId, targetTenant]
+    );
+  }
+
+  // Record stage transition history
+  const historyId = 'PSH-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex');
+  const stageNotes = lossReason 
+    ? `Loss Reason: ${lossReason}${notes ? ' | ' + notes : ''}`
+    : (cancellationReason ? `Cancellation Reason: ${cancellationReason}${notes ? ' | ' + notes : ''}` 
+      : (closeReason ? `Close Reason: ${closeReason}${notes ? ' | ' + notes : ''}`
+        : (reopenReason ? `Reopen Reason: ${reopenReason}${notes ? ' | ' + notes : ''}` : (notes || null))));
+
+  await conn.query(`
+    INSERT INTO project_stage_histories (id, projectId, fromStageId, toStageId, changedById, changedAt, notes)
+    VALUES (?, ?, ?, ?, ?, NOW(), ?)
+  `, [historyId, projectId, currentProject.stageId, resolvedStageId, actorUserId, stageNotes]);
+
+  const auditDesc = `Project '${currentProject.title}' transitioned to stage '${resolvedStageName}' (${resolvedStageCode})${closeReason ? `. Reason: ${closeReason}` : ''}`;
+  await logAudit(
+    targetTenant,
+    actorUserId,
+    'PROJECT_STAGE_CHANGED',
+    'Project',
+    projectId,
+    auditDesc,
+    actorIp,
+    actorUserAgent,
+    'CRM'
+  );
+
+  // Fetch updated project row
+  const [updatedRows]: any = await conn.query(`
+    SELECT 
+      p.*,
+      p.title as name,
+      p.value as estimatedValue,
+      COALESCE(ps.code, p.stageId) as stage,
+      c.name as customerName, c.code as customerCode,
+      u.name as picName, u.email as picEmail, u.avatar as picAvatar,
+      ps.name as stageName, ps.code as stageCode,
+      ps.phase as stagePhase,
+      ps.commercialOutcome as stageCommercialOutcome,
+      ps.isActive as stageIsActive,
+      ps.isTerminal as stageIsTerminal,
+      ps.displayOrder as stageDisplayOrder,
+      ps.allowVisits as stageAllowVisits,
+      ps.allowNewProject as stageAllowNewProject,
+      COALESCE(p.probability, ps.probability, 0) as effectiveProbability
+    FROM projects p
+    LEFT JOIN customers c ON c.id = p.customerId
+    LEFT JOIN users u ON u.id = p.picId
+    LEFT JOIN project_stages ps ON ps.id = p.stageId
+    WHERE p.id = ? AND p.tenantId = ?
+  `, [projectId, targetTenant]);
+
+  return {
+    id: projectId,
+    stageId: resolvedStageId,
+    stageCode: resolvedStageCode,
+    stageName: resolvedStageName,
+    currentStage: resolvedStageCode,
+    fromStage: {
+      id: currentProject.fromStageId || currentProject.stageId,
+      code: currentProject.fromStageCode,
+      name: currentProject.fromStageName,
+      phase: currentProject.fromPhase,
+      commercialOutcome: currentProject.fromOutcome,
+      isTerminal: currentProject.fromIsTerminal,
+      displayOrder: currentProject.fromDisplayOrder
+    },
+    toStage: {
+      id: resolvedStageId,
+      code: resolvedStageCode,
+      name: resolvedStageName,
+      phase: targetPhase,
+      commercialOutcome: targetOutcome,
+      isTerminal: targetStageRow.isTerminal,
+      displayOrder: targetStageRow.displayOrder
+    },
+    project: updatedRows[0]
+  };
+}
+
 // PATCH /api/projects/:id/stage - Transition project commercial stage
 projectsRoutes.patch('/:id/stage', async (req: any, res: any) => {
   const actorRole = (req as any).userRole;
@@ -253,7 +506,7 @@ projectsRoutes.patch('/:id/stage', async (req: any, res: any) => {
 
   const { id } = req.params;
   const targetStage = req.body?.stageId || req.body?.stage;
-  const { lossReason, cancellationReason, reopenReason, notes } = req.body || {};
+  const { lossReason, cancellationReason, reopenReason, closeReason, confirmClose, notes } = req.body || {};
 
   if (!targetStage) {
     return res.status(400).json({ error: 'Stage ID is required', code: 'MISSING_STAGE_ID' });
@@ -263,8 +516,73 @@ projectsRoutes.patch('/:id/stage', async (req: any, res: any) => {
   try {
     await conn.beginTransaction();
 
+    const result = await executeProjectStageTransition({
+      conn,
+      projectId: id,
+      targetTenant,
+      actorUserId,
+      actorIp: req.ip,
+      actorUserAgent: req.get('User-Agent'),
+      targetStage,
+      lossReason,
+      cancellationReason,
+      reopenReason,
+      closeReason,
+      confirmClose: Boolean(confirmClose),
+      notes
+    });
+
+    await conn.commit();
+
+    res.json({
+      success: true,
+      id,
+      stageId: result.stageId,
+      stageCode: result.stageCode,
+      stageName: result.stageName,
+      currentStage: result.stageCode
+    });
+  } catch (err: any) {
+    await conn.rollback();
+    if (err instanceof StageTransitionError) {
+      return res.status(err.statusCode).json({
+        success: false,
+        code: err.code,
+        error: err.message,
+        ...(err.data || {})
+      });
+    }
+    console.error(`PATCH /api/projects/${id}/stage error:`, err);
+    res.status(500).json({ error: err.message || 'Internal Server Error' });
+  } finally {
+    conn.release();
+  }
+});
+
+// POST /api/projects/:id/advance-stage - Canonical forward-only stage advancement
+projectsRoutes.post('/:id/advance-stage', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { id } = req.params;
+  const { confirmClose, closeReason, notes } = req.body || {};
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // 1. Fetch current project & stage FOR UPDATE
     const [pRows]: any = await conn.query(`
-      SELECT p.*, ps.phase as fromPhase, ps.commercialOutcome as fromOutcome, ps.isTerminal as fromIsTerminal, ps.name as fromStageName
+      SELECT p.*, ps.id as fromStageId, ps.code as fromStageCode, ps.name as fromStageName,
+             ps.phase as fromPhase, ps.commercialOutcome as fromOutcome,
+             ps.isTerminal as fromIsTerminal, ps.displayOrder as fromDisplayOrder
       FROM projects p
       LEFT JOIN project_stages ps ON ps.id = p.stageId
       WHERE p.id = ? AND p.tenantId = ? FOR UPDATE
@@ -274,130 +592,91 @@ projectsRoutes.patch('/:id/stage', async (req: any, res: any) => {
       await conn.rollback();
       return res.status(404).json({ error: 'Project not found' });
     }
+
     const currentProject = pRows[0];
+    const currentIsTerminal = isStageTerminal({
+      isTerminal: currentProject.fromIsTerminal,
+      phase: currentProject.fromPhase,
+      commercialOutcome: currentProject.fromOutcome
+    });
 
-    // Strictly validate and resolve target stage against MySQL project_stages
-    const [sRows]: any = await conn.query(
-      'SELECT id, code, name, phase, commercialOutcome, isActive, isTerminal, probability FROM project_stages WHERE id = ? OR code = ? LIMIT 1',
-      [targetStage, targetStage]
-    );
-
-    if (sRows.length === 0) {
+    if (currentIsTerminal) {
       await conn.rollback();
-      return res.status(400).json({ error: `Invalid project stage: ${targetStage}`, code: 'INVALID_STAGE' });
+      return res.status(400).json({
+        success: false,
+        code: 'PROJECT_IN_TERMINAL_STAGE',
+        error: 'Project is already in a terminal stage and cannot be advanced forward.'
+      });
     }
 
-    if (!sRows[0].isActive) {
+    // 2. Resolve candidate next stage dynamically via DB metadata
+    const candidateNextStage = await resolveNextForwardStage(conn, currentProject.fromDisplayOrder || 0);
+    if (!candidateNextStage) {
       await conn.rollback();
-      return res.status(400).json({ error: 'Target stage is inactive and cannot accept project transitions', code: 'INACTIVE_STAGE' });
+      return res.status(400).json({
+        success: false,
+        code: 'NO_FURTHER_FORWARD_STAGE',
+        error: 'Project is already at the final canonical lifecycle stage.'
+      });
     }
 
-    const resolvedStageId = sRows[0].id;
-    const resolvedStageCode = sRows[0].code;
-    const resolvedStageName = sRows[0].name;
-    const targetOutcome = sRows[0].commercialOutcome;
-    const targetIsTerminal = sRows[0].isTerminal === 1;
-    const fromIsTerminal = currentProject.fromIsTerminal === 1;
+    // 3. Execute shared stage transition (enforces confirmClose, closeReason, etc.)
+    const transitionResult = await executeProjectStageTransition({
+      conn,
+      projectId: id,
+      targetTenant,
+      actorUserId,
+      actorIp: req.ip,
+      actorUserAgent: req.get('User-Agent'),
+      targetStage: candidateNextStage.id,
+      confirmClose: Boolean(confirmClose),
+      closeReason,
+      notes
+    });
 
-    // MANDATORY EXECUTION GATE 2: LOST IS PRE-WIN COMMERCIAL FAILURE ONLY
-    if (targetOutcome === 'LOST') {
-      if (currentProject.commercialWonAt !== null) {
-        await conn.rollback();
-        return res.status(400).json({
-          error: 'A project that has already been commercially won cannot be marked as LOST. Use CANCELLED instead.',
-          code: 'PROJECT_ALREADY_WON_CANNOT_BE_LOST'
-        });
-      }
-      if (currentProject.fromPhase && currentProject.fromPhase !== 'SALES') {
-        await conn.rollback();
-        return res.status(400).json({
-          error: 'LOST stage is only applicable to projects within the pre-win SALES lifecycle.',
-          code: 'PROJECT_ALREADY_WON_CANNOT_BE_LOST'
-        });
-      }
-      if (!lossReason || !String(lossReason).trim()) {
-        await conn.rollback();
-        return res.status(400).json({
-          error: 'A business loss reason is mandatory to mark a project as LOST.',
-          code: 'LOSS_REASON_REQUIRED'
-        });
-      }
+    // 4. Resolve post-transition next stage dynamically
+    let postCanAdvance = false;
+    let postNextStage: any = null;
+    const postIsTerminal = isStageTerminal({
+      isTerminal: transitionResult.toStage.isTerminal,
+      phase: transitionResult.toStage.phase,
+      commercialOutcome: transitionResult.toStage.commercialOutcome
+    });
+
+    if (!postIsTerminal) {
+      postNextStage = await resolveNextForwardStage(conn, transitionResult.toStage.displayOrder);
+      postCanAdvance = Boolean(postNextStage);
     }
-
-    // Cancellation Reason Check
-    if (targetOutcome === 'CANCELLED') {
-      const cReason = cancellationReason || lossReason || notes;
-      if (!cReason || !String(cReason).trim()) {
-        await conn.rollback();
-        return res.status(400).json({
-          error: 'A cancellation reason is mandatory to cancel a project.',
-          code: 'CANCELLATION_REASON_REQUIRED'
-        });
-      }
-    }
-
-    // Reopen Check: from terminal to non-terminal
-    const isReopen = fromIsTerminal && !targetIsTerminal;
-    if (isReopen) {
-      if (!reopenReason || !String(reopenReason).trim()) {
-        await conn.rollback();
-        return res.status(400).json({
-          error: 'An explicit business reason is required to reopen a project from a terminal stage.',
-          code: 'REOPEN_REASON_REQUIRED'
-        });
-      }
-    }
-
-    // Atomic Commercial Won Milestone Recognition: stamp NOW() only if commercialWonAt is NULL
-    if (targetOutcome === 'WON' && !currentProject.commercialWonAt) {
-      await conn.query(
-        'UPDATE projects SET stageId = ?, commercialWonAt = NOW() WHERE id = ? AND tenantId = ?',
-        [resolvedStageId, id, targetTenant]
-      );
-    } else {
-      await conn.query(
-        'UPDATE projects SET stageId = ? WHERE id = ? AND tenantId = ?',
-        [resolvedStageId, id, targetTenant]
-      );
-    }
-
-    // Record stage transition history
-    const historyId = 'PSH-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex');
-    const stageNotes = lossReason 
-      ? `Loss Reason: ${lossReason}${notes ? ' | ' + notes : ''}`
-      : (cancellationReason ? `Cancellation Reason: ${cancellationReason}${notes ? ' | ' + notes : ''}` 
-        : (reopenReason ? `Reopen Reason: ${reopenReason}${notes ? ' | ' + notes : ''}` : (notes || null)));
-
-    await conn.query(`
-      INSERT INTO project_stage_histories (id, projectId, fromStageId, toStageId, changedById, changedAt, notes)
-      VALUES (?, ?, ?, ?, ?, NOW(), ?)
-    `, [historyId, id, currentProject.stageId, resolvedStageId, actorUserId, stageNotes]);
 
     await conn.commit();
 
-    await logAudit(
-      targetTenant,
-      actorUserId,
-      'PROJECT_STAGE_CHANGED',
-      'Project',
-      id,
-      `Project '${currentProject.title}' transitioned to stage '${resolvedStageName}' (${resolvedStageCode})`,
-      req.ip,
-      req.get('User-Agent'),
-      'CRM'
-    );
+    const resultProject = {
+      ...transitionResult.project,
+      canAdvance: postCanAdvance,
+      nextStage: postNextStage
+    };
 
     res.json({
       success: true,
-      id,
-      stageId: resolvedStageId,
-      stageCode: resolvedStageCode,
-      stageName: resolvedStageName,
-      currentStage: resolvedStageCode
+      project: resultProject,
+      transition: {
+        fromStage: transitionResult.fromStage,
+        toStage: transitionResult.toStage
+      },
+      canAdvance: postCanAdvance,
+      nextStage: postNextStage
     });
   } catch (err: any) {
     await conn.rollback();
-    console.error(`PATCH /api/projects/${id}/stage error:`, err);
+    if (err instanceof StageTransitionError) {
+      return res.status(err.statusCode).json({
+        success: false,
+        code: err.code,
+        error: err.message,
+        ...(err.data || {})
+      });
+    }
+    console.error(`POST /api/projects/${id}/advance-stage error:`, err);
     res.status(500).json({ error: err.message || 'Internal Server Error' });
   } finally {
     conn.release();
@@ -431,6 +710,7 @@ projectsRoutes.get('/:id', async (req: any, res: any) => {
         ps.commercialOutcome as stageCommercialOutcome,
         ps.isActive as stageIsActive,
         ps.isTerminal as stageIsTerminal,
+        ps.displayOrder as stageDisplayOrder,
         ps.allowVisits as stageAllowVisits,
         ps.allowNewProject as stageAllowNewProject,
         COALESCE(p.probability, ps.probability, 0) as effectiveProbability
@@ -445,7 +725,20 @@ projectsRoutes.get('/:id', async (req: any, res: any) => {
       return res.status(404).json({ error: 'Project not found' });
     }
 
-    res.json(rows[0]);
+    const proj = rows[0];
+    let canAdvance = false;
+    let nextStage: any = null;
+
+    if (!isStageTerminal({ isTerminal: proj.stageIsTerminal, phase: proj.stagePhase, commercialOutcome: proj.stageCommercialOutcome })) {
+      nextStage = await resolveNextForwardStage(pool, proj.stageDisplayOrder || 0);
+      canAdvance = Boolean(nextStage);
+    }
+
+    res.json({
+      ...proj,
+      canAdvance,
+      nextStage
+    });
   } catch (err: any) {
     console.error(`GET /api/projects/${id} error:`, err);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -934,6 +1227,7 @@ projectsRoutes.get('/:id/summary', async (req: any, res: any) => {
         ps.commercialOutcome as stageCommercialOutcome,
         ps.isActive as stageIsActive,
         ps.isTerminal as stageIsTerminal,
+        ps.displayOrder as stageDisplayOrder,
         ps.allowVisits as stageAllowVisits,
         ps.allowNewProject as stageAllowNewProject,
         COALESCE(p.probability, ps.probability, 0) as effectiveProbability
@@ -948,6 +1242,14 @@ projectsRoutes.get('/:id/summary', async (req: any, res: any) => {
       return res.status(404).json({ error: 'Project not found' });
     }
     const project = projRows[0];
+
+    let canAdvance = false;
+    let nextStage: any = null;
+
+    if (!isStageTerminal({ isTerminal: project.stageIsTerminal, phase: project.stagePhase, commercialOutcome: project.stageCommercialOutcome })) {
+      nextStage = await resolveNextForwardStage(pool, project.stageDisplayOrder || 0);
+      canAdvance = Boolean(nextStage);
+    }
 
     // Tasks related to project (both PROJECT_ASSIGNMENT and VISIT_ASSIGNMENT under this project)
     const [taskRows]: any = await pool.query(`
@@ -1042,7 +1344,11 @@ projectsRoutes.get('/:id/summary', async (req: any, res: any) => {
     `, [targetTenant, id]);
 
     res.json({
-      project,
+      project: {
+        ...project,
+        canAdvance,
+        nextStage
+      },
       tasks: taskRows,
       visits: visitRows,
       followups: followupRows

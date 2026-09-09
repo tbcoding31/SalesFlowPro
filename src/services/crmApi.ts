@@ -664,6 +664,34 @@ export const crmApi = {
     }
   },
 
+  advanceProjectStage: async (
+    projectId: string,
+    options?: { confirmClose?: boolean; closeReason?: string; notes?: string }
+  ): Promise<{ success: boolean; project?: any; transition?: any; canAdvance?: boolean; nextStage?: any; error?: string; code?: string; requiresConfirmation?: boolean }> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${projectId}/advance-stage`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(options || {})
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return {
+          success: false,
+          error: data.error || 'Failed to advance stage',
+          code: data.code,
+          requiresConfirmation: data.requiresConfirmation,
+          nextStage: data.nextStage
+        };
+      }
+      return data;
+    } catch (err: any) {
+      console.error('[crmApi.advanceProjectStage error]', err);
+      return { success: false, error: err.message || 'Network error' };
+    }
+  },
+
+
   // Specialized Reports Fetchers
   fetchSalesReport: async (tenantId?: string): Promise<any> => {
     try {
