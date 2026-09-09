@@ -1,5 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams, Link, useSearchParams } from 'react-router-dom';
+import {
+  resolveProjectNavigation,
+  getProjectEditReturnUrl,
+  getProjectDetailBackUrl,
+  buildProjectDetailUrl
+} from '../../utils/projectNavigation';
 import { useAuth } from '../../context/AuthContext';
 import { Customer, User, Project } from '../../types';
 import { crmApi } from '../../services/crmApi';
@@ -19,6 +25,10 @@ export const EditProjectPage: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const [searchParams] = useSearchParams();
+  const navContext = resolveProjectNavigation(searchParams);
+  const returnUrl = id ? getProjectEditReturnUrl(id, navContext) : '/projects?view=list';
 
   // Form State
   const [title, setTitle] = useState<string>('');
@@ -141,7 +151,7 @@ export const EditProjectPage: React.FC = () => {
 
       setToastMessage('Project updated successfully!');
       setTimeout(() => {
-        navigate(`/projects/${id}`);
+        navigate(returnUrl);
       }, 500);
     } catch (err: any) {
       console.error('[EditProjectPage save error]', err);
@@ -171,7 +181,7 @@ export const EditProjectPage: React.FC = () => {
         <h2 className="text-lg font-bold text-slate-900 font-['Hanken_Grotesk']">Cannot Edit Project</h2>
         <p className="text-xs text-slate-600">{errorMessage}</p>
         <button
-          onClick={() => navigate('/projects')}
+          onClick={() => navigate(returnUrl)}
           className="px-4 py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700"
         >
           Back to Projects
@@ -192,21 +202,35 @@ export const EditProjectPage: React.FC = () => {
 
       {/* Breadcrumb Navigation */}
       <div className="flex items-center gap-2 text-xs text-slate-500 font-medium">
-        <Link to="/projects" className="hover:text-indigo-600 transition-colors">
+        <Link to={getProjectDetailBackUrl(navContext.from)} className="hover:text-indigo-600 transition-colors">
           Projects
         </Link>
         <span>/</span>
-        <Link to={`/projects/${id}`} className="hover:text-indigo-600 transition-colors truncate max-w-xs">
-          {project?.title || project?.name || id}
-        </Link>
-        <span>/</span>
-        <span className="text-slate-800 font-bold">Edit</span>
+        {navContext.entry === 'detail' ? (
+          <>
+            <Link to={buildProjectDetailUrl(id!, { from: navContext.from })} className="hover:text-indigo-600 transition-colors truncate max-w-xs">
+              {project?.title || project?.name || id}
+            </Link>
+            <span>/</span>
+            <span className="text-slate-800 font-bold">Edit</span>
+          </>
+        ) : (
+          <span className="text-slate-800 font-bold">Edit Project</span>
+        )}
       </div>
 
       {/* Header with Title & Action Controls */}
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black text-slate-900 font-['Hanken_Grotesk'] tracking-tight flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => navigate(returnUrl)}
+              className="p-1 text-slate-400 hover:text-indigo-600 rounded-lg transition-colors cursor-pointer mr-0.5"
+              title="Back"
+            >
+              <span className="material-symbols-outlined text-[22px]">arrow_back</span>
+            </button>
             <span className="material-symbols-outlined text-indigo-600 text-[26px]">edit_note</span>
             Edit Project
           </h1>
@@ -218,7 +242,7 @@ export const EditProjectPage: React.FC = () => {
         <div className="flex items-center gap-2 w-full md:w-auto">
           <button
             type="button"
-            onClick={() => navigate(`/projects/${id}`)}
+            onClick={() => navigate(returnUrl)}
             className="flex-1 md:flex-none px-4 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
           >
             Cancel
@@ -402,7 +426,7 @@ export const EditProjectPage: React.FC = () => {
         <div className="flex items-center justify-end gap-3 pt-2">
           <button
             type="button"
-            onClick={() => navigate(`/projects/${id}`)}
+            onClick={() => navigate(returnUrl)}
             className="px-5 py-2.5 text-xs font-bold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 hover:bg-slate-50 rounded-xl transition-colors"
           >
             Cancel

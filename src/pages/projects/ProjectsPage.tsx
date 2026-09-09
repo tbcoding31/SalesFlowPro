@@ -1,5 +1,11 @@
-import React, { useState, useMemo, DragEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useMemo, useRef, useEffect, useLayoutEffect, DragEvent } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { createPortal } from 'react-dom';
+import {
+  resolveProjectNavigation,
+  buildProjectDetailUrl,
+  buildProjectEditUrl,
+} from '../../utils/projectNavigation';
 import { useAuth } from '../../context/AuthContext';
 import { masterDataApi } from '../../services/masterDataApi';
 import { Project, ProjectStage, ActivityType, Customer, FollowUpType, MasterDataItem } from '../../types';
@@ -17,9 +23,12 @@ export const ProjectsPage: React.FC = () => {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [totalItems, setTotalItems] = React.useState(0);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navContext = resolveProjectNavigation(searchParams);
+  const viewMode: ViewMode = navContext.view === 'pipeline' ? 'PIPELINE' : 'LIST';
+
   const [pageSize, setPageSize] = React.useState(10);
   const [searchQuery, setSearchQuery] = React.useState('');
-  const [viewMode, setViewMode] = useState<ViewMode>('LIST');
   const [draggedOppId, setDraggedOppId] = useState<string | null>(null);
 
   
@@ -73,24 +82,113 @@ export const ProjectsPage: React.FC = () => {
   const [followUpDate, setFollowUpDate] = useState(new Date().toISOString().split('T')[0]);
   const [followUpNotes, setFollowUpNotes] = useState('');
 
-  // Action Menu and Change Stage Modal State
-  const [activeActionMenuId, setActiveActionMenuId] = useState<string | null>(null);
+  // Action Menu Portal State
+  const [activeMenuProject, setActiveMenuProject] = useState<Project | null>(null);
+  const [activeMenuTriggerEl, setActiveMenuTriggerEl] = useState<HTMLElement | null>(null);
+  const [menuCoords, setMenuCoords] = useState<{ top: number; left: number; transformOrigin: string } | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const tableScrollRef = useRef<HTMLDivElement | null>(null);
+
+  // Change Stage Modal State
   const [stageModalOpp, setStageModalOpp] = useState<Project | null>(null);
   const [selectedTargetStageId, setSelectedTargetStageId] = useState<string>('');
   const [transitionLossReason, setTransitionLossReason] = useState<string>('');
   const [transitionReopenReason, setTransitionReopenReason] = useState<string>('');
   const [isTransitioning, setIsTransitioning] = useState<boolean>(false);
 
-  React.useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('[data-action-menu]')) {
-        setActiveActionMenuId(null);
+  const handleCloseMenu = () => {
+    setActiveMenuProject(null);
+    setActiveMenuTriggerEl(null);
+    setMenuCoords(null);
+  };
+
+  const handleViewChange = (mode: ViewMode) => {
+    handleCloseMenu();
+    const next = new URLSearchParams(searchParams);
+    next.set('view', mode === 'PIPELINE' ? 'pipeline' : 'list');
+    setSearchParams(next, { replace: true });
+  };
+
+  useLayoutEffect(() => {
+    if (!activeMenuProject || !activeMenuTriggerEl || !menuRef.current) return;
+
+    const triggerRect = activeMenuTriggerEl.getBoundingClientRect();
+    const menuEl = menuRef.current;
+    const menuRect = menuEl.getBoundingClientRect();
+    const menuHeight = menuRect.height;
+    const menuWidth = menuRect.width;
+
+    const spaceBelow = window.innerHeight - triggerRect.bottom;
+    const spaceAbove = triggerRect.top;
+
+    let top: number;
+    let transformOrigin: string;
+
+    // Vertical collision flip using actual measured height
+    if (spaceBelow < menuHeight + 10 && spaceAbove > menuHeight + 10) {
+      top = triggerRect.top + window.scrollY - menuHeight - 4;
+      transformOrigin = 'bottom right';
+    } else {
+      top = triggerRect.bottom + window.scrollY + 4;
+      transformOrigin = 'top right';
+    }
+
+    // Align right edge of menu with right edge of trigger button
+    let left = triggerRect.right + window.scrollX - menuWidth;
+    // Horizontal viewport clamping
+    const minLeft = window.scrollX + 8;
+    const maxLeft = window.scrollX + window.innerWidth - menuWidth - 8;
+    left = Math.max(minLeft, Math.min(left, maxLeft));
+
+    setMenuCoords({ top, left, transformOrigin });
+  }, [activeMenuProject, activeMenuTriggerEl]);
+
+  useEffect(() => {
+    if (!activeMenuProject) return;
+
+    const handlePointerDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (
+        menuRef.current &&
+        !menuRef.current.contains(target) &&
+        activeMenuTriggerEl &&
+        !activeMenuTriggerEl.contains(target)
+      ) {
+        handleCloseMenu();
       }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        handleCloseMenu();
+        activeMenuTriggerEl?.focus();
+      }
+    };
+
+    const handleScrollOrResize = () => {
+      handleCloseMenu();
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('resize', handleScrollOrResize);
+    window.addEventListener('scroll', handleScrollOrResize, true);
+
+    const tableEl = tableScrollRef.current;
+    if (tableEl) {
+      tableEl.addEventListener('scroll', handleScrollOrResize);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('resize', handleScrollOrResize);
+      window.removeEventListener('scroll', handleScrollOrResize, true);
+      if (tableEl) {
+        tableEl.removeEventListener('scroll', handleScrollOrResize);
+      }
+    };
+  }, [activeMenuProject, activeMenuTriggerEl]);
 
   const [pipelineSummary, setPipelineSummary] = useState<any>(null);
   const [pipelineStages, setPipelineStages] = useState<any[]>([]);
@@ -412,14 +510,14 @@ export const ProjectsPage: React.FC = () => {
         <div className="flex items-center gap-3">
           <div className="bg-slate-100 p-1 rounded-xl flex items-center border border-slate-200">
             <button 
-              onClick={() => setViewMode('LIST')}
+              onClick={() => handleViewChange('LIST')}
               className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 ${viewMode === 'LIST' ? 'bg-white text-[#1a1c1c] shadow-sm' : 'text-slate-500 hover:text-[#1a1c1c]'}`}
             >
               <span className="material-symbols-outlined text-[16px]">list</span>
               List
             </button>
             <button 
-              onClick={() => setViewMode('PIPELINE')}
+              onClick={() => handleViewChange('PIPELINE')}
               className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 ${viewMode === 'PIPELINE' ? 'bg-white text-[#1a1c1c] shadow-sm' : 'text-slate-500 hover:text-[#1a1c1c]'}`}
             >
               <span className="material-symbols-outlined text-[16px]">view_kanban</span>
@@ -527,7 +625,7 @@ export const ProjectsPage: React.FC = () => {
                               {opp.customerName || 'Customer'}
                             </div>
                             <h4 
-                              onClick={() => navigate(`/projects/${opp.id}`)}
+                              onClick={() => navigate(buildProjectDetailUrl(opp.id, { from: 'pipeline' }))}
                               className="text-sm font-bold text-[#1a1c1c] leading-tight hover:text-indigo-600 transition-colors cursor-pointer"
                             >
                               {opp.title || opp.name || opp.id}
@@ -594,7 +692,7 @@ export const ProjectsPage: React.FC = () => {
                               {opp.customerName || 'Customer'}
                             </div>
                             <h4 
-                              onClick={() => navigate(`/projects/${opp.id}`)}
+                              onClick={() => navigate(buildProjectDetailUrl(opp.id, { from: 'pipeline' }))}
                               className="text-sm font-bold text-[#1a1c1c] leading-tight hover:text-indigo-600 transition-colors cursor-pointer"
                             >
                               {opp.title || opp.name || opp.id}
@@ -727,7 +825,7 @@ export const ProjectsPage: React.FC = () => {
           )}
 
           {/* Table */}
-          <div className="overflow-x-auto">
+          <div ref={tableScrollRef} className="overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[800px]">
               <thead>
                 <tr className="bg-slate-50 border-b border-[#E1E1E1]">
@@ -770,7 +868,7 @@ export const ProjectsPage: React.FC = () => {
                       </td>
                       <td className="px-5 py-4">
                         <div 
-                          onClick={() => navigate(`/projects/${opp.id}`)}
+                          onClick={() => navigate(buildProjectDetailUrl(opp.id, { from: 'list' }))}
                           className="font-bold text-[#1a1c1c] text-sm leading-tight group-hover:text-indigo-600 transition-colors cursor-pointer hover:underline"
                         >
                           {opp.title || opp.name || opp.id}
@@ -818,62 +916,28 @@ export const ProjectsPage: React.FC = () => {
                         </div>
                       </td>
                       <td className="px-5 py-4 text-right">
-                        <div className="relative inline-flex items-center justify-end" data-action-menu>
+                        <div className="inline-flex items-center justify-end">
                           <button 
+                            type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              setActiveActionMenuId(activeActionMenuId === opp.id ? null : opp.id);
+                              if (activeMenuProject?.id === opp.id) {
+                                handleCloseMenu();
+                              } else {
+                                setActiveMenuProject(opp);
+                                setActiveMenuTriggerEl(e.currentTarget);
+                              }
                             }}
                             className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                              activeActionMenuId === opp.id ? 'bg-indigo-50 text-indigo-600 ring-2 ring-indigo-500/20' : 'text-slate-400 hover:text-indigo-600 hover:bg-indigo-50'
+                              activeMenuProject?.id === opp.id ? 'bg-indigo-50 text-indigo-600 ring-2 ring-indigo-500/20' : 'text-slate-400 hover:text-indigo-600 hover:bg-indigo-50'
                             }`}
                             title="Actions"
+                            aria-haspopup="menu"
+                            aria-expanded={activeMenuProject?.id === opp.id}
+                            aria-label={`Actions for ${opp.title || opp.name || opp.id}`}
                           >
                             <span className="material-symbols-outlined text-[18px]">more_vert</span>
                           </button>
-
-                          {activeActionMenuId === opp.id && (
-                            <div className="absolute right-0 top-full mt-1 w-40 bg-white border border-slate-200 rounded-xl shadow-xl z-30 py-1.5 text-left animate-fade-in">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setActiveActionMenuId(null);
-                                  navigate(`/projects/${opp.id}`);
-                                }}
-                                className="w-full px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors"
-                              >
-                                <span className="material-symbols-outlined text-[16px] text-slate-400">visibility</span>
-                                View Details
-                              </button>
-
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setActiveActionMenuId(null);
-                                  navigate(`/projects/${opp.id}/edit`);
-                                }}
-                                className="w-full px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors"
-                              >
-                                <span className="material-symbols-outlined text-[16px] text-slate-400">edit</span>
-                                Edit Project
-                              </button>
-
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setActiveActionMenuId(null);
-                                  setStageModalOpp(opp);
-                                  setSelectedTargetStageId(opp.stageId || '');
-                                  setTransitionLossReason('');
-                                  setTransitionReopenReason('');
-                                }}
-                                className="w-full px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors"
-                              >
-                                <span className="material-symbols-outlined text-[16px] text-indigo-500">swap_horiz</span>
-                                Change Stage
-                              </button>
-                            </div>
-                          )}
                         </div>
                       </td>
                     </tr>
@@ -992,6 +1056,74 @@ export const ProjectsPage: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Action Menu Portal */}
+      {activeMenuProject && createPortal(
+        <div
+          ref={menuRef}
+          role="menu"
+          aria-orientation="vertical"
+          tabIndex={-1}
+          style={{
+            position: 'absolute',
+            top: menuCoords ? `${menuCoords.top}px` : '-9999px',
+            left: menuCoords ? `${menuCoords.left}px` : '-9999px',
+            transformOrigin: menuCoords?.transformOrigin || 'top right',
+            visibility: menuCoords ? 'visible' : 'hidden',
+          }}
+          className="w-40 bg-white border border-slate-200 rounded-xl shadow-xl z-50 py-1.5 text-left animate-fade-in"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            tabIndex={0}
+            onClick={() => {
+              const proj = activeMenuProject;
+              handleCloseMenu();
+              navigate(buildProjectDetailUrl(proj.id, { from: 'list' }));
+            }}
+            className="w-full px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors"
+          >
+            <span className="material-symbols-outlined text-[16px] text-slate-400">visibility</span>
+            View Details
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            tabIndex={0}
+            onClick={() => {
+              const proj = activeMenuProject;
+              handleCloseMenu();
+              navigate(buildProjectEditUrl(proj.id, { entry: 'list', from: 'list' }));
+            }}
+            className="w-full px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors"
+          >
+            <span className="material-symbols-outlined text-[16px] text-slate-400">edit</span>
+            Edit Project
+          </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            tabIndex={0}
+            onClick={() => {
+              const proj = activeMenuProject;
+              handleCloseMenu();
+              setStageModalOpp(proj);
+              setSelectedTargetStageId(proj.stageId || '');
+              setTransitionLossReason('');
+              setTransitionReopenReason('');
+            }}
+            className="w-full px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors"
+          >
+            <span className="material-symbols-outlined text-[16px] text-indigo-500">swap_horiz</span>
+            Change Stage
+          </button>
+        </div>,
+        document.body
       )}
 
       {/* Change Stage Modal */}

@@ -1,5 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import {
+  resolveProjectNavigation,
+  buildProjectEditUrl,
+  getProjectDetailBackUrl
+} from '../../utils/projectNavigation';
 import { useAuth } from '../../context/AuthContext';
 import { Project, Customer, Task, Visit, FollowUp, Activity, ProjectStage, MasterDataItem } from '../../types';
 import { crmApi } from '../../services/crmApi';
@@ -9,6 +14,8 @@ export const ProjectDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { currentTenant, currentUser } = useAuth();
+  const [searchParams] = useSearchParams();
+  const navContext = resolveProjectNavigation(searchParams);
   const tenantId = currentTenant?.id ;
 
   const [project, setProject] = useState<Project | null>(null);
@@ -208,7 +215,7 @@ const loadData = async () => {
       
       {/* Top Navigation */}
       <div className="flex items-center gap-2 text-sm text-slate-500">
-        <button onClick={() => navigate('/projects')} className="hover:text-indigo-600 transition-colors flex items-center gap-1">
+        <button onClick={() => navigate(getProjectDetailBackUrl(navContext.from))} className="hover:text-indigo-600 transition-colors flex items-center gap-1">
           <span className="material-symbols-outlined text-[18px]">arrow_back</span>
           Back to Projects
         </button>
@@ -414,7 +421,10 @@ const loadData = async () => {
 
         <div className="bg-slate-50 border-t md:border-t-0 md:border-l border-slate-200 p-6 flex flex-row md:flex-col items-center justify-center gap-3 shrink-0">
           <button 
-            onClick={() => navigate(`/projects/${project.id}/edit`)}
+            onClick={() => {
+              // navigate(`/projects/${project.id}/edit`) with navigation context
+              navigate(buildProjectEditUrl(project.id, { entry: 'detail', from: navContext.from }));
+            }}
             className="flex-1 w-full px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded-xl shadow-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
           >
             <span className="material-symbols-outlined text-[18px]">edit</span>
