@@ -143,7 +143,7 @@ visitsRoutes.get('/', async (req: any, res: any) => {
       LEFT JOIN users u ON u.id = v.picId
       LEFT JOIN customers c ON c.id = v.customerId
       LEFT JOIN projects p ON p.id = v.relatedProjectId AND p.tenantId = v.tenantId
-      LEFT JOIN project_stages ps ON (ps.id = p.stageId OR ps.code = p.stageId)
+      LEFT JOIN project_stages ps ON ps.id = p.stageId
       ${where.replace(/WHERE tenantId/g, 'WHERE v.tenantId')}
       ${extraWhere}
       ORDER BY v.visitDate DESC, v.createdAt DESC
@@ -211,7 +211,7 @@ visitsRoutes.get('/:id', async (req: any, res: any) => {
       LEFT JOIN users u ON u.id = v.picId
       LEFT JOIN customers c ON c.id = v.customerId
       LEFT JOIN projects p ON p.id = v.relatedProjectId AND p.tenantId = v.tenantId
-      LEFT JOIN project_stages ps ON (ps.id = p.stageId OR ps.code = p.stageId)
+      LEFT JOIN project_stages ps ON ps.id = p.stageId
       WHERE v.id = ? AND v.tenantId = ?
     `, [id, targetTenant]);
 
@@ -311,9 +311,12 @@ visitsRoutes.post('/', async (req: any, res: any) => {
   const projCandidate = relatedProjectId !== undefined ? relatedProjectId : data.projectId;
   if (projCandidate !== undefined && projCandidate !== null && String(projCandidate).trim() !== '' && String(projCandidate).trim().toLowerCase() !== 'null') {
     const pId = String(projCandidate).trim();
-    // Validate project existence
+    // Validate project existence and active open stage
     const [pAllRows]: any = await pool.query(
-      'SELECT id, tenantId, customerId, stageId FROM projects WHERE id = ?',
+      `SELECT p.id, p.tenantId, p.customerId, p.stageId, ps.lifecycleCategory, ps.isActive
+       FROM projects p
+       LEFT JOIN project_stages ps ON ps.id = p.stageId
+       WHERE p.id = ?`,
       [pId]
     );
     if (pAllRows.length === 0) {
@@ -326,15 +329,9 @@ visitsRoutes.post('/', async (req: any, res: any) => {
     if (candidateProj.customerId !== customer.id) {
       return res.status(400).json({ error: 'Project does not belong to the selected customer', code: 'PROJECT_CUSTOMER_MISMATCH' });
     }
-    // Validate active status for new selection
-    const [psRows]: any = await pool.query(
-      'SELECT ps.code FROM projects p LEFT JOIN project_stages ps ON (ps.id = p.stageId OR ps.code = p.stageId) WHERE p.id = ?',
-      [pId]
-    );
-    const stageCode = psRows[0]?.code || candidateProj.stageId || '';
-    const inactiveStages = ['PS-5', 'WON', 'COMPLETED', 'CLOSED_WON', 'LOST', 'CANCELLED', 'CLOSED_LOST', 'ARCHIVED'];
-    if (inactiveStages.includes(candidateProj.stageId) || inactiveStages.includes(stageCode)) {
-      return res.status(400).json({ error: 'Completed or cancelled project cannot be assigned to a new visit', code: 'PROJECT_NOT_ACTIVE' });
+    // Fail-closed check: project must be assigned to an active OPEN stage
+    if (!candidateProj.stageId || !candidateProj.isActive || candidateProj.lifecycleCategory !== 'OPEN') {
+      return res.status(400).json({ error: 'Completed, lost, inactive, or unassigned project cannot be assigned to a new visit', code: 'PROJECT_NOT_ACTIVE' });
     }
     resolvedProjectId = candidateProj.id;
   }
@@ -514,7 +511,10 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
       } else {
         const pId = String(projCandidate).trim();
         const [pAllRows]: any = await pool.query(
-          'SELECT id, tenantId, customerId, stageId FROM projects WHERE id = ?',
+          `SELECT p.id, p.tenantId, p.customerId, p.stageId, ps.lifecycleCategory, ps.isActive
+           FROM projects p
+           LEFT JOIN project_stages ps ON ps.id = p.stageId
+           WHERE p.id = ?`,
           [pId]
         );
         if (pAllRows.length === 0) {
@@ -527,16 +527,10 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
         if (candidateProj.customerId !== customerId) {
           return res.status(400).json({ error: 'Project does not belong to the selected customer', code: 'PROJECT_CUSTOMER_MISMATCH' });
         }
-        // If changing to a DIFFERENT project than the current historical link, enforce ACTIVE
+        // If changing to a DIFFERENT project than the current historical link, enforce active open stage
         if (pId !== current.relatedProjectId) {
-          const [psRows]: any = await pool.query(
-            'SELECT ps.code FROM projects p LEFT JOIN project_stages ps ON (ps.id = p.stageId OR ps.code = p.stageId) WHERE p.id = ?',
-            [pId]
-          );
-          const stageCode = psRows[0]?.code || candidateProj.stageId || '';
-          const inactiveStages = ['PS-5', 'WON', 'COMPLETED', 'CLOSED_WON', 'LOST', 'CANCELLED', 'CLOSED_LOST', 'ARCHIVED'];
-          if (inactiveStages.includes(candidateProj.stageId) || inactiveStages.includes(stageCode)) {
-            return res.status(400).json({ error: 'Completed or cancelled project cannot be newly assigned to a visit', code: 'PROJECT_NOT_ACTIVE' });
+          if (!candidateProj.stageId || !candidateProj.isActive || candidateProj.lifecycleCategory !== 'OPEN') {
+            return res.status(400).json({ error: 'Completed, lost, inactive, or unassigned project cannot be newly assigned to a visit', code: 'PROJECT_NOT_ACTIVE' });
           }
         }
         resolvedProjectId = candidateProj.id;

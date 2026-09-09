@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { Project, Customer, Task, Visit, FollowUp, Activity, ProjectStage } from '../../types';
+import { Project, Customer, Task, Visit, FollowUp, Activity, ProjectStage, MasterDataItem } from '../../types';
 import { crmApi } from '../../services/crmApi';
+import { masterDataApi } from '../../services/masterDataApi';
 
 export const ProjectDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -78,11 +79,41 @@ const loadData = async () => {
     }
   };
 
+  const [dbStages, setDbStages] = useState<MasterDataItem[]>([]);
+  useEffect(() => {
+    masterDataApi.fetchMasterData('project_stages', tenantId).then(data => {
+      setDbStages(data.filter(d => d.isActive !== false));
+    });
+  }, [tenantId]);
+
+  const pipelineStages = useMemo(() => {
+    if (dbStages.length > 0) {
+      return dbStages.map(s => ({
+        key: s.id,
+        code: s.codeValue,
+        label: s.label,
+        lifecycleCategory: s.lifecycleCategory || 'OPEN'
+      }));
+    }
+    return [
+      { key: 'PS-1', code: 'LEAD', label: 'Leads', lifecycleCategory: 'OPEN' },
+      { key: 'PS-2', code: 'QUALIFICATION', label: 'Discuss/Follow up', lifecycleCategory: 'OPEN' },
+      { key: 'PS-3', code: 'PROPOSAL', label: 'Proposal Sent', lifecycleCategory: 'OPEN' },
+      { key: 'PS-4', code: 'NEGOTIATION', label: 'Negotiation', lifecycleCategory: 'OPEN' },
+      { key: 'PS-5', code: 'WON', label: 'Won / Deal', lifecycleCategory: 'WON' },
+    ];
+  }, [dbStages]);
+
   const handleStageChange = async (targetStage: string, isReopen = false) => {
     if (!project) return;
     
+    const targetObj = pipelineStages.find(s => s.key === targetStage || s.code === targetStage);
+    const targetStageId = targetObj ? targetObj.key : targetStage;
+    const toCategory = targetObj?.lifecycleCategory || (targetStage === 'LOST' ? 'LOST' : 'OPEN');
+    const isTargetLost = toCategory === 'LOST';
+
     let reasonInput: string | undefined = undefined;
-    if (targetStage === 'LOST') {
+    if (isTargetLost) {
       const promptRes = prompt('Please enter a business reason for marking this project as LOST:');
       if (!promptRes || !promptRes.trim()) {
         alert('A business loss reason is required to mark the project as LOST.');
@@ -98,11 +129,11 @@ const loadData = async () => {
       reasonInput = promptRes.trim();
     }
 
-    const res = await crmApi.transitionProjectStage(project.id, targetStage, {
-      lossReason: targetStage === 'LOST' ? reasonInput : undefined,
+    const res = await crmApi.transitionProjectStage(project.id, targetStageId, {
+      lossReason: isTargetLost ? reasonInput : undefined,
       reopenReason: isReopen ? reasonInput : undefined,
       isReopen,
-      expectedFromStage: project.stage
+      expectedFromStage: project.stageCode || project.stage || project.stageId
     });
 
     if (res.success) {
@@ -152,16 +183,8 @@ const loadData = async () => {
     }).format(val);
   };
 
-  const pipelineStages: { key: ProjectStage; label: string }[] = [
-    { key: 'LEAD', label: 'Leads' },
-    { key: 'QUALIFICATION', label: 'Discuss/Follow up' },
-    { key: 'PROPOSAL', label: 'Proposal Sent' },
-    { key: 'NEGOTIATION', label: 'Negotiation' },
-    { key: 'WON', label: 'Won / Deal' },
-  ];
-
-  const currentStageIndex = pipelineStages.findIndex(s => s.key === project.stage);
-  const isLost = project.stage === 'LOST';
+  const currentStageIndex = pipelineStages.findIndex(s => s.key === project.stageId || s.code === (project.stageCode || project.stage));
+  const isLost = (project as any).stageLifecycleCategory === 'LOST' || (project.stageCode || project.stage) === 'LOST';
 
   const comments = activities.filter(a => a.subject === 'Comment');
   const historyActivities = activities.filter(a => a.subject !== 'Comment');
@@ -430,7 +453,11 @@ const loadData = async () => {
               </div>
             </div>
             <button
-              onClick={() => handleStageChange('NEGOTIATION', true)}
+              onClick={() => {
+                const openStages = pipelineStages.filter(s => s.lifecycleCategory === 'OPEN');
+                const lastOpen = openStages[openStages.length - 1];
+                handleStageChange(lastOpen ? lastOpen.key : 'PS-4', true);
+              }}
               className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-sm transition-colors flex items-center gap-1.5"
             >
               <span className="material-symbols-outlined text-base">restart_alt</span>

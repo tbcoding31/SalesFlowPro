@@ -47,6 +47,10 @@ export const ProjectsPage: React.FC = () => {
         ]);
         setProjects(pListRes.data as any);
         setPipelineAggregates(pListRes.aggregates || {});
+        setPipelineSummary(pListRes.summary || null);
+        if (pListRes.stages && pListRes.stages.length > 0) {
+          setPipelineStages(pListRes.stages);
+        }
         setCustomers(cList as any);
       }
     } catch (err: any) {
@@ -69,9 +73,24 @@ export const ProjectsPage: React.FC = () => {
   const [followUpDate, setFollowUpDate] = useState(new Date().toISOString().split('T')[0]);
   const [followUpNotes, setFollowUpNotes] = useState('');
 
+  const [pipelineSummary, setPipelineSummary] = useState<any>(null);
+  const [pipelineStages, setPipelineStages] = useState<any[]>([]);
   const [projectStages, setProjectStages] = useState<MasterDataItem[]>([]);
   React.useEffect(() => {
-    masterDataApi.fetchMasterData('project_stages', tenantId).then(setProjectStages);
+    masterDataApi.fetchMasterData('project_stages', tenantId).then(data => {
+      setProjectStages(data);
+      if (pipelineStages.length === 0 && data.length > 0) {
+        setPipelineStages(data.map(d => ({
+          id: d.id,
+          code: d.codeValue,
+          name: d.label,
+          displayOrder: d.displayOrder,
+          probability: d.probability,
+          lifecycleCategory: d.lifecycleCategory || 'OPEN',
+          isActive: d.isActive !== false
+        })));
+      }
+    });
   }, [tenantId]);
 
   // Filters for List View
@@ -84,41 +103,69 @@ export const ProjectsPage: React.FC = () => {
   const itemsPerPage = 10;
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  const stages: { key: ProjectStage; label: string; color: string }[] = [
-    { key: 'LEAD', label: 'Leads', color: 'border-slate-300' },
-    { key: 'QUALIFICATION', label: 'Discuss/Follow up', color: 'border-blue-300' },
-    { key: 'PROPOSAL', label: 'Proposal Sent', color: 'border-indigo-300' },
-    { key: 'NEGOTIATION', label: 'Negotiation', color: 'border-amber-300' },
-    { key: 'WON', label: 'Won / Deal', color: 'border-emerald-300' },
-  ];
+  const getStageColor = (category?: string, idx: number = 0) => {
+    if (category === 'WON') return 'border-emerald-400';
+    if (category === 'LOST') return 'border-rose-400';
+    const borderColors = ['border-slate-300', 'border-blue-300', 'border-indigo-300', 'border-amber-300', 'border-purple-300', 'border-teal-300'];
+    return borderColors[idx % borderColors.length];
+  };
 
-  // Summaries
-  const openStageKeys = useMemo(() => new Set(['LEAD', 'QUALIFICATION', 'PROPOSAL', 'NEGOTIATION', 'PS-1', 'PS-2', 'PS-3', 'PS-4']), []);
+  const stagesToRender = useMemo(() => {
+    if (pipelineStages && pipelineStages.length > 0) {
+      return pipelineStages.map((s, idx) => ({
+        key: s.id,
+        code: s.code,
+        label: s.name,
+        color: getStageColor(s.lifecycleCategory, idx),
+        lifecycleCategory: s.lifecycleCategory,
+        isActive: s.isActive !== false,
+        probability: s.probability
+      }));
+    }
+    if (projectStages && projectStages.length > 0) {
+      return projectStages.map((s, idx) => ({
+        key: s.id,
+        code: s.codeValue,
+        label: s.label,
+        color: getStageColor(s.lifecycleCategory, idx),
+        lifecycleCategory: s.lifecycleCategory,
+        isActive: s.isActive !== false,
+        probability: s.probability
+      }));
+    }
+    return [
+      { key: 'PS-1', code: 'LEAD', label: 'Leads', color: 'border-slate-300', lifecycleCategory: 'OPEN', isActive: true, probability: 20 },
+      { key: 'PS-2', code: 'QUALIFICATION', label: 'Discuss/Follow up', color: 'border-blue-300', lifecycleCategory: 'OPEN', isActive: true, probability: 40 },
+      { key: 'PS-3', code: 'PROPOSAL', label: 'Proposal Sent', color: 'border-indigo-300', lifecycleCategory: 'OPEN', isActive: true, probability: 60 },
+      { key: 'PS-4', code: 'NEGOTIATION', label: 'Negotiation', color: 'border-amber-300', lifecycleCategory: 'OPEN', isActive: true, probability: 80 },
+      { key: 'PS-5', code: 'WON', label: 'Won / Deal', color: 'border-emerald-300', lifecycleCategory: 'WON', isActive: true, probability: 100 },
+    ];
+  }, [pipelineStages, projectStages]);
 
   const totalPipeline = useMemo(() => {
+    if (pipelineSummary?.totalPipeline !== undefined) return pipelineSummary.totalPipeline;
     return projects
-      .filter(o => openStageKeys.has((o.stageCode || o.stage || o.stageId || '').toUpperCase()))
+      .filter(o => (o as any).stageLifecycleCategory === 'OPEN' || ['LEAD', 'QUALIFICATION', 'PROPOSAL', 'NEGOTIATION', 'PS-1', 'PS-2', 'PS-3', 'PS-4'].includes((o.stageCode || o.stage || o.stageId || '').toUpperCase()))
       .reduce((acc, curr) => acc + (Number(curr.value ?? curr.estimatedValue) || 0), 0);
-  }, [projects, openStageKeys]);
+  }, [projects, pipelineSummary]);
 
   const weightedPipeline = useMemo(() => {
+    if (pipelineSummary?.weightedPipeline !== undefined) return pipelineSummary.weightedPipeline;
     return projects
-      .filter(o => openStageKeys.has((o.stageCode || o.stage || o.stageId || '').toUpperCase()))
+      .filter(o => (o as any).stageLifecycleCategory === 'OPEN' || ['LEAD', 'QUALIFICATION', 'PROPOSAL', 'NEGOTIATION', 'PS-1', 'PS-2', 'PS-3', 'PS-4'].includes((o.stageCode || o.stage || o.stageId || '').toUpperCase()))
       .reduce((acc, curr) => {
         const val = Number(curr.value ?? curr.estimatedValue) || 0;
         const prob = Number((curr as any).effectiveProbability ?? curr.probability ?? 0);
         return acc + ((val * prob) / 100);
       }, 0);
-  }, [projects, openStageKeys]);
+  }, [projects, pipelineSummary]);
 
   const totalWon = useMemo(() => {
+    if (pipelineSummary?.totalWon !== undefined) return pipelineSummary.totalWon;
     return projects
-      .filter(o => {
-        const s = (o.stageCode || o.stage || o.stageId || '').toUpperCase();
-        return s === 'WON' || s === 'PS-5';
-      })
+      .filter(o => (o as any).stageLifecycleCategory === 'WON' || (o.stageCode || o.stage || o.stageId || '').toUpperCase() === 'WON' || o.stageId === 'PS-5')
       .reduce((acc, curr) => acc + (Number(curr.value ?? curr.estimatedValue) || 0), 0);
-  }, [projects]);
+  }, [projects, pipelineSummary]);
 
   const formatMoney = (val: number) => {
     return new Intl.NumberFormat('id-ID', {
@@ -177,11 +224,20 @@ export const ProjectsPage: React.FC = () => {
     executeMove(opp, targetStage);
   };
 
-  const executeMove = async (opp: Project, targetStage: ProjectStage) => {
+  const executeMove = async (opp: Project, targetStage: string) => {
     let reasonInput: string | undefined = undefined;
-    const isReopen = (opp.stage === 'WON' || opp.stage === 'LOST') && (targetStage !== 'WON' && targetStage !== 'LOST');
-    
-    if (targetStage === 'LOST') {
+    const targetObj = stagesToRender.find(s => s.key === targetStage || s.code === targetStage);
+    if (targetObj && !targetObj.isActive) {
+      alert('Cannot transition to an inactive project stage.');
+      return;
+    }
+
+    const fromCategory = (opp as any).stageLifecycleCategory || (['WON', 'PS-5'].includes((opp.stageCode || opp.stage || '').toUpperCase()) ? 'WON' : (opp.stageCode || opp.stage || '').toUpperCase() === 'LOST' ? 'LOST' : 'OPEN');
+    const toCategory = targetObj?.lifecycleCategory || (targetStage === 'WON' || targetStage === 'PS-5' ? 'WON' : targetStage === 'LOST' ? 'LOST' : 'OPEN');
+    const isReopen = (fromCategory === 'WON' || fromCategory === 'LOST') && toCategory === 'OPEN';
+    const isLost = toCategory === 'LOST';
+
+    if (isLost) {
       const promptRes = prompt('Please enter a business reason for marking this project as LOST:');
       if (!promptRes || !promptRes.trim()) {
         alert('A business loss reason is required to mark the project as LOST.');
@@ -197,11 +253,12 @@ export const ProjectsPage: React.FC = () => {
       reasonInput = promptRes.trim();
     }
 
-    const res = await crmApi.transitionProjectStage(opp.id, targetStage, {
-      lossReason: targetStage === 'LOST' ? reasonInput : undefined,
+    const targetStageId = targetObj ? targetObj.key : targetStage;
+    const res = await crmApi.transitionProjectStage(opp.id, targetStageId, {
+      lossReason: isLost ? reasonInput : undefined,
       reopenReason: isReopen ? reasonInput : undefined,
       isReopen,
-      expectedFromStage: opp.stage
+      expectedFromStage: opp.stageCode || opp.stage || opp.stageId
     });
 
     if (res.success) {
@@ -233,7 +290,7 @@ export const ProjectsPage: React.FC = () => {
       createdAt: new Date().toISOString().split('T')[0],
     });
 
-    executeMove(pendingFollowUpOpp, 'QUALIFICATION');
+    executeMove(pendingFollowUpOpp, 'PS-2');
     setShowFollowUpModal(false);
     setPendingFollowUpOpp(null);
   };
@@ -249,16 +306,16 @@ export const ProjectsPage: React.FC = () => {
           return false;
         }
       }
-      const pStage = (opp.stageCode || opp.stage || opp.stageId || '').toUpperCase();
+      const pStageId = opp.stageId;
+      const pStageCode = (opp.stageCode || opp.stage || '').toUpperCase();
       if (stageFilter !== 'ALL') {
-        const filterUpper = stageFilter.toUpperCase();
-        const stageMatch = pStage === filterUpper || 
-          (filterUpper === 'LEAD' && pStage === 'PS-1') ||
-          (filterUpper === 'QUALIFICATION' && pStage === 'PS-2') ||
-          (filterUpper === 'PROPOSAL' && pStage === 'PS-3') ||
-          (filterUpper === 'NEGOTIATION' && pStage === 'PS-4') ||
-          (filterUpper === 'WON' && pStage === 'PS-5');
-        if (!stageMatch) return false;
+        if (stageFilter === '_UNASSIGNED') {
+          if (pStageId) return false;
+        } else {
+          const filterUpper = stageFilter.toUpperCase();
+          const stageMatch = pStageId === stageFilter || pStageCode === filterUpper;
+          if (!stageMatch) return false;
+        }
       }
       if (customerFilter !== 'ALL' && opp.customerId !== customerFilter) return false;
       return true;
@@ -283,7 +340,21 @@ export const ProjectsPage: React.FC = () => {
     setSelectedIds(newSet);
   };
 
-  const getStageBadge = (stage: string) => {
+  const getStageBadge = (stage: string, opp?: any) => {
+    if (!stage && !opp?.stageId) {
+      return <span className="px-2 py-0.5 bg-slate-100 text-slate-500 text-[10px] font-bold rounded uppercase tracking-wider border border-slate-200">Unassigned</span>;
+    }
+    const stageName = opp?.stageName;
+    const lifecycleCategory = opp?.stageLifecycleCategory;
+    if (stageName) {
+      if (lifecycleCategory === 'WON') {
+        return <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded uppercase tracking-wider border border-emerald-200">{stageName}</span>;
+      }
+      if (lifecycleCategory === 'LOST') {
+        return <span className="px-2 py-0.5 bg-rose-100 text-rose-700 text-[10px] font-bold rounded uppercase tracking-wider border border-rose-200">{stageName}</span>;
+      }
+      return <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold rounded uppercase tracking-wider border border-blue-200">{stageName}</span>;
+    }
     const s = (stage || '').toUpperCase();
     if (s === 'LEAD' || s === 'PS-1') {
       return <span className="px-2 py-0.5 bg-slate-100 text-slate-700 text-[10px] font-bold rounded uppercase tracking-wider border border-slate-200">Leads</span>;
@@ -303,7 +374,7 @@ export const ProjectsPage: React.FC = () => {
     if (s === 'LOST') {
       return <span className="px-2 py-0.5 bg-rose-100 text-rose-700 text-[10px] font-bold rounded uppercase tracking-wider border border-rose-200">Lost</span>;
     }
-    return <span className="px-2 py-0.5 bg-slate-100 text-slate-600 text-[10px] font-bold rounded uppercase tracking-wider border border-slate-200">{stage || 'Unknown'}</span>;
+    return <span className="px-2 py-0.5 bg-slate-100 text-slate-600 text-[10px] font-bold rounded uppercase tracking-wider border border-slate-200">{stage || 'Unassigned'}</span>;
   };
 
   return (
@@ -396,29 +467,88 @@ export const ProjectsPage: React.FC = () => {
         /* Kanban Board */
         <div className="flex-1 overflow-hidden flex flex-col">
           <div className="flex gap-4 overflow-x-auto overflow-y-hidden pb-4 h-full snap-x">
-            {stages.map((stage) => {
-              const stageOpps = projects.filter(o => {
-                const s = (o.stageCode || o.stage || o.stageId || '').toUpperCase();
-                return s === stage.key || 
-                  (stage.key === 'LEAD' && s === 'PS-1') || 
-                  (stage.key === 'QUALIFICATION' && s === 'PS-2') || 
-                  (stage.key === 'PROPOSAL' && s === 'PS-3') || 
-                  (stage.key === 'NEGOTIATION' && s === 'PS-4') || 
-                  (stage.key === 'WON' && s === 'PS-5');
-              });
+            {/* Unassigned Projects Column */}
+            {(() => {
+              const unassignedOpps = projects.filter(o => !o.stageId);
+              if (unassignedOpps.length === 0) return null;
+              const unassignedValue = unassignedOpps.reduce((acc, curr) => acc + (Number(curr.value ?? curr.estimatedValue) || 0), 0);
+              return (
+                <div
+                  key="_UNASSIGNED"
+                  className="flex-shrink-0 w-[300px] flex flex-col bg-amber-50/20 rounded-2xl border border-dashed border-amber-300 overflow-hidden snap-center"
+                >
+                  <div className="p-4 bg-white border-b-2 border-amber-300">
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-sm font-extrabold text-amber-800 uppercase tracking-wider flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-amber-500 text-sm">warning</span>
+                        Stage Not Assigned
+                      </h3>
+                      <span className="px-2 py-0.5 bg-amber-100 text-amber-800 text-[10px] font-bold rounded-full">
+                        {unassignedOpps.length}
+                      </span>
+                    </div>
+                    <div className="text-xs font-bold text-slate-400">
+                      {formatSummary(unassignedValue)}
+                    </div>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto p-3 space-y-3">
+                    {unassignedOpps.map(opp => (
+                      <div
+                        key={opp.id}
+                        id={`opp-card-${opp.id}`}
+                        draggable
+                        onDragStart={(e) => handleDragStart(e, opp.id)}
+                        onDragEnd={(e) => handleDragEnd(e, opp.id)}
+                        className="bg-white p-4 rounded-xl border border-amber-200 shadow-sm hover:shadow-md hover:border-amber-400 transition-all cursor-grab active:cursor-grabbing group"
+                      >
+                        <div className="flex flex-col gap-3">
+                          <div>
+                            <div className="text-[10px] font-bold text-amber-600 uppercase tracking-wider mb-1 truncate">
+                              {opp.customerName || 'Customer'}
+                            </div>
+                            <h4 
+                              onClick={() => navigate(`/projects/${opp.id}`)}
+                              className="text-sm font-bold text-[#1a1c1c] leading-tight hover:text-indigo-600 transition-colors cursor-pointer"
+                            >
+                              {opp.title || opp.name || opp.id}
+                            </h4>
+                          </div>
+                          <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
+                            <span className="font-extrabold text-[#008f53]">
+                              {formatMoney(Number(opp.value ?? opp.estimatedValue) || 0)}
+                            </span>
+                            <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                              Drag to Assign
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {stagesToRender.map((stage) => {
+              const stageOpps = projects.filter(o => o.stageId === stage.key || (o.stageCode && o.stageCode === stage.code));
               const stageValue = stageOpps.reduce((acc, curr) => acc + (Number(curr.value ?? curr.estimatedValue) || 0), 0);
+              const isInactive = !stage.isActive;
 
               return (
                 <div 
                   key={stage.key}
-                  className="flex-shrink-0 w-[300px] flex flex-col bg-slate-50/50 rounded-2xl border border-[#E1E1E1] overflow-hidden snap-center"
-                  onDragOver={handleDragOver}
-                  onDrop={(e) => handleDrop(e, stage.key)}
+                  className={`flex-shrink-0 w-[300px] flex flex-col ${isInactive ? 'bg-slate-100/70 opacity-75' : 'bg-slate-50/50'} rounded-2xl border border-[#E1E1E1] overflow-hidden snap-center`}
+                  onDragOver={isInactive ? undefined : handleDragOver}
+                  onDrop={isInactive ? undefined : ((e) => handleDrop(e, stage.key))}
                 >
                   <div className={`p-4 bg-white border-b-2 ${stage.color}`}>
                     <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-sm font-extrabold text-[#1a1c1c] uppercase tracking-wider">
+                      <h3 className="text-sm font-extrabold text-[#1a1c1c] uppercase tracking-wider flex items-center gap-1.5">
                         {stage.label}
+                        {isInactive && (
+                          <span className="px-1.5 py-0.2 bg-slate-200 text-slate-600 text-[9px] font-bold rounded">Inactive</span>
+                        )}
                       </h3>
                       <span className="px-2 py-0.5 bg-slate-100 text-slate-600 text-[10px] font-bold rounded-full">
                         {stageOpps.length}
@@ -515,9 +645,10 @@ export const ProjectsPage: React.FC = () => {
                   className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm text-slate-700 focus:outline-none focus:border-indigo-500 min-w-[130px]"
                 >
                   <option value="ALL">All Stages</option>
-                  {projectStages.map(s => (
-                    <option key={s.id} value={s.code_value}>{s.label}</option>
+                  {stagesToRender.map(s => (
+                    <option key={s.key} value={s.key}>{s.label}</option>
                   ))}
+                  <option value="_UNASSIGNED">Stage Not Assigned</option>
                 </select>
                 <select 
                   value={customerFilter}

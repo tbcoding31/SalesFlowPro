@@ -697,6 +697,10 @@ export interface MasterDataItem {
   isDefault: boolean;
   is_default?: boolean;
   displayOrder: number;
+  probability?: number;
+  lifecycleCategory?: 'OPEN' | 'WON' | 'LOST';
+  isActive?: boolean;
+  isTerminal?: boolean;
 }
 
 export interface NotificationItem {

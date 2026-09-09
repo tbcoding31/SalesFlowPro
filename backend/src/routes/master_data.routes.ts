@@ -79,8 +79,25 @@ masterDataRoutes.post('/platform/:category', async (req: any, res: any) => {
       query = `INSERT INTO ${category} (id, code, name, color) VALUES (?, ?, ?, ?)`;
       params = [data.id, data.code, data.name, data.color];
     } else if (category === 'project_stages') {
-      query = 'INSERT INTO project_stages (id, code, name, displayOrder, probability) VALUES (?, ?, ?, ?, ?)';
-      params = [data.id, data.code, data.name, data.displayOrder, data.probability];
+      const code = String(data.code || '').trim().toUpperCase();
+      if (!code) {
+        return res.status(400).json({ error: 'Stage code is required and cannot be empty' });
+      }
+      const [dup]: any = await pool.query('SELECT id FROM project_stages WHERE code = ?', [code]);
+      if (dup.length > 0) {
+        return res.status(409).json({ error: `Stage code '${code}' already exists` });
+      }
+      const lifecycleCategory = String(data.lifecycleCategory || 'OPEN').toUpperCase();
+      if (!['OPEN', 'WON', 'LOST'].includes(lifecycleCategory)) {
+        return res.status(400).json({ error: 'Invalid lifecycleCategory. Must be OPEN, WON, or LOST' });
+      }
+      const probability = data.probability !== undefined ? Math.max(0, Math.min(100, Number(data.probability) || 0)) : 0;
+      const displayOrder = Number(data.displayOrder) || 0;
+      const isActive = data.isActive !== undefined ? (data.isActive ? 1 : 0) : 1;
+      const name = String(data.name || data.label || code).trim();
+
+      query = 'INSERT INTO project_stages (id, code, name, displayOrder, probability, lifecycleCategory, isActive) VALUES (?, ?, ?, ?, ?, ?, ?)';
+      params = [data.id, code, name, displayOrder, probability, lifecycleCategory, isActive];
     } else {
       query = `INSERT INTO ${category} (id, code, name) VALUES (?, ?, ?)`;
       params = [data.id, data.code, data.name];
@@ -125,8 +142,36 @@ masterDataRoutes.put('/platform/:category/:id', async (req: any, res: any) => {
       query = `UPDATE ${category} SET code = ?, name = ?, color = ? WHERE id = ?`;
       params = [data.code, data.name, data.color, id];
     } else if (category === 'project_stages') {
-      query = 'UPDATE project_stages SET code = ?, name = ?, displayOrder = ?, probability = ? WHERE id = ?';
-      params = [data.code, data.name, data.displayOrder, data.probability, id];
+      const [existing]: any = await pool.query('SELECT * FROM project_stages WHERE id = ?', [id]);
+      if (existing.length === 0) {
+        return res.status(404).json({ error: 'Project stage not found' });
+      }
+      const current = existing[0];
+      let code = current.code;
+      if (data.code !== undefined) {
+        code = String(data.code).trim().toUpperCase();
+        if (!code) {
+          return res.status(400).json({ error: 'Stage code cannot be empty' });
+        }
+        const [dup]: any = await pool.query('SELECT id FROM project_stages WHERE code = ? AND id != ?', [code, id]);
+        if (dup.length > 0) {
+          return res.status(409).json({ error: `Stage code '${code}' already exists` });
+        }
+      }
+      let lifecycleCategory = current.lifecycleCategory;
+      if (data.lifecycleCategory !== undefined) {
+        lifecycleCategory = String(data.lifecycleCategory).toUpperCase();
+        if (!['OPEN', 'WON', 'LOST'].includes(lifecycleCategory)) {
+          return res.status(400).json({ error: 'Invalid lifecycleCategory. Must be OPEN, WON, or LOST' });
+        }
+      }
+      const probability = data.probability !== undefined ? Math.max(0, Math.min(100, Number(data.probability) || 0)) : current.probability;
+      const displayOrder = data.displayOrder !== undefined ? Number(data.displayOrder) : current.displayOrder;
+      const isActive = data.isActive !== undefined ? (data.isActive ? 1 : 0) : current.isActive;
+      const name = data.name !== undefined ? String(data.name).trim() : current.name;
+
+      query = 'UPDATE project_stages SET code = ?, name = ?, displayOrder = ?, probability = ?, lifecycleCategory = ?, isActive = ? WHERE id = ?';
+      params = [code, name, displayOrder, probability, lifecycleCategory, isActive, id];
     } else {
       query = `UPDATE ${category} SET code = ?, name = ? WHERE id = ?`;
       params = [data.code, data.name, id];
@@ -154,6 +199,25 @@ masterDataRoutes.delete('/platform/:category/:id', async (req: any, res: any) =>
   const id = req.params.id;
 
   try {
+    if (category === 'project_stages') {
+      const [projRows]: any = await pool.query('SELECT COUNT(*) as projectCount FROM projects WHERE stageId = ?', [id]);
+      if (projRows[0]?.projectCount > 0) {
+        return res.status(409).json({
+          error: 'Cannot delete project stage because it is currently assigned to existing projects.',
+          code: 'STAGE_IN_USE',
+          projectCount: projRows[0].projectCount
+        });
+      }
+      const [histRows]: any = await pool.query('SELECT COUNT(*) as historyCount FROM project_stage_histories WHERE fromStageId = ? OR toStageId = ?', [id, id]);
+      if (histRows[0]?.historyCount > 0) {
+        return res.status(409).json({
+          error: 'Cannot delete project stage because it is referenced in project transition history.',
+          code: 'STAGE_IN_USE',
+          historyCount: histRows[0].historyCount
+        });
+      }
+    }
+
     let query = `DELETE FROM ${category} WHERE id = ?`;
     if (category === 'departments' || category === 'positions') {
       query += ' AND tenantId IS NULL';

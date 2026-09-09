@@ -21,6 +21,9 @@ export const MasterDataPage: React.FC = () => {
   const [codeValue, setCodeValue] = useState('');
   const [indicator, setIndicator] = useState('flag');
   const [isDefault, setIsDefault] = useState(false);
+  const [probability, setProbability] = useState<number>(50);
+  const [lifecycleCategory, setLifecycleCategory] = useState<'OPEN' | 'WON' | 'LOST'>('OPEN');
+  const [isActive, setIsActive] = useState<boolean>(true);
 
   const categories: { id: MasterDataItem['category']; name: string; icon: string }[] = [
     { id: 'task_types', name: 'Task Types', icon: 'label' },
@@ -55,6 +58,9 @@ export const MasterDataPage: React.FC = () => {
     setCodeValue('');
     setIndicator('flag');
     setIsDefault(false);
+    setProbability(50);
+    setLifecycleCategory('OPEN');
+    setIsActive(true);
     setShowModal(true);
   };
 
@@ -64,6 +70,9 @@ export const MasterDataPage: React.FC = () => {
     setCodeValue(item.codeValue);
     setIndicator(item.indicator || '');
     setIsDefault(!!item.isDefault);
+    setProbability(item.probability !== undefined ? item.probability : 50);
+    setLifecycleCategory(item.lifecycleCategory || 'OPEN');
+    setIsActive(item.isActive !== false);
     setShowModal(true);
   };
 
@@ -71,13 +80,16 @@ export const MasterDataPage: React.FC = () => {
     e.preventDefault();
     const isNew = !editingItem;
     const itemToSave: MasterDataItem = {
-      id: editingItem ? editingItem.id : `MD-${Date.now().toString().slice(-4)}`,
+      id: editingItem ? editingItem.id : (selectedCategory === 'project_stages' ? `PS-${Date.now().toString().slice(-4)}` : `MD-${Date.now().toString().slice(-4)}`),
       category: selectedCategory,
       label,
       codeValue,
       indicator,
       isDefault,
       displayOrder: editingItem ? editingItem.displayOrder : items.length + 1,
+      probability: selectedCategory === 'project_stages' ? probability : undefined,
+      lifecycleCategory: selectedCategory === 'project_stages' ? lifecycleCategory : undefined,
+      isActive: selectedCategory === 'project_stages' ? isActive : undefined,
     };
 
     const success = await masterDataApi.saveMasterDataItem(itemToSave, effectiveTenantId, isNew);
@@ -180,15 +192,25 @@ export const MasterDataPage: React.FC = () => {
                   <th className="px-4 py-3 w-12 text-center">Order</th>
                   <th className="px-4 py-3">Label</th>
                   <th className="px-4 py-3">Code Value</th>
-                  <th className="px-4 py-3">Indicator Icon</th>
-                  <th className="px-4 py-3">Default</th>
+                  {selectedCategory === 'project_stages' ? (
+                    <>
+                      <th className="px-4 py-3">Lifecycle Category</th>
+                      <th className="px-4 py-3">Benchmark Prob</th>
+                      <th className="px-4 py-3">Status</th>
+                    </>
+                  ) : (
+                    <>
+                      <th className="px-4 py-3">Indicator Icon</th>
+                      <th className="px-4 py-3">Default</th>
+                    </>
+                  )}
                   <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E1E1E1]">
                 {items.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="text-center py-8 text-[#767587] text-xs">
+                    <td colSpan={selectedCategory === 'project_stages' ? 7 : 6} className="text-center py-8 text-[#767587] text-xs">
                       No master items defined in this category.
                     </td>
                   </tr>
@@ -203,23 +225,48 @@ export const MasterDataPage: React.FC = () => {
 
                       <td className="px-4 py-3 font-mono text-[#464555]">{item.codeValue}</td>
 
-                      <td className="px-4 py-3">
-                        {item.indicator && (
-                          <span className="material-symbols-outlined text-[18px] text-[#4744e5]">
-                            {item.indicator}
-                          </span>
-                        )}
-                      </td>
-
-                      <td className="px-4 py-3">
-                        {item.isDefault ? (
-                          <span className="px-2 py-0.5 bg-[#00C875]/10 text-[#008f53] font-bold rounded text-[10px]">
-                            Default Option
-                          </span>
-                        ) : (
-                          <span className="text-[#767587] text-[11px]">-</span>
-                        )}
-                      </td>
+                      {selectedCategory === 'project_stages' ? (
+                        <>
+                          <td className="px-4 py-3">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              item.lifecycleCategory === 'WON' 
+                                ? 'bg-emerald-100 text-emerald-700' 
+                                : item.lifecycleCategory === 'LOST' 
+                                ? 'bg-rose-100 text-rose-700' 
+                                : 'bg-blue-100 text-blue-700'
+                            }`}>
+                              {item.lifecycleCategory || 'OPEN'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 font-semibold text-xs text-slate-700">
+                            {item.probability !== undefined ? `${item.probability}%` : '-'}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${item.isActive !== false ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>
+                              {item.isActive !== false ? 'Active' : 'Inactive'}
+                            </span>
+                          </td>
+                        </>
+                      ) : (
+                        <>
+                          <td className="px-4 py-3">
+                            {item.indicator && (
+                              <span className="material-symbols-outlined text-[18px] text-[#4744e5]">
+                                {item.indicator}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            {item.isDefault ? (
+                              <span className="px-2 py-0.5 bg-[#00C875]/10 text-[#008f53] font-bold rounded text-[10px]">
+                                Default Option
+                              </span>
+                            ) : (
+                              <span className="text-[#767587] text-[11px]">-</span>
+                            )}
+                          </td>
+                        </>
+                      )}
 
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1">
@@ -289,29 +336,73 @@ export const MasterDataPage: React.FC = () => {
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Icon Identifier</label>
-                <input
-                  type="text"
-                  value={indicator}
-                  onChange={(e) => setIndicator(e.target.value)}
-                  placeholder="e.g. flag, priority_high, star"
-                  className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded text-xs"
-                />
-              </div>
+              {selectedCategory === 'project_stages' ? (
+                <>
+                  <div>
+                    <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Lifecycle Category *</label>
+                    <select
+                      value={lifecycleCategory}
+                      onChange={(e) => setLifecycleCategory(e.target.value as 'OPEN' | 'WON' | 'LOST')}
+                      className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded text-xs bg-white"
+                    >
+                      <option value="OPEN">OPEN (Active Pipeline)</option>
+                      <option value="WON">WON (Closed Won)</option>
+                      <option value="LOST">LOST (Closed Lost)</option>
+                    </select>
+                  </div>
 
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="def"
-                  checked={isDefault}
-                  onChange={(e) => setIsDefault(e.target.checked)}
-                  className="w-4 h-4 rounded text-[#4744e5]"
-                />
-                <label htmlFor="def" className="text-xs text-[#1a1c1c] font-semibold">
-                  Set as Default Selection Option
-                </label>
-              </div>
+                  <div>
+                    <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Benchmark Probability (%)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={probability}
+                      onChange={(e) => setProbability(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
+                      className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded text-xs"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="act"
+                      checked={isActive}
+                      onChange={(e) => setIsActive(e.target.checked)}
+                      className="w-4 h-4 rounded text-[#4744e5]"
+                    />
+                    <label htmlFor="act" className="text-xs text-[#1a1c1c] font-semibold">
+                      Active Stage (Allows transitions into this stage)
+                    </label>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Icon Identifier</label>
+                    <input
+                      type="text"
+                      value={indicator}
+                      onChange={(e) => setIndicator(e.target.value)}
+                      placeholder="e.g. flag, priority_high, star"
+                      className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded text-xs"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="def"
+                      checked={isDefault}
+                      onChange={(e) => setIsDefault(e.target.checked)}
+                      className="w-4 h-4 rounded text-[#4744e5]"
+                    />
+                    <label htmlFor="def" className="text-xs text-[#1a1c1c] font-semibold">
+                      Set as Default Selection Option
+                    </label>
+                  </div>
+                </>
+              )}
 
               <div className="flex justify-end gap-2 pt-3 border-t border-[#E1E1E1]">
                 <button

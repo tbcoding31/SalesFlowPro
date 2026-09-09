@@ -17,6 +17,10 @@ const mapFromDb = (category: MasterDataItem['category'], row: any): MasterDataIt
     indicator: row.color || row.icon || '',
     isDefault: !!row.isDefault,
     displayOrder: row.displayOrder || row.level || 0,
+    probability: row.probability !== undefined ? Number(row.probability) : undefined,
+    lifecycleCategory: row.lifecycleCategory || undefined,
+    isActive: row.isActive !== undefined ? Boolean(row.isActive) : undefined,
+    isTerminal: row.isTerminal !== undefined ? Boolean(row.isTerminal) : undefined,
   };
 };
 
@@ -35,7 +39,13 @@ const mapToDb = (category: MasterDataItem['category'], item: MasterDataItem, ten
     case 'customer_status':
       return { ...base, color: item.indicator };
     case 'project_stages':
-      return { ...base, displayOrder: item.displayOrder, probability: 50 };
+      return {
+        ...base,
+        displayOrder: item.displayOrder,
+        probability: item.probability !== undefined ? item.probability : 50,
+        lifecycleCategory: item.lifecycleCategory || 'OPEN',
+        isActive: item.isActive !== undefined ? (item.isActive ? 1 : 0) : 1
+      };
     case 'departments':
       return { id: item.id, tenantId: tenantId === 'platform' ? null : tenantId, name: item.label, description: item.codeValue };
     case 'positions':

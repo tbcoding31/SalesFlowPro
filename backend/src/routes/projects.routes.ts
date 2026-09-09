@@ -37,17 +37,15 @@ projectsRoutes.get('/', async (req: any, res: any) => {
       extraParams.push(picId);
     }
     if (stageId && stageId !== 'ALL') {
-      extraWhere += ' AND (p.stageId = ? OR ps.code = ?)';
-      extraParams.push(stageId, stageId);
+      if (stageId === '_UNASSIGNED' || stageId === 'NULL') {
+        extraWhere += ' AND p.stageId IS NULL';
+      } else {
+        extraWhere += ' AND (p.stageId = ? OR ps.code = ?)';
+        extraParams.push(stageId, stageId);
+      }
     }
     if (statusScope === 'active' || status === 'active') {
-      extraWhere += ` AND (
-        p.stageId IS NULL 
-        OR (
-          p.stageId NOT IN ('PS-5', 'WON', 'COMPLETED', 'CLOSED_WON', 'LOST', 'CANCELLED', 'CLOSED_LOST', 'ARCHIVED')
-          AND (ps.code IS NULL OR ps.code NOT IN ('WON', 'COMPLETED', 'CLOSED_WON', 'LOST', 'CANCELLED', 'CLOSED_LOST', 'ARCHIVED'))
-        )
-      )`;
+      extraWhere += ` AND p.stageId IS NOT NULL AND ps.lifecycleCategory = 'OPEN' AND ps.isActive = 1`;
     }
     if (search && typeof search === 'string' && search.trim()) {
       extraWhere += ' AND (p.title LIKE ? OR p.description LIKE ?)';
@@ -65,7 +63,7 @@ projectsRoutes.get('/', async (req: any, res: any) => {
     const countSql = `
       SELECT COUNT(*) as total
       FROM projects p
-      LEFT JOIN project_stages ps ON (ps.id = p.stageId OR ps.code = p.stageId)
+      LEFT JOIN project_stages ps ON ps.id = p.stageId
       ${where.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
       ${extraWhere}
     `;
@@ -83,11 +81,14 @@ projectsRoutes.get('/', async (req: any, res: any) => {
         c.name as customerName, c.code as customerCode,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
         ps.name as stageName, ps.code as stageCode,
+        ps.lifecycleCategory as stageLifecycleCategory,
+        ps.isActive as stageIsActive,
+        ps.isTerminal as stageIsTerminal,
         COALESCE(p.probability, ps.probability, 0) as effectiveProbability
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
       LEFT JOIN users u ON u.id = p.picId
-      LEFT JOIN project_stages ps ON (ps.id = p.stageId OR ps.code = p.stageId)
+      LEFT JOIN project_stages ps ON ps.id = p.stageId
       ${where.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
       ${extraWhere}
       ORDER BY p.createdAt DESC
@@ -128,6 +129,13 @@ projectsRoutes.get('/pipeline', async (req: any, res: any) => {
   const { where, params } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'p.picId');
 
   try {
+    const [stageRows]: any = await pool.query(`
+      SELECT id, code, name, displayOrder, probability, lifecycleCategory, isActive, isTerminal
+      FROM project_stages
+      WHERE isActive = 1 OR id IN (SELECT DISTINCT stageId FROM projects WHERE tenantId = ? AND stageId IS NOT NULL)
+      ORDER BY displayOrder ASC, id ASC
+    `, [targetTenant]);
+
     const selectSql = `
       SELECT 
         p.*,
@@ -137,51 +145,73 @@ projectsRoutes.get('/pipeline', async (req: any, res: any) => {
         c.name as customerName, c.code as customerCode,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
         ps.name as stageName, ps.code as stageCode,
+        ps.lifecycleCategory as stageLifecycleCategory,
+        ps.isActive as stageIsActive,
+        ps.isTerminal as stageIsTerminal,
         COALESCE(p.probability, ps.probability, 0) as effectiveProbability
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
       LEFT JOIN users u ON u.id = p.picId
-      LEFT JOIN project_stages ps ON (ps.id = p.stageId OR ps.code = p.stageId)
+      LEFT JOIN project_stages ps ON ps.id = p.stageId
       ${where.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
       ORDER BY p.createdAt DESC
     `;
 
     const [rows]: any = await pool.query(selectSql, params);
 
-    const aggregates: Record<string, { count: number; value: number }> = {
-      LEAD: { count: 0, value: 0 },
-      QUALIFICATION: { count: 0, value: 0 },
-      PROPOSAL: { count: 0, value: 0 },
-      NEGOTIATION: { count: 0, value: 0 },
-      WON: { count: 0, value: 0 }
-    };
+    // Authoritative pipeline stage codes dynamically queried from project_stages:
+    // 'LEAD', 'QUALIFICATION', 'PROPOSAL', 'NEGOTIATION', 'WON'
+    const aggregates: Record<string, { count: number; value: number; stageId?: string; code?: string; name?: string }> = {};
+
+    stageRows.forEach((s: any) => {
+      aggregates[s.id] = { count: 0, value: 0, stageId: s.id, code: s.code, name: s.name };
+      aggregates[s.code] = aggregates[s.id];
+    });
 
     let totalPipeline = 0;
     let weightedPipeline = 0;
     let totalWon = 0;
+    let totalLost = 0;
+    let unassignedProjectCount = 0;
+    let unassignedProjectValue = 0;
 
-    const openStageCodes = new Set(['LEAD', 'QUALIFICATION', 'PROPOSAL', 'NEGOTIATION']);
+    const stageMap = new Map();
+    stageRows.forEach((s: any) => {
+      stageMap.set(s.id, s);
+      stageMap.set(s.code, s);
+    });
 
     rows.forEach((p: any) => {
-      const stageCode = (p.stageCode || p.stageId || '').toUpperCase();
       const val = Number(p.value) || 0;
       const prob = Number(p.effectiveProbability) || 0;
+      const stageKey = p.stageId;
 
-      if (aggregates[stageCode]) {
-        aggregates[stageCode].count++;
-        aggregates[stageCode].value += val;
+      if (!stageKey || !stageMap.has(stageKey)) {
+        unassignedProjectCount++;
+        unassignedProjectValue += val;
+        return;
       }
 
-      if (openStageCodes.has(stageCode)) {
+      const st = stageMap.get(stageKey);
+      const agg = aggregates[st.id];
+      if (agg) {
+        agg.count++;
+        agg.value += val;
+      }
+
+      if (st.lifecycleCategory === 'OPEN') {
         totalPipeline += val;
         weightedPipeline += (val * prob) / 100;
-      } else if (stageCode === 'WON' || p.stageId === 'PS-5') {
+      } else if (st.lifecycleCategory === 'WON') {
         totalWon += val;
+      } else if (st.lifecycleCategory === 'LOST') {
+        totalLost += val;
       }
     });
 
     res.json({
       success: true,
+      stages: stageRows,
       data: rows,
       aggregates,
       summary: {
@@ -189,7 +219,10 @@ projectsRoutes.get('/pipeline', async (req: any, res: any) => {
         totalPipelineValue: totalPipeline,
         weightedPipeline,
         totalWon,
-        totalProjects: rows.length
+        totalLost,
+        totalProjects: rows.length,
+        unassignedProjectCount,
+        unassignedProjectValue
       }
     });
   } catch (err: any) {
@@ -235,13 +268,18 @@ projectsRoutes.patch('/:id/stage', async (req: any, res: any) => {
 
     // Strictly validate and resolve target stage against MySQL project_stages
     const [sRows]: any = await conn.query(
-      'SELECT id, code, name FROM project_stages WHERE id = ? OR code = ? LIMIT 1',
+      'SELECT id, code, name, lifecycleCategory, isActive, probability FROM project_stages WHERE id = ? OR code = ? LIMIT 1',
       [targetStage, targetStage]
     );
 
     if (sRows.length === 0) {
       await conn.rollback();
       return res.status(400).json({ error: `Invalid project stage: ${targetStage}`, code: 'INVALID_STAGE' });
+    }
+
+    if (!sRows[0].isActive) {
+      await conn.rollback();
+      return res.status(400).json({ error: 'Target stage is inactive and cannot accept project transitions', code: 'INACTIVE_STAGE' });
     }
 
     const resolvedStageId = sRows[0].id;
@@ -253,6 +291,16 @@ projectsRoutes.patch('/:id/stage', async (req: any, res: any) => {
       [resolvedStageId, id, targetTenant]
     );
 
+    // Record stage transition history
+    const historyId = 'PSH-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex');
+    const stageNotes = lossReason 
+      ? `Loss Reason: ${lossReason}${notes ? ' | ' + notes : ''}`
+      : (reopenReason ? `Reopen Reason: ${reopenReason}${notes ? ' | ' + notes : ''}` : (notes || null));
+    await conn.query(`
+      INSERT INTO project_stage_histories (id, projectId, fromStageId, toStageId, changedById, changedAt, notes)
+      VALUES (?, ?, ?, ?, ?, NOW(), ?)
+    `, [historyId, id, currentProject.stageId, resolvedStageId, actorUserId, stageNotes]);
+
     await conn.commit();
 
     await logAudit(
@@ -261,7 +309,7 @@ projectsRoutes.patch('/:id/stage', async (req: any, res: any) => {
       'PROJECT_STAGE_CHANGED',
       'Project',
       id,
-      `Project '${currentProject.title}' transitioned to stage '${resolvedStageName}'`,
+      `Project '${currentProject.title}' transitioned to stage '${resolvedStageName}' (${resolvedStageCode})`,
       req.ip,
       req.get('User-Agent'),
       'CRM'
@@ -307,11 +355,14 @@ projectsRoutes.get('/:id', async (req: any, res: any) => {
         c.name as customerName, c.code as customerCode,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
         ps.name as stageName, ps.code as stageCode,
+        ps.lifecycleCategory as stageLifecycleCategory,
+        ps.isActive as stageIsActive,
+        ps.isTerminal as stageIsTerminal,
         COALESCE(p.probability, ps.probability, 0) as effectiveProbability
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
       LEFT JOIN users u ON u.id = p.picId
-      LEFT JOIN project_stages ps ON (ps.id = p.stageId OR ps.code = p.stageId)
+      LEFT JOIN project_stages ps ON ps.id = p.stageId
       WHERE p.id = ? AND p.tenantId = ?
     `, [id, targetTenant]);
 
@@ -349,11 +400,14 @@ projectsRoutes.get('/:id/summary', async (req: any, res: any) => {
         c.name as customerName, c.code as customerCode,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
         ps.name as stageName, ps.code as stageCode,
+        ps.lifecycleCategory as stageLifecycleCategory,
+        ps.isActive as stageIsActive,
+        ps.isTerminal as stageIsTerminal,
         COALESCE(p.probability, ps.probability, 0) as effectiveProbability
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
       LEFT JOIN users u ON u.id = p.picId
-      LEFT JOIN project_stages ps ON (ps.id = p.stageId OR ps.code = p.stageId)
+      LEFT JOIN project_stages ps ON ps.id = p.stageId
       WHERE p.id = ? AND p.tenantId = ?
     `, [id, targetTenant]);
 
@@ -611,9 +665,38 @@ projectsRoutes.post('/', async (req: any, res: any) => {
     : 'PRJ-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
 
   const valNum = Number(value) || 0;
-  const probNum = Number(probability) || 20;
+  let resolvedStage: string | null = null;
+  let probNum: number = probability !== undefined && probability !== null && probability !== '' ? Number(probability) : 20;
+
+  if (stageId) {
+    const [sRows]: any = await pool.query(
+      'SELECT id, code, name, isActive, probability FROM project_stages WHERE id = ? OR code = ? LIMIT 1',
+      [stageId, stageId]
+    );
+    if (sRows.length === 0) {
+      return res.status(400).json({ error: `Invalid project stage: ${stageId}`, code: 'INVALID_STAGE' });
+    }
+    if (!sRows[0].isActive) {
+      return res.status(400).json({ error: 'Target stage is inactive and cannot accept new projects', code: 'INACTIVE_STAGE' });
+    }
+    resolvedStage = sRows[0].id;
+    if (probability === undefined || probability === null || probability === '') {
+      probNum = sRows[0].probability ?? 20;
+    }
+  } else {
+    // Default to first active stage ordered by displayOrder
+    const [sRows]: any = await pool.query(
+      'SELECT id, probability FROM project_stages WHERE isActive = 1 ORDER BY displayOrder ASC, id ASC LIMIT 1'
+    );
+    if (sRows.length > 0) {
+      resolvedStage = sRows[0].id;
+      if (probability === undefined || probability === null || probability === '') {
+        probNum = sRows[0].probability ?? 20;
+      }
+    }
+  }
+
   const expClose = expectedCloseDate || null;
-  const resolvedStage = stageId || 'PS-1';
   const descText = description ? String(description).trim() : null;
   const srcText = source ? String(source).trim() : 'Direct';
 
@@ -732,7 +815,28 @@ projectsRoutes.put('/:id', async (req: any, res: any) => {
     const value = data.value !== undefined ? Number(data.value) : current.value;
     const probability = data.probability !== undefined ? Number(data.probability) : current.probability;
     const expectedCloseDate = data.expectedCloseDate !== undefined ? data.expectedCloseDate : current.expectedCloseDate;
-    const stageId = data.stageId !== undefined ? data.stageId : current.stageId;
+    
+    let stageId = current.stageId;
+    if (data.stageId !== undefined) {
+      if (data.stageId === null || data.stageId === '' || String(data.stageId).trim().toLowerCase() === 'null') {
+        stageId = null;
+      } else {
+        const [sRows]: any = await conn.query(
+          'SELECT id, code, name, isActive FROM project_stages WHERE id = ? OR code = ? LIMIT 1',
+          [data.stageId, data.stageId]
+        );
+        if (sRows.length === 0) {
+          await conn.rollback();
+          return res.status(400).json({ error: `Invalid project stage: ${data.stageId}`, code: 'INVALID_STAGE' });
+        }
+        if (!sRows[0].isActive && sRows[0].id !== current.stageId) {
+          await conn.rollback();
+          return res.status(400).json({ error: 'Target stage is inactive and cannot accept project transitions', code: 'INACTIVE_STAGE' });
+        }
+        stageId = sRows[0].id;
+      }
+    }
+
     const description = data.description !== undefined ? data.description : current.description;
 
     await conn.query(`
@@ -740,6 +844,14 @@ projectsRoutes.put('/:id', async (req: any, res: any) => {
       SET customerId = ?, title = ?, value = ?, probability = ?, expectedCloseDate = ?, stageId = ?, description = ?, picId = ?
       WHERE id = ? AND tenantId = ?
     `, [customerId, title, value, probability, expectedCloseDate, stageId, description, picId, id, targetTenant]);
+
+    if (stageId !== current.stageId) {
+      const historyId = 'PSH-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex');
+      await conn.query(`
+        INSERT INTO project_stage_histories (id, projectId, fromStageId, toStageId, changedById, changedAt, notes)
+        VALUES (?, ?, ?, ?, ?, NOW(), ?)
+      `, [historyId, id, current.stageId, stageId, actorUserId, 'Updated via Project Edit']);
+    }
 
     // Authoritatively synchronize PROJECT_ASSIGNMENT task
     await syncProjectAssignmentTasks(conn, id, targetTenant);

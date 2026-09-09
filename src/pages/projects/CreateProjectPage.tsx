@@ -42,12 +42,26 @@ export const CreateProjectPage: React.FC = () => {
       setPicId(currentUser.id);
     }
     masterDataApi.fetchMasterData('project_stages', tenantId).then(data => {
-      setProjectStages(data);
-      const def = data.find(d => d.isDefault);
-      if (def) setStage(def.codeValue);
-      else if (data.length > 0) setStage(data[0].codeValue);
+      const activeStages = data.filter(d => d.isActive !== false);
+      setProjectStages(activeStages);
+      const def = activeStages.find(d => d.isDefault);
+      if (def) {
+        setStage(def.id);
+        if (def.probability !== undefined) setProbability(def.probability);
+      } else if (activeStages.length > 0) {
+        setStage(activeStages[0].id);
+        if (activeStages[0].probability !== undefined) setProbability(activeStages[0].probability);
+      }
     });
   }, [tenantId, currentUser]);
+
+  const handleStageChange = (selectedStageId: string) => {
+    setStage(selectedStageId);
+    const found = projectStages.find(s => s.id === selectedStageId || s.codeValue === selectedStageId);
+    if (found && found.probability !== undefined) {
+      setProbability(found.probability);
+    }
+  };
 
   const handleCustomerChange = (selectedId: string) => {
     setCustomerId(selectedId);
@@ -84,7 +98,7 @@ export const CreateProjectPage: React.FC = () => {
       value: Number(estimatedValue.replace(/[^0-9]/g, '')) || 0,
       probability,
       expectedCloseDate: expectedCloseDate || new Date().toISOString().split('T')[0],
-      stageId: isDraft ? (projectStages[0]?.codeValue || 'LEAD') : (stage || 'LEAD'),
+      stageId: isDraft ? (projectStages[0]?.id || 'PS-1') : (stage || projectStages[0]?.id || 'PS-1'),
       source: 'Direct',
       description,
       picId: targetPicId
@@ -250,11 +264,11 @@ export const CreateProjectPage: React.FC = () => {
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">Stage</label>
                   <select 
                     value={stage}
-                    onChange={(e) => setStage(e.target.value)}
+                    onChange={(e) => handleStageChange(e.target.value)}
                     className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-shadow"
                   >
                     {projectStages.map(s => (
-                      <option key={s.id} value={s.code_value}>{s.label}</option>
+                      <option key={s.id} value={s.id}>{s.label}</option>
                     ))}
                   </select>
                 </div>
