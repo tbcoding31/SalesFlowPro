@@ -45,7 +45,7 @@ projectsRoutes.get('/', async (req: any, res: any) => {
       }
     }
     if (statusScope === 'active' || status === 'active') {
-      extraWhere += ` AND p.stageId IS NOT NULL AND ps.lifecycleCategory = 'OPEN' AND ps.isActive = 1`;
+      extraWhere += ` AND p.stageId IS NOT NULL AND ps.isActive = 1 AND ps.isTerminal = 0`;
     }
     if (search && typeof search === 'string' && search.trim()) {
       extraWhere += ' AND (p.title LIKE ? OR p.description LIKE ?)';
@@ -81,9 +81,12 @@ projectsRoutes.get('/', async (req: any, res: any) => {
         c.name as customerName, c.code as customerCode,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
         ps.name as stageName, ps.code as stageCode,
-        ps.lifecycleCategory as stageLifecycleCategory,
+        ps.phase as stagePhase,
+        ps.commercialOutcome as stageCommercialOutcome,
         ps.isActive as stageIsActive,
         ps.isTerminal as stageIsTerminal,
+        ps.allowVisits as stageAllowVisits,
+        ps.allowNewProject as stageAllowNewProject,
         COALESCE(p.probability, ps.probability, 0) as effectiveProbability
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
@@ -130,7 +133,7 @@ projectsRoutes.get('/pipeline', async (req: any, res: any) => {
 
   try {
     const [stageRows]: any = await pool.query(`
-      SELECT id, code, name, displayOrder, probability, lifecycleCategory, isActive, isTerminal
+      SELECT id, code, name, displayOrder, probability, phase, commercialOutcome, isActive, isTerminal, allowVisits, allowNewProject
       FROM project_stages
       WHERE isActive = 1 OR id IN (SELECT DISTINCT stageId FROM projects WHERE tenantId = ? AND stageId IS NOT NULL)
       ORDER BY displayOrder ASC, id ASC
@@ -145,9 +148,12 @@ projectsRoutes.get('/pipeline', async (req: any, res: any) => {
         c.name as customerName, c.code as customerCode,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
         ps.name as stageName, ps.code as stageCode,
-        ps.lifecycleCategory as stageLifecycleCategory,
+        ps.phase as stagePhase,
+        ps.commercialOutcome as stageCommercialOutcome,
         ps.isActive as stageIsActive,
         ps.isTerminal as stageIsTerminal,
+        ps.allowVisits as stageAllowVisits,
+        ps.allowNewProject as stageAllowNewProject,
         COALESCE(p.probability, ps.probability, 0) as effectiveProbability
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
@@ -159,8 +165,6 @@ projectsRoutes.get('/pipeline', async (req: any, res: any) => {
 
     const [rows]: any = await pool.query(selectSql, params);
 
-    // Authoritative pipeline stage codes dynamically queried from project_stages:
-    // 'LEAD', 'QUALIFICATION', 'PROPOSAL', 'NEGOTIATION', 'WON'
     const aggregates: Record<string, { count: number; value: number; stageId?: string; code?: string; name?: string }> = {};
 
     stageRows.forEach((s: any) => {
@@ -186,6 +190,11 @@ projectsRoutes.get('/pipeline', async (req: any, res: any) => {
       const prob = Number(p.effectiveProbability) || 0;
       const stageKey = p.stageId;
 
+      // Historical Won single authority: p.commercialWonAt IS NOT NULL
+      if (p.commercialWonAt) {
+        totalWon += val;
+      }
+
       if (!stageKey || !stageMap.has(stageKey)) {
         unassignedProjectCount++;
         unassignedProjectValue += val;
@@ -199,12 +208,11 @@ projectsRoutes.get('/pipeline', async (req: any, res: any) => {
         agg.value += val;
       }
 
-      if (st.lifecycleCategory === 'OPEN') {
+      // Open Sales Pipeline: phase = 'SALES' AND commercialOutcome = 'NONE' AND isTerminal = 0
+      if (st.phase === 'SALES' && st.commercialOutcome === 'NONE' && st.isTerminal === 0) {
         totalPipeline += val;
         weightedPipeline += (val * prob) / 100;
-      } else if (st.lifecycleCategory === 'WON') {
-        totalWon += val;
-      } else if (st.lifecycleCategory === 'LOST') {
+      } else if (st.commercialOutcome === 'LOST') {
         totalLost += val;
       }
     });
@@ -245,7 +253,7 @@ projectsRoutes.patch('/:id/stage', async (req: any, res: any) => {
 
   const { id } = req.params;
   const targetStage = req.body?.stageId || req.body?.stage;
-  const { lossReason, reopenReason, notes } = req.body || {};
+  const { lossReason, cancellationReason, reopenReason, notes } = req.body || {};
 
   if (!targetStage) {
     return res.status(400).json({ error: 'Stage ID is required', code: 'MISSING_STAGE_ID' });
@@ -255,10 +263,12 @@ projectsRoutes.patch('/:id/stage', async (req: any, res: any) => {
   try {
     await conn.beginTransaction();
 
-    const [pRows]: any = await conn.query(
-      'SELECT * FROM projects WHERE id = ? AND tenantId = ? FOR UPDATE',
-      [id, targetTenant]
-    );
+    const [pRows]: any = await conn.query(`
+      SELECT p.*, ps.phase as fromPhase, ps.commercialOutcome as fromOutcome, ps.isTerminal as fromIsTerminal, ps.name as fromStageName
+      FROM projects p
+      LEFT JOIN project_stages ps ON ps.id = p.stageId
+      WHERE p.id = ? AND p.tenantId = ? FOR UPDATE
+    `, [id, targetTenant]);
 
     if (pRows.length === 0) {
       await conn.rollback();
@@ -268,7 +278,7 @@ projectsRoutes.patch('/:id/stage', async (req: any, res: any) => {
 
     // Strictly validate and resolve target stage against MySQL project_stages
     const [sRows]: any = await conn.query(
-      'SELECT id, code, name, lifecycleCategory, isActive, probability FROM project_stages WHERE id = ? OR code = ? LIMIT 1',
+      'SELECT id, code, name, phase, commercialOutcome, isActive, isTerminal, probability FROM project_stages WHERE id = ? OR code = ? LIMIT 1',
       [targetStage, targetStage]
     );
 
@@ -285,17 +295,79 @@ projectsRoutes.patch('/:id/stage', async (req: any, res: any) => {
     const resolvedStageId = sRows[0].id;
     const resolvedStageCode = sRows[0].code;
     const resolvedStageName = sRows[0].name;
+    const targetOutcome = sRows[0].commercialOutcome;
+    const targetIsTerminal = sRows[0].isTerminal === 1;
+    const fromIsTerminal = currentProject.fromIsTerminal === 1;
 
-    await conn.query(
-      'UPDATE projects SET stageId = ? WHERE id = ? AND tenantId = ?',
-      [resolvedStageId, id, targetTenant]
-    );
+    // MANDATORY EXECUTION GATE 2: LOST IS PRE-WIN COMMERCIAL FAILURE ONLY
+    if (targetOutcome === 'LOST') {
+      if (currentProject.commercialWonAt !== null) {
+        await conn.rollback();
+        return res.status(400).json({
+          error: 'A project that has already been commercially won cannot be marked as LOST. Use CANCELLED instead.',
+          code: 'PROJECT_ALREADY_WON_CANNOT_BE_LOST'
+        });
+      }
+      if (currentProject.fromPhase && currentProject.fromPhase !== 'SALES') {
+        await conn.rollback();
+        return res.status(400).json({
+          error: 'LOST stage is only applicable to projects within the pre-win SALES lifecycle.',
+          code: 'PROJECT_ALREADY_WON_CANNOT_BE_LOST'
+        });
+      }
+      if (!lossReason || !String(lossReason).trim()) {
+        await conn.rollback();
+        return res.status(400).json({
+          error: 'A business loss reason is mandatory to mark a project as LOST.',
+          code: 'LOSS_REASON_REQUIRED'
+        });
+      }
+    }
+
+    // Cancellation Reason Check
+    if (targetOutcome === 'CANCELLED') {
+      const cReason = cancellationReason || lossReason || notes;
+      if (!cReason || !String(cReason).trim()) {
+        await conn.rollback();
+        return res.status(400).json({
+          error: 'A cancellation reason is mandatory to cancel a project.',
+          code: 'CANCELLATION_REASON_REQUIRED'
+        });
+      }
+    }
+
+    // Reopen Check: from terminal to non-terminal
+    const isReopen = fromIsTerminal && !targetIsTerminal;
+    if (isReopen) {
+      if (!reopenReason || !String(reopenReason).trim()) {
+        await conn.rollback();
+        return res.status(400).json({
+          error: 'An explicit business reason is required to reopen a project from a terminal stage.',
+          code: 'REOPEN_REASON_REQUIRED'
+        });
+      }
+    }
+
+    // Atomic Commercial Won Milestone Recognition: stamp NOW() only if commercialWonAt is NULL
+    if (targetOutcome === 'WON' && !currentProject.commercialWonAt) {
+      await conn.query(
+        'UPDATE projects SET stageId = ?, commercialWonAt = NOW() WHERE id = ? AND tenantId = ?',
+        [resolvedStageId, id, targetTenant]
+      );
+    } else {
+      await conn.query(
+        'UPDATE projects SET stageId = ? WHERE id = ? AND tenantId = ?',
+        [resolvedStageId, id, targetTenant]
+      );
+    }
 
     // Record stage transition history
     const historyId = 'PSH-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex');
     const stageNotes = lossReason 
       ? `Loss Reason: ${lossReason}${notes ? ' | ' + notes : ''}`
-      : (reopenReason ? `Reopen Reason: ${reopenReason}${notes ? ' | ' + notes : ''}` : (notes || null));
+      : (cancellationReason ? `Cancellation Reason: ${cancellationReason}${notes ? ' | ' + notes : ''}` 
+        : (reopenReason ? `Reopen Reason: ${reopenReason}${notes ? ' | ' + notes : ''}` : (notes || null)));
+
     await conn.query(`
       INSERT INTO project_stage_histories (id, projectId, fromStageId, toStageId, changedById, changedAt, notes)
       VALUES (?, ?, ?, ?, ?, NOW(), ?)
@@ -355,9 +427,12 @@ projectsRoutes.get('/:id', async (req: any, res: any) => {
         c.name as customerName, c.code as customerCode,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
         ps.name as stageName, ps.code as stageCode,
-        ps.lifecycleCategory as stageLifecycleCategory,
+        ps.phase as stagePhase,
+        ps.commercialOutcome as stageCommercialOutcome,
         ps.isActive as stageIsActive,
         ps.isTerminal as stageIsTerminal,
+        ps.allowVisits as stageAllowVisits,
+        ps.allowNewProject as stageAllowNewProject,
         COALESCE(p.probability, ps.probability, 0) as effectiveProbability
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
@@ -855,9 +930,12 @@ projectsRoutes.get('/:id/summary', async (req: any, res: any) => {
         c.name as customerName, c.code as customerCode,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
         ps.name as stageName, ps.code as stageCode,
-        ps.lifecycleCategory as stageLifecycleCategory,
+        ps.phase as stagePhase,
+        ps.commercialOutcome as stageCommercialOutcome,
         ps.isActive as stageIsActive,
         ps.isTerminal as stageIsTerminal,
+        ps.allowVisits as stageAllowVisits,
+        ps.allowNewProject as stageAllowNewProject,
         COALESCE(p.probability, ps.probability, 0) as effectiveProbability
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
@@ -1125,23 +1203,26 @@ projectsRoutes.post('/', async (req: any, res: any) => {
 
   if (stageId) {
     const [sRows]: any = await pool.query(
-      'SELECT id, code, name, isActive, probability FROM project_stages WHERE id = ? OR code = ? LIMIT 1',
+      'SELECT id, code, name, isActive, isTerminal, allowNewProject, probability FROM project_stages WHERE id = ? OR code = ? LIMIT 1',
       [stageId, stageId]
     );
     if (sRows.length === 0) {
       return res.status(400).json({ error: `Invalid project stage: ${stageId}`, code: 'INVALID_STAGE' });
     }
-    if (!sRows[0].isActive) {
-      return res.status(400).json({ error: 'Target stage is inactive and cannot accept new projects', code: 'INACTIVE_STAGE' });
+    if (!sRows[0].isActive || sRows[0].isTerminal === 1 || sRows[0].allowNewProject === 0) {
+      return res.status(400).json({
+        error: 'Cannot create a project directly in an inactive, terminal, or restricted stage',
+        code: 'INVALID_INITIAL_STAGE'
+      });
     }
     resolvedStage = sRows[0].id;
     if (probability === undefined || probability === null || probability === '') {
       probNum = sRows[0].probability ?? 20;
     }
   } else {
-    // Default to first active stage ordered by displayOrder
+    // Default to first active non-terminal stage ordered by displayOrder
     const [sRows]: any = await pool.query(
-      'SELECT id, probability FROM project_stages WHERE isActive = 1 ORDER BY displayOrder ASC, id ASC LIMIT 1'
+      'SELECT id, probability FROM project_stages WHERE isActive = 1 AND isTerminal = 0 AND allowNewProject = 1 ORDER BY displayOrder ASC, id ASC LIMIT 1'
     );
     if (sRows.length > 0) {
       resolvedStage = sRows[0].id;
@@ -1235,12 +1316,27 @@ projectsRoutes.put('/:id', async (req: any, res: any) => {
   try {
     await conn.beginTransaction();
 
-    const [existing]: any = await conn.query('SELECT * FROM projects WHERE id = ? AND tenantId = ? FOR UPDATE', [id, targetTenant]);
+    const [existing]: any = await conn.query(`
+      SELECT p.*, ps.isTerminal, ps.name as stageName
+      FROM projects p
+      LEFT JOIN project_stages ps ON ps.id = p.stageId
+      WHERE p.id = ? AND p.tenantId = ?
+      FOR UPDATE
+    `, [id, targetTenant]);
     if (existing.length === 0) {
       await conn.rollback();
       return res.status(404).json({ error: 'Project not found' });
     }
     const current = existing[0];
+
+    // Generic Edit Lock: Terminal projects cannot be updated via generic PUT
+    if (current.isTerminal === 1) {
+      await conn.rollback();
+      return res.status(400).json({
+        error: `Project is in a terminal stage ('${current.stageName || current.stageId}') and cannot be modified. Reopen the project first to edit.`,
+        code: 'PROJECT_TERMINAL_LOCKED'
+      });
+    }
 
     let customerId = current.customerId;
     if (data.customerId) {

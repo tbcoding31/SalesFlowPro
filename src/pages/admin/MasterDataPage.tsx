@@ -22,7 +22,11 @@ export const MasterDataPage: React.FC = () => {
   const [indicator, setIndicator] = useState('flag');
   const [isDefault, setIsDefault] = useState(false);
   const [probability, setProbability] = useState<number>(50);
-  const [lifecycleCategory, setLifecycleCategory] = useState<'OPEN' | 'WON' | 'LOST'>('OPEN');
+  const [phase, setPhase] = useState<'SALES' | 'DELIVERY' | 'POST_LIVE' | 'CLOSED'>('SALES');
+  const [commercialOutcome, setCommercialOutcome] = useState<'NONE' | 'WON' | 'LOST' | 'CANCELLED'>('NONE');
+  const [isTerminal, setIsTerminal] = useState<boolean>(false);
+  const [allowVisits, setAllowVisits] = useState<boolean>(true);
+  const [allowNewProject, setAllowNewProject] = useState<boolean>(true);
   const [isActive, setIsActive] = useState<boolean>(true);
 
   const categories: { id: MasterDataItem['category']; name: string; icon: string }[] = [
@@ -59,7 +63,11 @@ export const MasterDataPage: React.FC = () => {
     setIndicator('flag');
     setIsDefault(false);
     setProbability(50);
-    setLifecycleCategory('OPEN');
+    setPhase('SALES');
+    setCommercialOutcome('NONE');
+    setIsTerminal(false);
+    setAllowVisits(true);
+    setAllowNewProject(true);
     setIsActive(true);
     setShowModal(true);
   };
@@ -71,13 +79,25 @@ export const MasterDataPage: React.FC = () => {
     setIndicator(item.indicator || '');
     setIsDefault(!!item.isDefault);
     setProbability(item.probability !== undefined ? item.probability : 50);
-    setLifecycleCategory(item.lifecycleCategory || 'OPEN');
+    setPhase(item.phase || 'SALES');
+    setCommercialOutcome(item.commercialOutcome || 'NONE');
+    setIsTerminal(!!item.isTerminal);
+    setAllowVisits(item.allowVisits !== false);
+    setAllowNewProject(item.allowNewProject !== false);
     setIsActive(item.isActive !== false);
     setShowModal(true);
   };
 
   const handleSaveItem = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (selectedCategory === 'project_stages') {
+      const shouldBeTerm = phase === 'CLOSED' || commercialOutcome === 'LOST' || commercialOutcome === 'CANCELLED';
+      if (isTerminal !== shouldBeTerm) {
+        alert('Strict Terminal Consistency Violation: isTerminal must be true if and only if phase is CLOSED or commercialOutcome is LOST or CANCELLED.');
+        return;
+      }
+    }
+
     const isNew = !editingItem;
     const itemToSave: MasterDataItem = {
       id: editingItem ? editingItem.id : (selectedCategory === 'project_stages' ? `PS-${Date.now().toString().slice(-4)}` : `MD-${Date.now().toString().slice(-4)}`),
@@ -88,7 +108,11 @@ export const MasterDataPage: React.FC = () => {
       isDefault,
       displayOrder: editingItem ? editingItem.displayOrder : items.length + 1,
       probability: selectedCategory === 'project_stages' ? probability : undefined,
-      lifecycleCategory: selectedCategory === 'project_stages' ? lifecycleCategory : undefined,
+      phase: selectedCategory === 'project_stages' ? phase : undefined,
+      commercialOutcome: selectedCategory === 'project_stages' ? commercialOutcome : undefined,
+      isTerminal: selectedCategory === 'project_stages' ? isTerminal : undefined,
+      allowVisits: selectedCategory === 'project_stages' ? allowVisits : undefined,
+      allowNewProject: selectedCategory === 'project_stages' ? allowNewProject : undefined,
       isActive: selectedCategory === 'project_stages' ? isActive : undefined,
     };
 
@@ -194,8 +218,12 @@ export const MasterDataPage: React.FC = () => {
                   <th className="px-4 py-3">Code Value</th>
                   {selectedCategory === 'project_stages' ? (
                     <>
-                      <th className="px-4 py-3">Lifecycle Category</th>
+                      <th className="px-4 py-3">Phase</th>
+                      <th className="px-4 py-3">Outcome</th>
                       <th className="px-4 py-3">Benchmark Prob</th>
+                      <th className="px-4 py-3">Visits</th>
+                      <th className="px-4 py-3">New Proj</th>
+                      <th className="px-4 py-3">Terminal</th>
                       <th className="px-4 py-3">Status</th>
                     </>
                   ) : (
@@ -210,7 +238,7 @@ export const MasterDataPage: React.FC = () => {
               <tbody className="divide-y divide-[#E1E1E1]">
                 {items.length === 0 ? (
                   <tr>
-                    <td colSpan={selectedCategory === 'project_stages' ? 7 : 6} className="text-center py-8 text-[#767587] text-xs">
+                    <td colSpan={selectedCategory === 'project_stages' ? 11 : 6} className="text-center py-8 text-[#767587] text-xs">
                       No master items defined in this category.
                     </td>
                   </tr>
@@ -229,17 +257,44 @@ export const MasterDataPage: React.FC = () => {
                         <>
                           <td className="px-4 py-3">
                             <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                              item.lifecycleCategory === 'WON' 
-                                ? 'bg-emerald-100 text-emerald-700' 
-                                : item.lifecycleCategory === 'LOST' 
-                                ? 'bg-rose-100 text-rose-700' 
-                                : 'bg-blue-100 text-blue-700'
+                              item.phase === 'SALES' ? 'bg-blue-100 text-blue-700' :
+                              item.phase === 'DELIVERY' ? 'bg-indigo-100 text-indigo-700' :
+                              item.phase === 'POST_LIVE' ? 'bg-teal-100 text-teal-700' :
+                              'bg-slate-100 text-slate-700'
                             }`}>
-                              {item.lifecycleCategory || 'OPEN'}
+                              {item.phase || 'SALES'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              item.commercialOutcome === 'WON' 
+                                ? 'bg-emerald-100 text-emerald-700' 
+                                : item.commercialOutcome === 'LOST' 
+                                ? 'bg-rose-100 text-rose-700' 
+                                : item.commercialOutcome === 'CANCELLED'
+                                ? 'bg-amber-100 text-amber-700'
+                                : 'bg-slate-100 text-slate-600'
+                            }`}>
+                              {item.commercialOutcome || 'NONE'}
                             </span>
                           </td>
                           <td className="px-4 py-3 font-semibold text-xs text-slate-700">
                             {item.probability !== undefined ? `${item.probability}%` : '-'}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className={`text-[11px] font-bold ${item.allowVisits !== false ? 'text-emerald-600' : 'text-slate-400'}`}>
+                              {item.allowVisits !== false ? 'Yes' : 'No'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className={`text-[11px] font-bold ${item.allowNewProject !== false ? 'text-emerald-600' : 'text-slate-400'}`}>
+                              {item.allowNewProject !== false ? 'Yes' : 'No'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className={`text-[11px] font-bold ${item.isTerminal ? 'text-rose-600' : 'text-slate-400'}`}>
+                              {item.isTerminal ? 'Yes' : 'No'}
+                            </span>
                           </td>
                           <td className="px-4 py-3">
                             <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${item.isActive !== false ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500 border border-slate-200'}`}>
@@ -339,15 +394,51 @@ export const MasterDataPage: React.FC = () => {
               {selectedCategory === 'project_stages' ? (
                 <>
                   <div>
-                    <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Lifecycle Category *</label>
+                    <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Operational Phase *</label>
                     <select
-                      value={lifecycleCategory}
-                      onChange={(e) => setLifecycleCategory(e.target.value as 'OPEN' | 'WON' | 'LOST')}
+                      value={phase}
+                      onChange={(e) => {
+                        const newPhase = e.target.value as 'SALES' | 'DELIVERY' | 'POST_LIVE' | 'CLOSED';
+                        setPhase(newPhase);
+                        if (newPhase === 'CLOSED') {
+                          setIsTerminal(true);
+                          setAllowVisits(false);
+                          setAllowNewProject(false);
+                          if (commercialOutcome === 'NONE') setCommercialOutcome('WON');
+                        } else if (commercialOutcome !== 'LOST' && commercialOutcome !== 'CANCELLED') {
+                          setIsTerminal(false);
+                        }
+                      }}
                       className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded text-xs bg-white"
                     >
-                      <option value="OPEN">OPEN (Active Pipeline)</option>
-                      <option value="WON">WON (Closed Won)</option>
-                      <option value="LOST">LOST (Closed Lost)</option>
+                      <option value="SALES">SALES (Sales & Pre-Contract Pipeline)</option>
+                      <option value="DELIVERY">DELIVERY (Operational Execution)</option>
+                      <option value="POST_LIVE">POST_LIVE (Warranty & Maintenance)</option>
+                      <option value="CLOSED">CLOSED (Terminal Project Closure)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Commercial Outcome *</label>
+                    <select
+                      value={commercialOutcome}
+                      onChange={(e) => {
+                        const newOutcome = e.target.value as 'NONE' | 'WON' | 'LOST' | 'CANCELLED';
+                        setCommercialOutcome(newOutcome);
+                        if (newOutcome === 'LOST' || newOutcome === 'CANCELLED') {
+                          setIsTerminal(true);
+                          setAllowVisits(false);
+                          setAllowNewProject(false);
+                        } else if (phase !== 'CLOSED') {
+                          setIsTerminal(false);
+                        }
+                      }}
+                      className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded text-xs bg-white"
+                    >
+                      <option value="NONE">NONE (Pre-Outcome Deal)</option>
+                      <option value="WON">WON (Commercially Closed Won)</option>
+                      <option value="LOST">LOST (Closed Lost - Pre-Win Only)</option>
+                      <option value="CANCELLED">CANCELLED (Post-Win / Delivery Aborted)</option>
                     </select>
                   </div>
 
@@ -361,6 +452,45 @@ export const MasterDataPage: React.FC = () => {
                       onChange={(e) => setProbability(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
                       className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded text-xs"
                     />
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="term"
+                      checked={isTerminal}
+                      disabled
+                      className="w-4 h-4 rounded text-[#4744e5] opacity-80 cursor-not-allowed"
+                    />
+                    <label htmlFor="term" className="text-xs text-[#1a1c1c] font-semibold">
+                      Terminal Stage (Enforced strictly by Phase CLOSED or Outcome LOST/CANCELLED)
+                    </label>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="vis"
+                      checked={allowVisits}
+                      onChange={(e) => setAllowVisits(e.target.checked)}
+                      className="w-4 h-4 rounded text-[#4744e5]"
+                    />
+                    <label htmlFor="vis" className="text-xs text-[#1a1c1c] font-semibold">
+                      Allow Visits (Permits linking field visits to projects in this stage)
+                    </label>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="newProj"
+                      checked={allowNewProject}
+                      onChange={(e) => setAllowNewProject(e.target.checked)}
+                      className="w-4 h-4 rounded text-[#4744e5]"
+                    />
+                    <label htmlFor="newProj" className="text-xs text-[#1a1c1c] font-semibold">
+                      Allow Initial Stage Selection (Permits selecting when creating a project)
+                    </label>
                   </div>
 
                   <div className="flex items-center gap-2">

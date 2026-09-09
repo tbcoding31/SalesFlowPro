@@ -311,9 +311,9 @@ visitsRoutes.post('/', async (req: any, res: any) => {
   const projCandidate = relatedProjectId !== undefined ? relatedProjectId : data.projectId;
   if (projCandidate !== undefined && projCandidate !== null && String(projCandidate).trim() !== '' && String(projCandidate).trim().toLowerCase() !== 'null') {
     const pId = String(projCandidate).trim();
-    // Validate project existence and active open stage
+    // Validate project existence and active visit-eligible stage
     const [pAllRows]: any = await pool.query(
-      `SELECT p.id, p.tenantId, p.customerId, p.stageId, ps.lifecycleCategory, ps.isActive
+      `SELECT p.id, p.tenantId, p.customerId, p.stageId, ps.isActive, ps.isTerminal, ps.allowVisits
        FROM projects p
        LEFT JOIN project_stages ps ON ps.id = p.stageId
        WHERE p.id = ?`,
@@ -329,9 +329,9 @@ visitsRoutes.post('/', async (req: any, res: any) => {
     if (candidateProj.customerId !== customer.id) {
       return res.status(400).json({ error: 'Project does not belong to the selected customer', code: 'PROJECT_CUSTOMER_MISMATCH' });
     }
-    // Fail-closed check: project must be assigned to an active OPEN stage
-    if (!candidateProj.stageId || !candidateProj.isActive || candidateProj.lifecycleCategory !== 'OPEN') {
-      return res.status(400).json({ error: 'Completed, lost, inactive, or unassigned project cannot be assigned to a new visit', code: 'PROJECT_NOT_ACTIVE' });
+    // Fail-closed check: project must be assigned to an active non-terminal stage that allows visits
+    if (!candidateProj.stageId || !candidateProj.isActive || candidateProj.isTerminal === 1 || candidateProj.allowVisits === 0) {
+      return res.status(400).json({ error: 'Completed, lost, cancelled, inactive, non-visit, or unassigned project cannot be assigned to a new visit', code: 'PROJECT_NOT_ACTIVE' });
     }
     resolvedProjectId = candidateProj.id;
   }
@@ -511,7 +511,7 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
       } else {
         const pId = String(projCandidate).trim();
         const [pAllRows]: any = await pool.query(
-          `SELECT p.id, p.tenantId, p.customerId, p.stageId, ps.lifecycleCategory, ps.isActive
+          `SELECT p.id, p.tenantId, p.customerId, p.stageId, ps.isActive, ps.isTerminal, ps.allowVisits
            FROM projects p
            LEFT JOIN project_stages ps ON ps.id = p.stageId
            WHERE p.id = ?`,
@@ -527,10 +527,10 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
         if (candidateProj.customerId !== customerId) {
           return res.status(400).json({ error: 'Project does not belong to the selected customer', code: 'PROJECT_CUSTOMER_MISMATCH' });
         }
-        // If changing to a DIFFERENT project than the current historical link, enforce active open stage
+        // If changing to a DIFFERENT project than the current historical link, enforce active non-terminal stage that allows visits
         if (pId !== current.relatedProjectId) {
-          if (!candidateProj.stageId || !candidateProj.isActive || candidateProj.lifecycleCategory !== 'OPEN') {
-            return res.status(400).json({ error: 'Completed, lost, inactive, or unassigned project cannot be newly assigned to a visit', code: 'PROJECT_NOT_ACTIVE' });
+          if (!candidateProj.stageId || !candidateProj.isActive || candidateProj.isTerminal === 1 || candidateProj.allowVisits === 0) {
+            return res.status(400).json({ error: 'Completed, lost, cancelled, inactive, non-visit, or unassigned project cannot be newly assigned to a visit', code: 'PROJECT_NOT_ACTIVE' });
           }
         }
         resolvedProjectId = candidateProj.id;

@@ -144,7 +144,7 @@ customersRoutes.get('/:id/summary', async (req: any, res: any) => {
       SELECT 
         COUNT(id) as totalProjects, 
         COALESCE(SUM(value), 0) as totalValue,
-        COUNT(CASE WHEN stageId = 'WON' OR stageId = 'PS-WON' THEN 1 END) as wonProjects
+        COUNT(CASE WHEN commercialWonAt IS NOT NULL THEN 1 END) as wonProjects
       FROM projects 
       WHERE customerId = ? AND tenantId = ?
     `, [id, targetTenant]);

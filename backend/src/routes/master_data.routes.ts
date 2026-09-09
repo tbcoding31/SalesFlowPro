@@ -87,17 +87,37 @@ masterDataRoutes.post('/platform/:category', async (req: any, res: any) => {
       if (dup.length > 0) {
         return res.status(409).json({ error: `Stage code '${code}' already exists` });
       }
-      const lifecycleCategory = String(data.lifecycleCategory || 'OPEN').toUpperCase();
-      if (!['OPEN', 'WON', 'LOST'].includes(lifecycleCategory)) {
-        return res.status(400).json({ error: 'Invalid lifecycleCategory. Must be OPEN, WON, or LOST' });
+
+      const phase = String(data.phase || 'SALES').toUpperCase();
+      if (!['SALES', 'DELIVERY', 'POST_LIVE', 'CLOSED'].includes(phase)) {
+        return res.status(400).json({ error: 'Invalid phase. Must be SALES, DELIVERY, POST_LIVE, or CLOSED' });
       }
+
+      const commercialOutcome = String(data.commercialOutcome || 'NONE').toUpperCase();
+      if (!['NONE', 'WON', 'LOST', 'CANCELLED'].includes(commercialOutcome)) {
+        return res.status(400).json({ error: 'Invalid commercialOutcome. Must be NONE, WON, LOST, or CANCELLED' });
+      }
+
+      const isTerminal = data.isTerminal === 1 || data.isTerminal === true || data.isTerminal === '1' ? 1 : 0;
+      const allowVisits = data.allowVisits !== undefined ? (data.allowVisits ? 1 : 0) : 1;
+      const allowNewProject = data.allowNewProject !== undefined ? (data.allowNewProject ? 1 : 0) : 1;
+
+      // MANDATORY EXECUTION GATE 1: STRICT TERMINAL CONSISTENCY
+      const shouldBeTerminal = (phase === 'CLOSED' || ['LOST', 'CANCELLED'].includes(commercialOutcome));
+      if (Boolean(isTerminal) !== shouldBeTerminal) {
+        return res.status(400).json({
+          error: 'Strict Terminal Consistency Violation: isTerminal must be 1 if and only if phase is CLOSED or commercialOutcome is LOST or CANCELLED.',
+          code: 'STRICT_TERMINAL_CONSISTENCY_VIOLATION'
+        });
+      }
+
       const probability = data.probability !== undefined ? Math.max(0, Math.min(100, Number(data.probability) || 0)) : 0;
       const displayOrder = Number(data.displayOrder) || 0;
       const isActive = data.isActive !== undefined ? (data.isActive ? 1 : 0) : 1;
       const name = String(data.name || data.label || code).trim();
 
-      query = 'INSERT INTO project_stages (id, code, name, displayOrder, probability, lifecycleCategory, isActive) VALUES (?, ?, ?, ?, ?, ?, ?)';
-      params = [data.id, code, name, displayOrder, probability, lifecycleCategory, isActive];
+      query = 'INSERT INTO project_stages (id, code, name, phase, commercialOutcome, displayOrder, probability, isTerminal, allowVisits, allowNewProject, isActive) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+      params = [data.id, code, name, phase, commercialOutcome, displayOrder, probability, isTerminal, allowVisits, allowNewProject, isActive];
     } else {
       query = `INSERT INTO ${category} (id, code, name) VALUES (?, ?, ?)`;
       params = [data.id, data.code, data.name];
@@ -158,20 +178,39 @@ masterDataRoutes.put('/platform/:category/:id', async (req: any, res: any) => {
           return res.status(409).json({ error: `Stage code '${code}' already exists` });
         }
       }
-      let lifecycleCategory = current.lifecycleCategory;
-      if (data.lifecycleCategory !== undefined) {
-        lifecycleCategory = String(data.lifecycleCategory).toUpperCase();
-        if (!['OPEN', 'WON', 'LOST'].includes(lifecycleCategory)) {
-          return res.status(400).json({ error: 'Invalid lifecycleCategory. Must be OPEN, WON, or LOST' });
-        }
+
+      const phase = data.phase !== undefined ? String(data.phase).toUpperCase() : current.phase;
+      if (!['SALES', 'DELIVERY', 'POST_LIVE', 'CLOSED'].includes(phase)) {
+        return res.status(400).json({ error: 'Invalid phase. Must be SALES, DELIVERY, POST_LIVE, or CLOSED' });
       }
+
+      const commercialOutcome = data.commercialOutcome !== undefined ? String(data.commercialOutcome).toUpperCase() : current.commercialOutcome;
+      if (!['NONE', 'WON', 'LOST', 'CANCELLED'].includes(commercialOutcome)) {
+        return res.status(400).json({ error: 'Invalid commercialOutcome. Must be NONE, WON, LOST, or CANCELLED' });
+      }
+
+      const isTerminal = data.isTerminal !== undefined 
+        ? (data.isTerminal === 1 || data.isTerminal === true || data.isTerminal === '1' ? 1 : 0)
+        : current.isTerminal;
+      const allowVisits = data.allowVisits !== undefined ? (data.allowVisits ? 1 : 0) : current.allowVisits;
+      const allowNewProject = data.allowNewProject !== undefined ? (data.allowNewProject ? 1 : 0) : current.allowNewProject;
+
+      // MANDATORY EXECUTION GATE 1: STRICT TERMINAL CONSISTENCY
+      const shouldBeTerminal = (phase === 'CLOSED' || ['LOST', 'CANCELLED'].includes(commercialOutcome));
+      if (Boolean(isTerminal) !== shouldBeTerminal) {
+        return res.status(400).json({
+          error: 'Strict Terminal Consistency Violation: isTerminal must be 1 if and only if phase is CLOSED or commercialOutcome is LOST or CANCELLED.',
+          code: 'STRICT_TERMINAL_CONSISTENCY_VIOLATION'
+        });
+      }
+
       const probability = data.probability !== undefined ? Math.max(0, Math.min(100, Number(data.probability) || 0)) : current.probability;
       const displayOrder = data.displayOrder !== undefined ? Number(data.displayOrder) : current.displayOrder;
       const isActive = data.isActive !== undefined ? (data.isActive ? 1 : 0) : current.isActive;
       const name = data.name !== undefined ? String(data.name).trim() : current.name;
 
-      query = 'UPDATE project_stages SET code = ?, name = ?, displayOrder = ?, probability = ?, lifecycleCategory = ?, isActive = ? WHERE id = ?';
-      params = [code, name, displayOrder, probability, lifecycleCategory, isActive, id];
+      query = 'UPDATE project_stages SET code = ?, name = ?, phase = ?, commercialOutcome = ?, displayOrder = ?, probability = ?, isTerminal = ?, allowVisits = ?, allowNewProject = ?, isActive = ? WHERE id = ?';
+      params = [code, name, phase, commercialOutcome, displayOrder, probability, isTerminal, allowVisits, allowNewProject, isActive, id];
     } else {
       query = `UPDATE ${category} SET code = ?, name = ? WHERE id = ?`;
       params = [data.code, data.name, id];

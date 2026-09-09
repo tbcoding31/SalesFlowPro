@@ -323,6 +323,13 @@ export interface Project {
   stageId?: string;
   stageCode?: string;
   stageName?: string;
+  stagePhase?: 'SALES' | 'DELIVERY' | 'POST_LIVE' | 'CLOSED';
+  stageCommercialOutcome?: 'NONE' | 'WON' | 'LOST' | 'CANCELLED';
+  stageIsActive?: boolean;
+  stageIsTerminal?: boolean;
+  stageAllowVisits?: boolean;
+  stageAllowNewProject?: boolean;
+  commercialWonAt?: string | null;
   source: string;
   description?: string;
   createdAt: string;
@@ -698,9 +705,12 @@ export interface MasterDataItem {
   is_default?: boolean;
   displayOrder: number;
   probability?: number;
-  lifecycleCategory?: 'OPEN' | 'WON' | 'LOST';
+  phase?: 'SALES' | 'DELIVERY' | 'POST_LIVE' | 'CLOSED';
+  commercialOutcome?: 'NONE' | 'WON' | 'LOST' | 'CANCELLED';
   isActive?: boolean;
   isTerminal?: boolean;
+  allowVisits?: boolean;
+  allowNewProject?: boolean;
 }
 
 export interface NotificationItem {

@@ -122,10 +122,15 @@ managementRoutes.get('/control-tower', async (req, res) => {
 
     // 3. Batch Query 1: Open and Closed Projects with PIC & stage breakdown
     const [scopedProjects]: any = await pool.query(`
-      SELECT p.*, c.name as customerName, c.code as customerCode, u.name as picName
+      SELECT 
+        p.*, 
+        c.name as customerName, c.code as customerCode, u.name as picName,
+        ps.phase as stagePhase, ps.commercialOutcome as stageCommercialOutcome,
+        ps.isTerminal as stageIsTerminal, ps.allowVisits as stageAllowVisits
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
       LEFT JOIN users u ON u.id = p.picId
+      LEFT JOIN project_stages ps ON ps.id = p.stageId
       ${projWhere.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
     `, projParams);
 
@@ -189,10 +194,9 @@ managementRoutes.get('/control-tower', async (req, res) => {
 
     for (const proj of filteredProjects) {
       const pSignals: any[] = [];
-      const stage = proj.stageId;
-      const isWon = stage === 'WON';
-      const isLost = stage === 'LOST';
-      const isOpen = !isWon && !isLost;
+      const isWon = proj.commercialWonAt !== null;
+      const isTerminal = proj.stageIsTerminal === 1;
+      const isOpen = !isTerminal;
 
       if (isOpen || isWon) {
         if (!proj.picId || !validTenantUserIds.has(proj.picId)) {
@@ -483,7 +487,7 @@ managementRoutes.get('/control-tower', async (req, res) => {
       });
     }
 
-    const openProjectsTotal = filteredProjects.filter((p: any) => p.stageId !== 'WON' && p.stageId !== 'LOST').length;
+    const openProjectsTotal = filteredProjects.filter((p: any) => p.stageIsTerminal === 0).length;
 
     res.json({
       businessDate: todayStr,

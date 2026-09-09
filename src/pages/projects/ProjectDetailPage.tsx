@@ -121,7 +121,12 @@ const loadData = async () => {
       key: s.id,
       code: s.codeValue,
       label: s.label,
-      lifecycleCategory: s.lifecycleCategory || 'OPEN'
+      phase: s.phase || 'SALES',
+      commercialOutcome: s.commercialOutcome || 'NONE',
+      isTerminal: s.isTerminal === true,
+      allowVisits: s.allowVisits !== false,
+      allowNewProject: s.allowNewProject !== false,
+      displayOrder: s.displayOrder
     }));
   }, [dbStages]);
 
@@ -130,14 +135,27 @@ const loadData = async () => {
     
     const targetObj = pipelineStages.find(s => s.key === targetStage || s.code === targetStage);
     const targetStageId = targetObj ? targetObj.key : targetStage;
-    const toCategory = targetObj?.lifecycleCategory || (targetStage === 'LOST' ? 'LOST' : 'OPEN');
-    const isTargetLost = toCategory === 'LOST';
+    const isTargetLost = targetObj?.commercialOutcome === 'LOST';
+    const isTargetCancelled = targetObj?.commercialOutcome === 'CANCELLED';
+
+    // Gate 2: LOST is pre-win commercial failure only
+    if (isTargetLost && project.commercialWonAt) {
+      alert('This project was already won commercially and cannot be marked as LOST. Post-win commercial abortion must use CANCELLED.');
+      return;
+    }
 
     let reasonInput: string | undefined = undefined;
     if (isTargetLost) {
       const promptRes = prompt('Please enter a business reason for marking this project as LOST:');
       if (!promptRes || !promptRes.trim()) {
         alert('A business loss reason is required to mark the project as LOST.');
+        return;
+      }
+      reasonInput = promptRes.trim();
+    } else if (isTargetCancelled) {
+      const promptRes = prompt('Please enter a business reason for cancelling this project:');
+      if (!promptRes || !promptRes.trim()) {
+        alert('A business cancellation reason is required to cancel this project.');
         return;
       }
       reasonInput = promptRes.trim();
@@ -152,6 +170,7 @@ const loadData = async () => {
 
     const res = await crmApi.transitionProjectStage(project.id, targetStageId, {
       lossReason: isTargetLost ? reasonInput : undefined,
+      cancellationReason: isTargetCancelled ? reasonInput : undefined,
       reopenReason: isReopen ? reasonInput : undefined,
       isReopen,
       expectedFromStage: project.stageCode || project.stage || project.stageId
@@ -205,7 +224,10 @@ const loadData = async () => {
   };
 
   const currentStageIndex = pipelineStages.findIndex(s => s.key === project.stageId || s.code === (project.stageCode || project.stage));
-  const isLost = (project as any).stageLifecycleCategory === 'LOST' || (project.stageCode || project.stage) === 'LOST';
+  const isLost = project.stageCommercialOutcome === 'LOST' || (project.stageCode || project.stage) === 'LOST';
+  const isCancelled = project.stageCommercialOutcome === 'CANCELLED' || (project.stageCode || project.stage) === 'CANCELLED';
+  const isTerminal = Boolean(project.stageIsTerminal);
+  const isWon = Boolean(project.commercialWonAt);
 
   const comments = activities.filter(a => a.subject === 'Comment');
   const historyActivities = activities.filter(a => a.subject !== 'Comment');
@@ -233,6 +255,22 @@ const loadData = async () => {
             {isLost && (
               <span className="px-2.5 py-1 bg-rose-100 text-rose-700 text-xs font-bold rounded-lg uppercase tracking-wider">
                 Lost
+              </span>
+            )}
+            {isCancelled && (
+              <span className="px-2.5 py-1 bg-amber-100 text-amber-700 text-xs font-bold rounded-lg uppercase tracking-wider">
+                Cancelled
+              </span>
+            )}
+            {isWon && (
+              <span className="px-2.5 py-1 bg-emerald-100 text-emerald-700 text-xs font-bold rounded-lg uppercase tracking-wider flex items-center gap-1">
+                <span className="material-symbols-outlined text-[14px]">emoji_events</span>
+                Won Deal
+              </span>
+            )}
+            {isTerminal && !isLost && !isCancelled && (
+              <span className="px-2.5 py-1 bg-slate-100 text-slate-700 text-xs font-bold rounded-lg uppercase tracking-wider">
+                Closed
               </span>
             )}
           </div>
@@ -462,33 +500,32 @@ const loadData = async () => {
             </div>
             <button
               onClick={() => handleStageChange('QUALIFICATION', true)}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-sm transition-colors flex items-center gap-1.5"
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
             >
               <span className="material-symbols-outlined text-base">restart_alt</span>
               Reopen Project
             </button>
           </div>
-        ) : project.stage === 'WON' ? (
+        ) : isCancelled ? (
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center">
-                <span className="material-symbols-outlined text-2xl">verified</span>
+              <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center">
+                <span className="material-symbols-outlined text-2xl">block</span>
               </div>
               <div>
-                <h3 className="text-lg font-bold text-emerald-700">Project Won</h3>
-                <p className="text-sm text-emerald-600/80">Contract finalized and deal marked as won.</p>
+                <h3 className="text-lg font-bold text-amber-700">Project Cancelled</h3>
+                <p className="text-sm text-amber-600/80">This project has been cancelled post-win or during delivery.</p>
               </div>
             </div>
             <button
               onClick={() => {
-                const openStages = pipelineStages.filter(s => s.lifecycleCategory === 'OPEN');
-                const lastOpen = openStages[openStages.length - 1];
-                handleStageChange(lastOpen ? lastOpen.key : 'PS-4', true);
+                const defaultReopenStage = isWon ? (pipelineStages.find(s => s.code === 'KICKOFF' || s.key === 'PS-6')?.key || 'PS-5') : 'PS-2';
+                handleStageChange(defaultReopenStage, true);
               }}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-sm transition-colors flex items-center gap-1.5"
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
             >
               <span className="material-symbols-outlined text-base">restart_alt</span>
-              Reopen Deal
+              Reopen Project
             </button>
           </div>
         ) : pipelineStages.length === 0 ? (
@@ -496,47 +533,86 @@ const loadData = async () => {
             Stage master data unavailable.
           </div>
         ) : (
-          <div className="relative flex justify-between items-center w-full">
-            {/* Background line */}
-            <div className="absolute left-0 top-1/2 -translate-y-1/2 w-full h-1.5 bg-slate-100 rounded-full z-0"></div>
-            {/* Active line */}
-            <div 
-              className="absolute left-0 top-1/2 -translate-y-1/2 h-1.5 bg-indigo-500 rounded-full z-0 transition-all duration-500"
-              style={{ width: currentStageIndex >= 0 ? `${(currentStageIndex / (pipelineStages.length - 1)) * 100}%` : '0%' }}
-            ></div>
+          <div className="space-y-6">
+            {isWon && (
+              <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                    <span className="material-symbols-outlined text-xl">emoji_events</span>
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-emerald-900">Commercial Win Achieved</h4>
+                    <p className="text-xs text-emerald-700/90">
+                      Deal marked as won{project.commercialWonAt ? ` on ${new Date(project.commercialWonAt).toLocaleDateString()}` : ''}. Delivery and operational milestones can proceed.
+                    </p>
+                  </div>
+                </div>
+                {/* Quick advance button if currently at WON stage */}
+                {(project.stageId === 'PS-5' || (project.stageCode || project.stage) === 'WON') && (
+                  <button
+                    onClick={() => {
+                      const kickoffStage = pipelineStages.find(s => s.code === 'KICKOFF' || s.key === 'PS-6');
+                      if (kickoffStage) handleStageChange(kickoffStage.key);
+                    }}
+                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer"
+                  >
+                    <span>Advance to Delivery (Kickoff)</span>
+                    <span className="material-symbols-outlined text-sm">arrow_forward</span>
+                  </button>
+                )}
+              </div>
+            )}
 
-            {pipelineStages.map((stage, idx) => {
-              const isCompleted = idx < currentStageIndex;
-              const isCurrent = idx === currentStageIndex;
-              const isPending = idx > currentStageIndex;
+            {/* Stepper showing non-terminal progression */}
+            {(() => {
+              const activeStages = pipelineStages.filter(s => !s.isTerminal);
+              const activeIndex = activeStages.findIndex(s => s.key === project.stageId || s.code === (project.stageCode || project.stage));
 
               return (
-                <button 
-                  key={stage.key} 
-                  onClick={() => handleStageChange(stage.key)}
-                  className="relative z-10 flex flex-col items-center gap-2 min-w-[80px] hover:scale-105 transition-transform"
-                >
+                <div className="relative flex justify-between items-center w-full overflow-x-auto py-2">
+                  {/* Background line */}
+                  <div className="absolute left-0 top-1/2 -translate-y-1/2 w-full h-1.5 bg-slate-100 rounded-full z-0"></div>
+                  {/* Active line */}
                   <div 
-                    className={`w-8 h-8 rounded-full flex items-center justify-center border-2 transition-colors
-                      ${isCompleted ? 'bg-indigo-500 border-indigo-500 text-white' : ''}
-                      ${isCurrent ? 'bg-white border-indigo-500 text-indigo-600 shadow-md ring-4 ring-indigo-50' : ''}
-                      ${isPending ? 'bg-white border-slate-200 text-slate-300 hover:border-indigo-200' : ''}
-                    `}
-                  >
-                    {isCompleted ? (
-                      <span className="material-symbols-outlined text-[16px] font-bold">check</span>
-                    ) : isCurrent ? (
-                      <div className="w-2.5 h-2.5 bg-indigo-500 rounded-full"></div>
-                    ) : (
-                      <div className="w-2 h-2 bg-slate-200 rounded-full"></div>
-                    )}
-                  </div>
-                  <span className={`text-xs font-bold ${isCurrent ? 'text-indigo-700' : isCompleted ? 'text-slate-700' : 'text-slate-400'}`}>
-                    {stage.label}
-                  </span>
-                </button>
+                    className="absolute left-0 top-1/2 -translate-y-1/2 h-1.5 bg-indigo-500 rounded-full z-0 transition-all duration-500"
+                    style={{ width: activeIndex >= 0 ? `${(activeIndex / Math.max(activeStages.length - 1, 1)) * 100}%` : '0%' }}
+                  ></div>
+
+                  {activeStages.map((stage, idx) => {
+                    const isCompleted = idx < activeIndex;
+                    const isCurrent = idx === activeIndex;
+                    const isPending = idx > activeIndex;
+
+                    return (
+                      <button 
+                        key={stage.key} 
+                        onClick={() => handleStageChange(stage.key)}
+                        className="relative z-10 flex flex-col items-center gap-2 min-w-[70px] hover:scale-105 transition-transform cursor-pointer"
+                      >
+                        <div 
+                          className={`w-8 h-8 rounded-full flex items-center justify-center border-2 transition-colors
+                            ${isCompleted ? 'bg-indigo-500 border-indigo-500 text-white' : ''}
+                            ${isCurrent ? 'bg-white border-indigo-500 text-indigo-600 shadow-md ring-4 ring-indigo-50' : ''}
+                            ${isPending ? 'bg-white border-slate-200 text-slate-300 hover:border-indigo-200' : ''}
+                          `}
+                        >
+                          {isCompleted ? (
+                            <span className="material-symbols-outlined text-[16px] font-bold">check</span>
+                          ) : isCurrent ? (
+                            <div className="w-2.5 h-2.5 bg-indigo-500 rounded-full"></div>
+                          ) : (
+                            <div className="w-2 h-2 bg-slate-200 rounded-full"></div>
+                          )}
+                        </div>
+                        <span className={`text-[11px] font-bold text-center leading-tight ${isCurrent ? 'text-indigo-700' : isCompleted ? 'text-slate-700' : 'text-slate-400'}`}>
+                          {stage.label}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               );
-            })}
+            })()}
           </div>
         )}
       </div>

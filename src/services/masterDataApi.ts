@@ -18,9 +18,12 @@ const mapFromDb = (category: MasterDataItem['category'], row: any): MasterDataIt
     isDefault: !!row.isDefault,
     displayOrder: row.displayOrder || row.level || 0,
     probability: row.probability !== undefined ? Number(row.probability) : undefined,
-    lifecycleCategory: row.lifecycleCategory || undefined,
+    phase: row.phase || undefined,
+    commercialOutcome: row.commercialOutcome || undefined,
     isActive: row.isActive !== undefined ? Boolean(row.isActive) : undefined,
     isTerminal: row.isTerminal !== undefined ? Boolean(row.isTerminal) : undefined,
+    allowVisits: row.allowVisits !== undefined ? Boolean(row.allowVisits) : undefined,
+    allowNewProject: row.allowNewProject !== undefined ? Boolean(row.allowNewProject) : undefined,
   };
 };
 
@@ -43,7 +46,11 @@ const mapToDb = (category: MasterDataItem['category'], item: MasterDataItem, ten
         ...base,
         displayOrder: item.displayOrder,
         probability: item.probability !== undefined ? item.probability : 50,
-        lifecycleCategory: item.lifecycleCategory || 'OPEN',
+        phase: item.phase || 'SALES',
+        commercialOutcome: item.commercialOutcome || 'NONE',
+        isTerminal: item.isTerminal !== undefined ? (item.isTerminal ? 1 : 0) : 0,
+        allowVisits: item.allowVisits !== undefined ? (item.allowVisits ? 1 : 0) : 1,
+        allowNewProject: item.allowNewProject !== undefined ? (item.allowNewProject ? 1 : 0) : 1,
         isActive: item.isActive !== undefined ? (item.isActive ? 1 : 0) : 1
       };
     case 'departments':

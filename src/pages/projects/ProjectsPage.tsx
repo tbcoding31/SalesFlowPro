@@ -93,8 +93,10 @@ export const ProjectsPage: React.FC = () => {
   const [stageModalOpp, setStageModalOpp] = useState<Project | null>(null);
   const [selectedTargetStageId, setSelectedTargetStageId] = useState<string>('');
   const [transitionLossReason, setTransitionLossReason] = useState<string>('');
+  const [transitionCancellationReason, setTransitionCancellationReason] = useState<string>('');
   const [transitionReopenReason, setTransitionReopenReason] = useState<string>('');
   const [isTransitioning, setIsTransitioning] = useState<boolean>(false);
+  const [kanbanPhase, setKanbanPhase] = useState<'ALL' | 'SALES' | 'DELIVERY' | 'CLOSED'>('SALES');
 
   const handleCloseMenu = () => {
     setActiveMenuProject(null);
@@ -203,7 +205,11 @@ export const ProjectsPage: React.FC = () => {
           name: d.label,
           displayOrder: d.displayOrder,
           probability: d.probability,
-          lifecycleCategory: d.lifecycleCategory || 'OPEN',
+          phase: d.phase || 'SALES',
+          commercialOutcome: d.commercialOutcome || 'NONE',
+          isTerminal: d.isTerminal === true,
+          allowVisits: d.allowVisits !== false,
+          allowNewProject: d.allowNewProject !== false,
           isActive: d.isActive !== false
         })));
       }
@@ -220,9 +226,11 @@ export const ProjectsPage: React.FC = () => {
   const itemsPerPage = 10;
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  const getStageColor = (category?: string, idx: number = 0) => {
-    if (category === 'WON') return 'border-emerald-400';
-    if (category === 'LOST') return 'border-rose-400';
+  const getStageColor = (commercialOutcome?: string, isTerminal?: boolean, idx: number = 0) => {
+    if (commercialOutcome === 'WON') return 'border-emerald-400';
+    if (commercialOutcome === 'LOST') return 'border-rose-400';
+    if (commercialOutcome === 'CANCELLED') return 'border-amber-400';
+    if (isTerminal) return 'border-slate-400';
     const borderColors = ['border-slate-300', 'border-blue-300', 'border-indigo-300', 'border-amber-300', 'border-purple-300', 'border-teal-300'];
     return borderColors[idx % borderColors.length];
   };
@@ -233,8 +241,12 @@ export const ProjectsPage: React.FC = () => {
         key: s.id,
         code: s.code,
         label: s.name,
-        color: getStageColor(s.lifecycleCategory, idx),
-        lifecycleCategory: s.lifecycleCategory,
+        color: getStageColor(s.commercialOutcome, s.isTerminal, idx),
+        phase: s.phase || 'SALES',
+        commercialOutcome: s.commercialOutcome || 'NONE',
+        isTerminal: s.isTerminal === true,
+        allowVisits: s.allowVisits !== false,
+        allowNewProject: s.allowNewProject !== false,
         isActive: s.isActive !== false,
         probability: s.probability
       }));
@@ -244,43 +256,59 @@ export const ProjectsPage: React.FC = () => {
         key: s.id,
         code: s.codeValue,
         label: s.label,
-        color: getStageColor(s.lifecycleCategory, idx),
-        lifecycleCategory: s.lifecycleCategory,
+        color: getStageColor(s.commercialOutcome, s.isTerminal, idx),
+        phase: s.phase || 'SALES',
+        commercialOutcome: s.commercialOutcome || 'NONE',
+        isTerminal: s.isTerminal === true,
+        allowVisits: s.allowVisits !== false,
+        allowNewProject: s.allowNewProject !== false,
         isActive: s.isActive !== false,
         probability: s.probability
       }));
     }
     return [
-      { key: 'PS-1', code: 'LEAD', label: 'Leads', color: 'border-slate-300', lifecycleCategory: 'OPEN', isActive: true, probability: 20 },
-      { key: 'PS-2', code: 'QUALIFICATION', label: 'Discuss/Follow up', color: 'border-blue-300', lifecycleCategory: 'OPEN', isActive: true, probability: 40 },
-      { key: 'PS-3', code: 'PROPOSAL', label: 'Proposal Sent', color: 'border-indigo-300', lifecycleCategory: 'OPEN', isActive: true, probability: 60 },
-      { key: 'PS-4', code: 'NEGOTIATION', label: 'Negotiation', color: 'border-amber-300', lifecycleCategory: 'OPEN', isActive: true, probability: 80 },
-      { key: 'PS-5', code: 'WON', label: 'Won / Deal', color: 'border-emerald-300', lifecycleCategory: 'WON', isActive: true, probability: 100 },
+      { key: 'PS-1', code: 'LEAD', label: 'Leads', color: 'border-slate-300', phase: 'SALES', commercialOutcome: 'NONE', isTerminal: false, allowVisits: true, allowNewProject: true, isActive: true, probability: 20 },
+      { key: 'PS-2', code: 'QUALIFICATION', label: 'Discuss/Follow up', color: 'border-blue-300', phase: 'SALES', commercialOutcome: 'NONE', isTerminal: false, allowVisits: true, allowNewProject: true, isActive: true, probability: 40 },
+      { key: 'PS-3', code: 'PROPOSAL', label: 'Proposal Sent', color: 'border-indigo-300', phase: 'SALES', commercialOutcome: 'NONE', isTerminal: false, allowVisits: true, allowNewProject: true, isActive: true, probability: 60 },
+      { key: 'PS-4', code: 'NEGOTIATION', label: 'Negotiation', color: 'border-amber-300', phase: 'SALES', commercialOutcome: 'NONE', isTerminal: false, allowVisits: true, allowNewProject: true, isActive: true, probability: 80 },
+      { key: 'PS-5', code: 'WON', label: 'Won / Deal', color: 'border-emerald-300', phase: 'SALES', commercialOutcome: 'WON', isTerminal: false, allowVisits: true, allowNewProject: false, isActive: true, probability: 100 },
     ];
   }, [pipelineStages, projectStages]);
 
   const totalPipeline = useMemo(() => {
     if (pipelineSummary?.totalPipeline !== undefined) return pipelineSummary.totalPipeline;
     return projects
-      .filter(o => (o as any).stageLifecycleCategory === 'OPEN' || ['LEAD', 'QUALIFICATION', 'PROPOSAL', 'NEGOTIATION', 'PS-1', 'PS-2', 'PS-3', 'PS-4'].includes((o.stageCode || o.stage || o.stageId || '').toUpperCase()))
+      .filter(o => {
+        const stage = stagesToRender.find(s => s.key === o.stageId || s.code === o.stageCode || s.code === o.stage);
+        if (stage) {
+          return stage.phase === 'SALES' && stage.commercialOutcome === 'NONE' && !stage.isTerminal;
+        }
+        return !o.stageIsTerminal && !o.commercialWonAt;
+      })
       .reduce((acc, curr) => acc + (Number(curr.value ?? curr.estimatedValue) || 0), 0);
-  }, [projects, pipelineSummary]);
+  }, [projects, pipelineSummary, stagesToRender]);
 
   const weightedPipeline = useMemo(() => {
     if (pipelineSummary?.weightedPipeline !== undefined) return pipelineSummary.weightedPipeline;
     return projects
-      .filter(o => (o as any).stageLifecycleCategory === 'OPEN' || ['LEAD', 'QUALIFICATION', 'PROPOSAL', 'NEGOTIATION', 'PS-1', 'PS-2', 'PS-3', 'PS-4'].includes((o.stageCode || o.stage || o.stageId || '').toUpperCase()))
+      .filter(o => {
+        const stage = stagesToRender.find(s => s.key === o.stageId || s.code === o.stageCode || s.code === o.stage);
+        if (stage) {
+          return stage.phase === 'SALES' && stage.commercialOutcome === 'NONE' && !stage.isTerminal;
+        }
+        return !o.stageIsTerminal && !o.commercialWonAt;
+      })
       .reduce((acc, curr) => {
         const val = Number(curr.value ?? curr.estimatedValue) || 0;
         const prob = Number((curr as any).effectiveProbability ?? curr.probability ?? 0);
         return acc + ((val * prob) / 100);
       }, 0);
-  }, [projects, pipelineSummary]);
+  }, [projects, pipelineSummary, stagesToRender]);
 
   const totalWon = useMemo(() => {
     if (pipelineSummary?.totalWon !== undefined) return pipelineSummary.totalWon;
     return projects
-      .filter(o => (o as any).stageLifecycleCategory === 'WON' || (o.stageCode || o.stage || o.stageId || '').toUpperCase() === 'WON' || o.stageId === 'PS-5')
+      .filter(o => o.commercialWonAt != null)
       .reduce((acc, curr) => acc + (Number(curr.value ?? curr.estimatedValue) || 0), 0);
   }, [projects, pipelineSummary]);
 
@@ -349,15 +377,29 @@ export const ProjectsPage: React.FC = () => {
       return;
     }
 
-    const fromCategory = (opp as any).stageLifecycleCategory || (['WON', 'PS-5'].includes((opp.stageCode || opp.stage || '').toUpperCase()) ? 'WON' : (opp.stageCode || opp.stage || '').toUpperCase() === 'LOST' ? 'LOST' : 'OPEN');
-    const toCategory = targetObj?.lifecycleCategory || (targetStage === 'WON' || targetStage === 'PS-5' ? 'WON' : targetStage === 'LOST' ? 'LOST' : 'OPEN');
-    const isReopen = (fromCategory === 'WON' || fromCategory === 'LOST') && toCategory === 'OPEN';
-    const isLost = toCategory === 'LOST';
+    const isTerminalFrom = Boolean(opp.stageIsTerminal);
+    const isTerminalTo = Boolean(targetObj?.isTerminal);
+    const isReopen = isTerminalFrom && !isTerminalTo;
+    const isLost = targetObj?.commercialOutcome === 'LOST';
+    const isCancelled = targetObj?.commercialOutcome === 'CANCELLED';
+
+    // Gate 2: LOST is pre-win commercial failure only
+    if (isLost && opp.commercialWonAt) {
+      alert('This project was already won commercially and cannot be marked as LOST. Post-win commercial abortion must use CANCELLED.');
+      return;
+    }
 
     if (isLost) {
       const promptRes = prompt('Please enter a business reason for marking this project as LOST:');
       if (!promptRes || !promptRes.trim()) {
         alert('A business loss reason is required to mark the project as LOST.');
+        return;
+      }
+      reasonInput = promptRes.trim();
+    } else if (isCancelled) {
+      const promptRes = prompt('Please enter a business reason for cancelling this project:');
+      if (!promptRes || !promptRes.trim()) {
+        alert('A business cancellation reason is required to cancel this project.');
         return;
       }
       reasonInput = promptRes.trim();
@@ -373,6 +415,7 @@ export const ProjectsPage: React.FC = () => {
     const targetStageId = targetObj ? targetObj.key : targetStage;
     const res = await crmApi.transitionProjectStage(opp.id, targetStageId, {
       lossReason: isLost ? reasonInput : undefined,
+      cancellationReason: isCancelled ? reasonInput : undefined,
       reopenReason: isReopen ? reasonInput : undefined,
       isReopen,
       expectedFromStage: opp.stageCode || opp.stage || opp.stageId
@@ -462,13 +505,20 @@ export const ProjectsPage: React.FC = () => {
       return <span className="px-2 py-0.5 bg-slate-100 text-slate-500 text-[10px] font-bold rounded uppercase tracking-wider border border-slate-200">Unassigned</span>;
     }
     const stageName = opp?.stageName;
-    const lifecycleCategory = opp?.stageLifecycleCategory;
+    const commercialOutcome = opp?.stageCommercialOutcome;
+    const isTerminal = opp?.stageIsTerminal;
     if (stageName) {
-      if (lifecycleCategory === 'WON') {
+      if (commercialOutcome === 'WON') {
         return <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded uppercase tracking-wider border border-emerald-200">{stageName}</span>;
       }
-      if (lifecycleCategory === 'LOST') {
+      if (commercialOutcome === 'LOST') {
         return <span className="px-2 py-0.5 bg-rose-100 text-rose-700 text-[10px] font-bold rounded uppercase tracking-wider border border-rose-200">{stageName}</span>;
+      }
+      if (commercialOutcome === 'CANCELLED') {
+        return <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-bold rounded uppercase tracking-wider border border-amber-200">{stageName}</span>;
+      }
+      if (isTerminal) {
+        return <span className="px-2 py-0.5 bg-slate-100 text-slate-700 text-[10px] font-bold rounded uppercase tracking-wider border border-slate-300">{stageName}</span>;
       }
       return <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold rounded uppercase tracking-wider border border-blue-200">{stageName}</span>;
     }
@@ -490,6 +540,9 @@ export const ProjectsPage: React.FC = () => {
     }
     if (s === 'LOST') {
       return <span className="px-2 py-0.5 bg-rose-100 text-rose-700 text-[10px] font-bold rounded uppercase tracking-wider border border-rose-200">Lost</span>;
+    }
+    if (s === 'CANCELLED') {
+      return <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-bold rounded uppercase tracking-wider border border-amber-200">Cancelled</span>;
     }
     return <span className="px-2 py-0.5 bg-slate-100 text-slate-600 text-[10px] font-bold rounded uppercase tracking-wider border border-slate-200">{stage || 'Unassigned'}</span>;
   };
@@ -582,7 +635,52 @@ export const ProjectsPage: React.FC = () => {
 
       {viewMode === 'PIPELINE' ? (
         /* Kanban Board */
-        <div className="flex-1 overflow-hidden flex flex-col">
+        <div className="flex-1 overflow-hidden flex flex-col space-y-3">
+          {/* Phase Filter Selector */}
+          <div className="flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => setKanbanPhase('SALES')}
+                className={`px-3 py-1 rounded-lg transition-colors cursor-pointer ${
+                  kanbanPhase === 'SALES' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                Sales Pipeline
+              </button>
+              <button
+                type="button"
+                onClick={() => setKanbanPhase('DELIVERY')}
+                className={`px-3 py-1 rounded-lg transition-colors cursor-pointer ${
+                  kanbanPhase === 'DELIVERY' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                Delivery Pipeline
+              </button>
+              <button
+                type="button"
+                onClick={() => setKanbanPhase('CLOSED')}
+                className={`px-3 py-1 rounded-lg transition-colors cursor-pointer ${
+                  kanbanPhase === 'CLOSED' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                Closed
+              </button>
+              <button
+                type="button"
+                onClick={() => setKanbanPhase('ALL')}
+                className={`px-3 py-1 rounded-lg transition-colors cursor-pointer ${
+                  kanbanPhase === 'ALL' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                All Phases
+              </button>
+            </div>
+            <div className="text-xs text-slate-400 font-medium">
+              Showing {stagesToRender.filter(s => kanbanPhase === 'ALL' || s.phase === kanbanPhase).length} stages
+            </div>
+          </div>
+
           <div className="flex gap-4 overflow-x-auto overflow-y-hidden pb-4 h-full snap-x">
             {/* Unassigned Projects Column */}
             {(() => {
@@ -647,7 +745,7 @@ export const ProjectsPage: React.FC = () => {
               );
             })()}
 
-            {stagesToRender.map((stage) => {
+            {stagesToRender.filter(s => kanbanPhase === 'ALL' || s.phase === kanbanPhase).map((stage) => {
               const stageOpps = projects.filter(o => o.stageId === stage.key || (o.stageCode && o.stageCode === stage.code));
               const stageValue = stageOpps.reduce((acc, curr) => acc + (Number(curr.value ?? curr.estimatedValue) || 0), 0);
               const isInactive = !stage.isActive;
@@ -1115,6 +1213,7 @@ export const ProjectsPage: React.FC = () => {
               setStageModalOpp(proj);
               setSelectedTargetStageId(proj.stageId || '');
               setTransitionLossReason('');
+              setTransitionCancellationReason('');
               setTransitionReopenReason('');
             }}
             className="w-full px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors"
@@ -1158,7 +1257,7 @@ export const ProjectsPage: React.FC = () => {
                 <option value="">Select target stage...</option>
                 {stagesToRender.filter(s => s.isActive !== false).map((s) => (
                   <option key={s.key} value={s.key}>
-                    {s.label} ({s.lifecycleCategory})
+                    {s.label} ({s.phase} &bull; {s.commercialOutcome}{s.isTerminal ? ' &bull; Terminal' : ''})
                   </option>
                 ))}
               </select>
@@ -1166,10 +1265,11 @@ export const ProjectsPage: React.FC = () => {
 
             {(() => {
               const targetObj = stagesToRender.find(s => s.key === selectedTargetStageId || s.code === selectedTargetStageId);
-              const fromCat = (stageModalOpp as any).stageLifecycleCategory || (['WON', 'PS-5'].includes((stageModalOpp.stageCode || stageModalOpp.stage || '').toUpperCase()) ? 'WON' : (stageModalOpp.stageCode || stageModalOpp.stage || '').toUpperCase() === 'LOST' ? 'LOST' : 'OPEN');
-              const toCat = targetObj?.lifecycleCategory || (selectedTargetStageId === 'WON' || selectedTargetStageId === 'PS-5' ? 'WON' : selectedTargetStageId === 'LOST' ? 'LOST' : 'OPEN');
-              const isReopen = (fromCat === 'WON' || fromCat === 'LOST') && toCat === 'OPEN';
-              const isLost = toCat === 'LOST';
+              const isTerminalFrom = Boolean(stageModalOpp.stageIsTerminal);
+              const isTerminalTo = Boolean(targetObj?.isTerminal);
+              const isReopen = isTerminalFrom && !isTerminalTo;
+              const isLost = targetObj?.commercialOutcome === 'LOST';
+              const isCancelled = targetObj?.commercialOutcome === 'CANCELLED';
 
               return (
                 <>
@@ -1187,6 +1287,20 @@ export const ProjectsPage: React.FC = () => {
                       />
                     </div>
                   )}
+                  {isCancelled && (
+                    <div>
+                      <label className="block text-xs font-bold text-amber-700 mb-1.5">
+                        Business Cancellation Reason <span className="text-amber-500">*</span>
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={transitionCancellationReason}
+                        onChange={(e) => setTransitionCancellationReason(e.target.value)}
+                        placeholder="Reason why this project is cancelled..."
+                        className="w-full p-2.5 bg-amber-50/50 border border-amber-200 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                      />
+                    </div>
+                  )}
                   {isReopen && (
                     <div>
                       <label className="block text-xs font-bold text-indigo-700 mb-1.5">
@@ -1196,7 +1310,7 @@ export const ProjectsPage: React.FC = () => {
                         rows={3}
                         value={transitionReopenReason}
                         onChange={(e) => setTransitionReopenReason(e.target.value)}
-                        placeholder="Reason for reopening this completed or lost deal..."
+                        placeholder="Reason for reopening this completed or cancelled deal..."
                         className="w-full p-2.5 bg-indigo-50/50 border border-indigo-200 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                       />
                     </div>
@@ -1219,13 +1333,24 @@ export const ProjectsPage: React.FC = () => {
                 onClick={async () => {
                   if (!stageModalOpp || !selectedTargetStageId) return;
                   const targetObj = stagesToRender.find(s => s.key === selectedTargetStageId || s.code === selectedTargetStageId);
-                  const fromCat = (stageModalOpp as any).stageLifecycleCategory || (['WON', 'PS-5'].includes((stageModalOpp.stageCode || stageModalOpp.stage || '').toUpperCase()) ? 'WON' : (stageModalOpp.stageCode || stageModalOpp.stage || '').toUpperCase() === 'LOST' ? 'LOST' : 'OPEN');
-                  const toCat = targetObj?.lifecycleCategory || (selectedTargetStageId === 'WON' || selectedTargetStageId === 'PS-5' ? 'WON' : selectedTargetStageId === 'LOST' ? 'LOST' : 'OPEN');
-                  const isReopen = (fromCat === 'WON' || fromCat === 'LOST') && toCat === 'OPEN';
-                  const isLost = toCat === 'LOST';
+                  const isTerminalFrom = Boolean(stageModalOpp.stageIsTerminal);
+                  const isTerminalTo = Boolean(targetObj?.isTerminal);
+                  const isReopen = isTerminalFrom && !isTerminalTo;
+                  const isLost = targetObj?.commercialOutcome === 'LOST';
+                  const isCancelled = targetObj?.commercialOutcome === 'CANCELLED';
+
+                  // Gate 2: LOST is pre-win commercial failure only
+                  if (isLost && stageModalOpp.commercialWonAt) {
+                    alert('This project was already won commercially and cannot be marked as LOST. Post-win commercial abortion must use CANCELLED.');
+                    return;
+                  }
 
                   if (isLost && !transitionLossReason.trim()) {
                     alert('A business loss reason is required to mark the project as LOST.');
+                    return;
+                  }
+                  if (isCancelled && !transitionCancellationReason.trim()) {
+                    alert('A business cancellation reason is required to cancel this project.');
                     return;
                   }
                   if (isReopen && !transitionReopenReason.trim()) {
@@ -1237,6 +1362,7 @@ export const ProjectsPage: React.FC = () => {
                   try {
                     const res = await crmApi.transitionProjectStage(stageModalOpp.id, selectedTargetStageId, {
                       lossReason: isLost ? transitionLossReason.trim() : undefined,
+                      cancellationReason: isCancelled ? transitionCancellationReason.trim() : undefined,
                       reopenReason: isReopen ? transitionReopenReason.trim() : undefined,
                       isReopen,
                       expectedFromStage: stageModalOpp.stageCode || stageModalOpp.stage || stageModalOpp.stageId

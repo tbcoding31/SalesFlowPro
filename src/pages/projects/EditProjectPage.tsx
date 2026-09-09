@@ -127,6 +127,11 @@ export const EditProjectPage: React.FC = () => {
     e.preventDefault();
     if (!id || !project) return;
 
+    if (project.stageIsTerminal) {
+      alert(`This project is in a terminal stage ('${project.stageName || project.stage}') and is locked for generic edit. Reopen the project first to make changes.`);
+      return;
+    }
+
     if (!validateForm()) {
       return;
     }
@@ -250,7 +255,7 @@ export const EditProjectPage: React.FC = () => {
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={isSubmitting}
+            disabled={isSubmitting || Boolean(project?.stageIsTerminal)}
             className="flex-1 md:flex-none px-5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-xl shadow-sm transition-colors flex items-center justify-center gap-1.5"
           >
             {isSubmitting ? (
@@ -267,6 +272,17 @@ export const EditProjectPage: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Terminal Lock Warning Banner */}
+      {project?.stageIsTerminal && (
+        <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-3">
+          <span className="material-symbols-outlined text-rose-600 text-xl shrink-0 mt-0.5">lock</span>
+          <div className="text-xs text-rose-900">
+            <span className="font-bold">Project Locked (Terminal Stage): </span>
+            This project is currently in the terminal stage <strong>'{project.stageName || project.stage}'</strong>. General updates are locked. To make changes to this project, transition or reopen it to an active stage first using the <strong>Change Stage</strong> action.
+          </div>
+        </div>
+      )}
 
       {/* Stage Governance Notice Banner */}
       <div className="p-4 bg-indigo-50/70 border border-indigo-100 rounded-xl flex items-start gap-3">

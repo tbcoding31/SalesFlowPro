@@ -42,7 +42,7 @@ export const CreateProjectPage: React.FC = () => {
       setPicId(currentUser.id);
     }
     masterDataApi.fetchMasterData('project_stages', tenantId).then(data => {
-      const activeStages = data.filter(d => d.isActive !== false);
+      const activeStages = data.filter(d => d.isActive !== false && !d.isTerminal && d.allowNewProject !== false);
       setProjectStages(activeStages);
       const def = activeStages.find(d => d.isDefault);
       if (def) {

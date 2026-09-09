@@ -628,7 +628,7 @@ export const crmApi = {
   transitionProjectStage: async (
     projectId: string, 
     stageId: string, 
-    options?: { notes?: string; lossReason?: string; reopenReason?: string; isReopen?: boolean; expectedFromStage?: string } | string
+    options?: { notes?: string; lossReason?: string; cancellationReason?: string; reopenReason?: string; isReopen?: boolean; expectedFromStage?: string } | string
   ): Promise<{ success: boolean; error?: string; code?: string; missingFields?: string[]; data?: any }> => {
     try {
       const payload: any = { stageId };
@@ -637,6 +637,7 @@ export const crmApi = {
       } else if (options) {
         if (options.notes) payload.notes = options.notes;
         if (options.lossReason) payload.lossReason = options.lossReason;
+        if (options.cancellationReason) payload.cancellationReason = options.cancellationReason;
         if (options.reopenReason) payload.reopenReason = options.reopenReason;
         if (options.isReopen !== undefined) payload.isReopen = options.isReopen;
         if (options.expectedFromStage) payload.expectedFromStage = options.expectedFromStage;
