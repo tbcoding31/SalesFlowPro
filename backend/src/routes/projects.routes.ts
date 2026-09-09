@@ -377,6 +377,461 @@ projectsRoutes.get('/:id', async (req: any, res: any) => {
   }
 });
 
+// GET /api/projects/:id/timeline - Chronological activity and transition history
+projectsRoutes.get('/:id/timeline', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { id } = req.params;
+
+  try {
+    // 1. Establish project existence and tenant authority
+    const [projRows]: any = await pool.query(
+      'SELECT id, title, createdAt FROM projects WHERE id = ? AND tenantId = ?',
+      [id, targetTenant]
+    );
+
+    if (projRows.length === 0) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const events: any[] = [];
+
+    // 2. Stage transitions from project_stage_histories (canonical source)
+    const [stageHistories]: any = await pool.query(`
+      SELECT 
+        psh.id, psh.projectId, psh.fromStageId, psh.toStageId, psh.changedById, psh.changedAt, psh.notes,
+        psFrom.name as fromStageName, psFrom.code as fromStageCode,
+        psTo.name as toStageName, psTo.code as toStageCode,
+        u.name as userName, u.email as userEmail, u.avatar as userAvatar
+      FROM project_stage_histories psh
+      LEFT JOIN project_stages psFrom ON (psFrom.id = psh.fromStageId OR psFrom.code = psh.fromStageId)
+      LEFT JOIN project_stages psTo ON (psTo.id = psh.toStageId OR psTo.code = psh.toStageId)
+      LEFT JOIN users u ON u.id = psh.changedById
+      WHERE psh.projectId = ?
+    `, [id]);
+
+    for (const h of stageHistories) {
+      const toLabel = h.toStageName || h.toStageCode || h.toStageId;
+      const fromLabel = h.fromStageName || h.fromStageCode || h.fromStageId || 'Initial';
+      events.push({
+        id: `STAGE_HISTORY:${h.id}`,
+        stableEventKey: `STAGE_HISTORY:${h.id}`,
+        eventType: 'PROJECT_STAGE_CHANGED',
+        type: 'PROJECT',
+        title: `Stage changed to ${toLabel}`,
+        subject: `Stage changed to ${toLabel}`,
+        description: h.notes || `Transitioned from ${fromLabel} to ${toLabel}`,
+        details: h.notes || `Transitioned from ${fromLabel} to ${toLabel}`,
+        occurredAt: h.changedAt,
+        eventTimestamp: h.changedAt,
+        userId: h.changedById,
+        userName: h.userName || 'System',
+        userAvatar: h.userAvatar,
+        metadata: {
+          fromStageId: h.fromStageId,
+          toStageId: h.toStageId,
+          fromStageName: h.fromStageName,
+          toStageName: h.toStageName,
+          notes: h.notes
+        }
+      });
+    }
+
+    // 3. Audit logs (excluding duplicate PROJECT_STAGE_CHANGED)
+    const [auditRows]: any = await pool.query(`
+      SELECT 
+        a.id, a.action, a.entity, a.entityId, a.description, a.timestamp, a.userId,
+        u.name as userName, u.email as userEmail, u.avatar as userAvatar
+      FROM audit_logs a
+      LEFT JOIN users u ON u.id = a.userId
+      WHERE a.tenantId = ? AND a.entity = 'Project' AND a.entityId = ? AND a.action != 'PROJECT_STAGE_CHANGED'
+    `, [targetTenant, id]);
+
+    for (const a of auditRows) {
+      events.push({
+        id: `AUDIT:${a.id}`,
+        stableEventKey: `AUDIT:${a.id}`,
+        eventType: a.action,
+        type: 'AUDIT',
+        title: a.description || a.action,
+        subject: a.description || a.action,
+        description: a.description || a.action,
+        details: a.description || a.action,
+        occurredAt: a.timestamp,
+        eventTimestamp: a.timestamp,
+        userId: a.userId,
+        userName: a.userName || 'System',
+        userAvatar: a.userAvatar
+      });
+    }
+
+    // 4. Tasks (Created & Completed events)
+    const [taskRows]: any = await pool.query(`
+      SELECT 
+        t.id, t.title, t.description, t.createdAt, t.completedAt, t.picId,
+        u.name as picName, u.avatar as picAvatar
+      FROM tasks t
+      LEFT JOIN users u ON u.id = t.picId
+      WHERE t.tenantId = ? AND t.relatedProjectId = ?
+    `, [targetTenant, id]);
+
+    for (const t of taskRows) {
+      if (t.createdAt) {
+        events.push({
+          id: `TASK:${t.id}:CREATED`,
+          stableEventKey: `TASK:${t.id}:CREATED`,
+          eventType: 'TASK_CREATED',
+          type: 'TASK',
+          title: `Task created: ${t.title}`,
+          subject: `Task: ${t.title}`,
+          description: t.description || 'Task scheduled for assignment',
+          details: t.description,
+          occurredAt: t.createdAt,
+          eventTimestamp: t.createdAt,
+          userId: t.picId,
+          userName: t.picName || 'System',
+          userAvatar: t.picAvatar
+        });
+      }
+      if (t.completedAt) {
+        events.push({
+          id: `TASK:${t.id}:COMPLETED`,
+          stableEventKey: `TASK:${t.id}:COMPLETED`,
+          eventType: 'TASK_COMPLETED',
+          type: 'TASK',
+          title: `Task completed: ${t.title}`,
+          subject: `Task completed: ${t.title}`,
+          description: t.description || 'Task marked as completed',
+          details: t.description,
+          occurredAt: t.completedAt,
+          eventTimestamp: t.completedAt,
+          userId: t.picId,
+          userName: t.picName || 'System',
+          userAvatar: t.picAvatar
+        });
+      }
+    }
+
+    // 5. Visits (Scheduled & Completed events)
+    const [visitRows]: any = await pool.query(`
+      SELECT 
+        v.id, v.title, v.visitDate, v.startTime, v.createdAt, v.completedAt, v.picId,
+        u.name as picName, u.avatar as picAvatar
+      FROM visits v
+      LEFT JOIN users u ON u.id = v.picId
+      WHERE v.tenantId = ? AND v.relatedProjectId = ?
+    `, [targetTenant, id]);
+
+    for (const v of visitRows) {
+      const visitOccurred = v.createdAt || v.visitDate;
+      events.push({
+        id: `VISIT:${v.id}:SCHEDULED`,
+        stableEventKey: `VISIT:${v.id}:SCHEDULED`,
+        eventType: 'VISIT_SCHEDULED',
+        type: 'VISIT',
+        title: `Visit scheduled: ${v.title}`,
+        subject: `Visit: ${v.title}`,
+        description: `Visit scheduled for ${v.visitDate ? new Date(v.visitDate).toISOString().split('T')[0] : 'undated'} ${v.startTime || ''}`.trim(),
+        details: v.title,
+        occurredAt: visitOccurred,
+        eventTimestamp: visitOccurred,
+        userId: v.picId,
+        userName: v.picName || 'System',
+        userAvatar: v.picAvatar
+      });
+
+      if (v.completedAt) {
+        events.push({
+          id: `VISIT:${v.id}:COMPLETED`,
+          stableEventKey: `VISIT:${v.id}:COMPLETED`,
+          eventType: 'VISIT_COMPLETED',
+          type: 'VISIT',
+          title: `Visit completed: ${v.title}`,
+          subject: `Visit completed: ${v.title}`,
+          description: 'Visit completed',
+          details: v.title,
+          occurredAt: v.completedAt,
+          eventTimestamp: v.completedAt,
+          userId: v.picId,
+          userName: v.picName || 'System',
+          userAvatar: v.picAvatar
+        });
+      }
+    }
+
+    // 6. Follow-ups (Created & Completed events)
+    const [followUpRows]: any = await pool.query(`
+      SELECT 
+        f.id, f.title, f.notes, f.createdAt, f.completedAt, f.picId,
+        u.name as picName, u.avatar as picAvatar
+      FROM follow_ups f
+      LEFT JOIN users u ON u.id = f.picId
+      WHERE f.tenantId = ? AND f.relatedProjectId = ?
+    `, [targetTenant, id]);
+
+    for (const f of followUpRows) {
+      if (f.createdAt) {
+        events.push({
+          id: `FOLLOWUP:${f.id}:CREATED`,
+          stableEventKey: `FOLLOWUP:${f.id}:CREATED`,
+          eventType: 'FOLLOW_UP_CREATED',
+          type: 'FOLLOW_UP',
+          title: `Follow-up created: ${f.title}`,
+          subject: `Follow-up: ${f.title}`,
+          description: f.notes || 'Follow-up created',
+          details: f.notes,
+          occurredAt: f.createdAt,
+          eventTimestamp: f.createdAt,
+          userId: f.picId,
+          userName: f.picName || 'System',
+          userAvatar: f.picAvatar
+        });
+      }
+      if (f.completedAt) {
+        events.push({
+          id: `FOLLOWUP:${f.id}:COMPLETED`,
+          stableEventKey: `FOLLOWUP:${f.id}:COMPLETED`,
+          eventType: 'FOLLOW_UP_COMPLETED',
+          type: 'FOLLOW_UP',
+          title: `Follow-up completed: ${f.title}`,
+          subject: `Follow-up completed: ${f.title}`,
+          description: f.notes || 'Follow-up marked as completed',
+          details: f.notes,
+          occurredAt: f.completedAt,
+          eventTimestamp: f.completedAt,
+          userId: f.picId,
+          userName: f.picName || 'System',
+          userAvatar: f.picAvatar
+        });
+      }
+    }
+
+    // 7. Activities (Direct project comments / notes)
+    const [activityRows]: any = await pool.query(`
+      SELECT 
+        a.id, a.typeId, a.subject, a.description, a.occurredAt, a.userId,
+        u.name as userName, u.avatar as userAvatar
+      FROM activities a
+      LEFT JOIN users u ON u.id = a.userId
+      WHERE a.tenantId = ? AND a.entityType = 'PROJECT' AND a.entityId = ?
+    `, [targetTenant, id]);
+
+    for (const a of activityRows) {
+      events.push({
+        id: `ACTIVITY:${a.id}`,
+        stableEventKey: `ACTIVITY:${a.id}`,
+        eventType: a.typeId || 'NOTE',
+        type: a.typeId === 'NOTE' ? 'NOTE' : 'ACTIVITY',
+        title: a.subject || 'Activity Note',
+        subject: a.subject || 'Activity Note',
+        description: a.description || '',
+        details: a.description,
+        occurredAt: a.occurredAt,
+        eventTimestamp: a.occurredAt,
+        userId: a.userId,
+        userName: a.userName || 'System',
+        userAvatar: a.userAvatar
+      });
+    }
+
+    // Deduplication check: stableEventKey map
+    const dedupMap = new Map<string, any>();
+    for (const evt of events) {
+      if (!dedupMap.has(evt.stableEventKey)) {
+        dedupMap.set(evt.stableEventKey, evt);
+      }
+    }
+    const uniqueEvents = Array.from(dedupMap.values());
+
+    // Deterministic Sort: eventTimestamp DESC, stableEventKey ASC
+    uniqueEvents.sort((a, b) => {
+      const timeA = new Date(a.eventTimestamp || a.occurredAt || 0).getTime();
+      const timeB = new Date(b.eventTimestamp || b.occurredAt || 0).getTime();
+      if (timeB !== timeA) {
+        return timeB - timeA;
+      }
+      return String(a.stableEventKey).localeCompare(String(b.stableEventKey));
+    });
+
+    // Paginate
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const pageSize = Math.max(1, Math.min(100, parseInt(req.query.pageSize as string) || 25));
+    const totalItems = uniqueEvents.length;
+    const totalPages = Math.ceil(totalItems / pageSize) || 1;
+    const startIndex = (page - 1) * pageSize;
+    const paginatedData = uniqueEvents.slice(startIndex, startIndex + pageSize);
+
+    res.json({
+      data: paginatedData,
+      pagination: {
+        page,
+        pageSize,
+        totalItems,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPreviousPage: page > 1
+      }
+    });
+  } catch (err: any) {
+    console.error(`GET /api/projects/${id}/timeline error:`, err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// GET /api/projects/:id/next-action - Determine authoritative next scheduled action
+projectsRoutes.get('/:id/next-action', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { id } = req.params;
+
+  try {
+    // 1. Establish project existence and tenant authority
+    const [projRows]: any = await pool.query(
+      'SELECT id FROM projects WHERE id = ? AND tenantId = ?',
+      [id, targetTenant]
+    );
+
+    if (projRows.length === 0) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    const candidates: any[] = [];
+
+    // 2. Unfinished Tasks candidate
+    const [taskRows]: any = await pool.query(`
+      SELECT 
+        t.id, t.title, DATE_FORMAT(t.dueDate, '%Y-%m-%d') as actionDate,
+        'TASK' as type, u.name as picName, t.picId,
+        COALESCE(ts.name, 'Pending') as statusName
+      FROM tasks t
+      LEFT JOIN task_statuses ts ON (
+        ts.id = t.statusId 
+        OR ts.code = t.statusId 
+        OR ts.code = CONCAT('TSK_', t.statusId)
+        OR (t.statusId = 'PENDING' AND ts.id = 'TS-1')
+        OR (t.statusId = 'TODO' AND ts.id = 'TS-1')
+        OR (t.statusId = 'IN_PROGRESS' AND ts.id = 'TS-2')
+        OR (t.statusId = 'COMPLETED' AND ts.id = 'TS-3')
+        OR (t.statusId = 'CANCELLED' AND ts.id = 'TS-4')
+      )
+      LEFT JOIN users u ON u.id = t.picId
+      WHERE t.tenantId = ? 
+        AND t.relatedProjectId = ? 
+        AND t.completedAt IS NULL
+        AND COALESCE(ts.code, t.statusId) NOT IN ('TSK_COMPLETED', 'TSK_CANCELLED', 'COMPLETED', 'CANCELLED')
+        AND t.dueDate IS NOT NULL
+        AND t.dueDate >= CURDATE()
+      ORDER BY t.dueDate ASC, t.createdAt ASC
+      LIMIT 1
+    `, [targetTenant, id]);
+
+    if (taskRows.length > 0) {
+      candidates.push({
+        id: taskRows[0].id,
+        title: taskRows[0].title,
+        type: 'TASK',
+        actionDate: taskRows[0].actionDate,
+        actionAt: taskRows[0].actionDate,
+        picName: taskRows[0].picName || 'Unassigned',
+        statusName: taskRows[0].statusName
+      });
+    }
+
+    // 3. Upcoming Visits candidate
+    const [visitRows]: any = await pool.query(`
+      SELECT 
+        v.id, v.title, DATE_FORMAT(v.visitDate, '%Y-%m-%d') as actionDate,
+        v.startTime, 'VISIT' as type, u.name as picName, v.picId,
+        COALESCE(vs.name, 'Planned') as statusName
+      FROM visits v
+      LEFT JOIN visit_statuses vs ON (vs.id = v.statusId OR vs.code = v.statusId)
+      LEFT JOIN users u ON u.id = v.picId
+      WHERE v.tenantId = ? 
+        AND v.relatedProjectId = ? 
+        AND v.completedAt IS NULL
+        AND COALESCE(vs.code, v.statusId) NOT IN ('COMPLETED', 'CANCELLED', 'VS-2', 'VS-3')
+        AND v.visitDate IS NOT NULL
+        AND v.visitDate >= CURDATE()
+      ORDER BY v.visitDate ASC, v.startTime ASC, v.createdAt ASC
+      LIMIT 1
+    `, [targetTenant, id]);
+
+    if (visitRows.length > 0) {
+      const timeStr = visitRows[0].startTime ? ` ${visitRows[0].startTime.substring(0, 5)}` : '';
+      candidates.push({
+        id: visitRows[0].id,
+        title: visitRows[0].title,
+        type: 'VISIT',
+        actionDate: visitRows[0].actionDate,
+        actionAt: `${visitRows[0].actionDate}${timeStr}`,
+        picName: visitRows[0].picName || 'Unassigned',
+        statusName: visitRows[0].statusName
+      });
+    }
+
+    // 4. Pending Follow-ups candidate
+    const [followUpRows]: any = await pool.query(`
+      SELECT 
+        f.id, f.title, DATE_FORMAT(f.followUpDate, '%Y-%m-%d') as actionDate,
+        'FOLLOW_UP' as type, u.name as picName, f.picId,
+        'Pending' as statusName
+      FROM follow_ups f
+      LEFT JOIN users u ON u.id = f.picId
+      WHERE f.tenantId = ? 
+        AND f.relatedProjectId = ? 
+        AND f.completedAt IS NULL
+        AND (f.status = 'PENDING' OR f.status IS NULL)
+        AND f.followUpDate IS NOT NULL
+        AND DATE(f.followUpDate) >= CURDATE()
+      ORDER BY f.followUpDate ASC, f.createdAt ASC
+      LIMIT 1
+    `, [targetTenant, id]);
+
+    if (followUpRows.length > 0) {
+      candidates.push({
+        id: followUpRows[0].id,
+        title: followUpRows[0].title,
+        type: 'FOLLOW_UP',
+        actionDate: followUpRows[0].actionDate,
+        actionAt: followUpRows[0].actionDate,
+        picName: followUpRows[0].picName || 'Unassigned',
+        statusName: followUpRows[0].statusName
+      });
+    }
+
+    if (candidates.length === 0) {
+      return res.json({ nextAction: null });
+    }
+
+    // Sort: Earliest actionDate ASC. Tie-breaker: TASK (1) > VISIT (2) > FOLLOW_UP (3)
+    const priorityMap: Record<string, number> = { TASK: 1, VISIT: 2, FOLLOW_UP: 3 };
+    candidates.sort((a, b) => {
+      const dateDiff = a.actionDate.localeCompare(b.actionDate);
+      if (dateDiff !== 0) return dateDiff;
+      return (priorityMap[a.type] || 99) - (priorityMap[b.type] || 99);
+    });
+
+    return res.json({ nextAction: candidates[0] });
+  } catch (err: any) {
+    console.error(`GET /api/projects/${id}/next-action error:`, err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
 // GET /api/projects/:id/summary - Detail summary with tasks, visits, followups
 projectsRoutes.get('/:id/summary', async (req: any, res: any) => {
   const actorRole = (req as any).userRole;
@@ -768,6 +1223,14 @@ projectsRoutes.put('/:id', async (req: any, res: any) => {
   const { id } = req.params;
   const data = req.body || {};
 
+  // Strict Stage Lifecycle Boundary: generic PUT must not mutate stageId
+  if (data.stageId !== undefined) {
+    return res.status(400).json({
+      error: 'Project stage cannot be updated via generic edit. Use PATCH /api/projects/:id/stage instead.',
+      code: 'PROJECT_STAGE_REQUIRES_DEDICATED_COMMAND'
+    });
+  }
+
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
@@ -815,43 +1278,13 @@ projectsRoutes.put('/:id', async (req: any, res: any) => {
     const value = data.value !== undefined ? Number(data.value) : current.value;
     const probability = data.probability !== undefined ? Number(data.probability) : current.probability;
     const expectedCloseDate = data.expectedCloseDate !== undefined ? data.expectedCloseDate : current.expectedCloseDate;
-    
-    let stageId = current.stageId;
-    if (data.stageId !== undefined) {
-      if (data.stageId === null || data.stageId === '' || String(data.stageId).trim().toLowerCase() === 'null') {
-        stageId = null;
-      } else {
-        const [sRows]: any = await conn.query(
-          'SELECT id, code, name, isActive FROM project_stages WHERE id = ? OR code = ? LIMIT 1',
-          [data.stageId, data.stageId]
-        );
-        if (sRows.length === 0) {
-          await conn.rollback();
-          return res.status(400).json({ error: `Invalid project stage: ${data.stageId}`, code: 'INVALID_STAGE' });
-        }
-        if (!sRows[0].isActive && sRows[0].id !== current.stageId) {
-          await conn.rollback();
-          return res.status(400).json({ error: 'Target stage is inactive and cannot accept project transitions', code: 'INACTIVE_STAGE' });
-        }
-        stageId = sRows[0].id;
-      }
-    }
-
     const description = data.description !== undefined ? data.description : current.description;
 
     await conn.query(`
       UPDATE projects
-      SET customerId = ?, title = ?, value = ?, probability = ?, expectedCloseDate = ?, stageId = ?, description = ?, picId = ?
+      SET customerId = ?, title = ?, value = ?, probability = ?, expectedCloseDate = ?, description = ?, picId = ?
       WHERE id = ? AND tenantId = ?
-    `, [customerId, title, value, probability, expectedCloseDate, stageId, description, picId, id, targetTenant]);
-
-    if (stageId !== current.stageId) {
-      const historyId = 'PSH-' + Date.now() + '-' + crypto.randomBytes(3).toString('hex');
-      await conn.query(`
-        INSERT INTO project_stage_histories (id, projectId, fromStageId, toStageId, changedById, changedAt, notes)
-        VALUES (?, ?, ?, ?, ?, NOW(), ?)
-      `, [historyId, id, current.stageId, stageId, actorUserId, 'Updated via Project Edit']);
-    }
+    `, [customerId, title, value, probability, expectedCloseDate, description, picId, id, targetTenant]);
 
     // Authoritatively synchronize PROJECT_ASSIGNMENT task
     await syncProjectAssignmentTasks(conn, id, targetTenant);
@@ -881,7 +1314,7 @@ projectsRoutes.put('/:id', async (req: any, res: any) => {
         value,
         probability,
         expectedCloseDate,
-        stageId,
+        stageId: current.stageId,
         picId
       }
     });

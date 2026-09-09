@@ -73,6 +73,25 @@ export const ProjectsPage: React.FC = () => {
   const [followUpDate, setFollowUpDate] = useState(new Date().toISOString().split('T')[0]);
   const [followUpNotes, setFollowUpNotes] = useState('');
 
+  // Action Menu and Change Stage Modal State
+  const [activeActionMenuId, setActiveActionMenuId] = useState<string | null>(null);
+  const [stageModalOpp, setStageModalOpp] = useState<Project | null>(null);
+  const [selectedTargetStageId, setSelectedTargetStageId] = useState<string>('');
+  const [transitionLossReason, setTransitionLossReason] = useState<string>('');
+  const [transitionReopenReason, setTransitionReopenReason] = useState<string>('');
+  const [isTransitioning, setIsTransitioning] = useState<boolean>(false);
+
+  React.useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('[data-action-menu]')) {
+        setActiveActionMenuId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   const [pipelineSummary, setPipelineSummary] = useState<any>(null);
   const [pipelineStages, setPipelineStages] = useState<any[]>([]);
   const [projectStages, setProjectStages] = useState<MasterDataItem[]>([]);
@@ -799,17 +818,62 @@ export const ProjectsPage: React.FC = () => {
                         </div>
                       </td>
                       <td className="px-5 py-4 text-right">
-                        <div className="flex items-center justify-end gap-1">
+                        <div className="relative inline-flex items-center justify-end" data-action-menu>
                           <button 
-                            onClick={() => navigate(`/projects/${opp.id}`)}
-                            className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer" 
-                            title="Edit"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveActionMenuId(activeActionMenuId === opp.id ? null : opp.id);
+                            }}
+                            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                              activeActionMenuId === opp.id ? 'bg-indigo-50 text-indigo-600 ring-2 ring-indigo-500/20' : 'text-slate-400 hover:text-indigo-600 hover:bg-indigo-50'
+                            }`}
+                            title="Actions"
                           >
-                            <span className="material-symbols-outlined text-[18px]">edit</span>
-                          </button>
-                          <button className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer" title="More">
                             <span className="material-symbols-outlined text-[18px]">more_vert</span>
                           </button>
+
+                          {activeActionMenuId === opp.id && (
+                            <div className="absolute right-0 top-full mt-1 w-40 bg-white border border-slate-200 rounded-xl shadow-xl z-30 py-1.5 text-left animate-fade-in">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveActionMenuId(null);
+                                  navigate(`/projects/${opp.id}`);
+                                }}
+                                className="w-full px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors"
+                              >
+                                <span className="material-symbols-outlined text-[16px] text-slate-400">visibility</span>
+                                View Details
+                              </button>
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveActionMenuId(null);
+                                  navigate(`/projects/${opp.id}/edit`);
+                                }}
+                                className="w-full px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors"
+                              >
+                                <span className="material-symbols-outlined text-[16px] text-slate-400">edit</span>
+                                Edit Project
+                              </button>
+
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveActionMenuId(null);
+                                  setStageModalOpp(opp);
+                                  setSelectedTargetStageId(opp.stageId || '');
+                                  setTransitionLossReason('');
+                                  setTransitionReopenReason('');
+                                }}
+                                className="w-full px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors"
+                              >
+                                <span className="material-symbols-outlined text-[16px] text-indigo-500">swap_horiz</span>
+                                Change Stage
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -924,6 +988,142 @@ export const ProjectsPage: React.FC = () => {
                 className="px-4 py-2 bg-[#4744e5] text-white text-sm font-bold rounded-xl hover:bg-[#3b38c6] transition-colors"
               >
                 Create Follow Up
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Change Stage Modal */}
+      {stageModalOpp && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-md w-full p-6 space-y-5 animate-fade-in">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-indigo-600 text-xl">swap_horiz</span>
+                <h3 className="text-base font-extrabold text-slate-900 font-['Hanken_Grotesk']">Change Project Stage</h3>
+              </div>
+              <button
+                onClick={() => setStageModalOpp(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+              >
+                <span className="material-symbols-outlined text-lg">close</span>
+              </button>
+            </div>
+
+            <div>
+              <p className="text-xs text-slate-500 mb-1">Project</p>
+              <p className="text-sm font-bold text-slate-900">{stageModalOpp.name || stageModalOpp.title}</p>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">Target Lifecycle Stage</label>
+              <select
+                value={selectedTargetStageId}
+                onChange={(e) => setSelectedTargetStageId(e.target.value)}
+                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 transition-colors"
+              >
+                <option value="">Select target stage...</option>
+                {stagesToRender.filter(s => s.isActive !== false).map((s) => (
+                  <option key={s.key} value={s.key}>
+                    {s.label} ({s.lifecycleCategory})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {(() => {
+              const targetObj = stagesToRender.find(s => s.key === selectedTargetStageId || s.code === selectedTargetStageId);
+              const fromCat = (stageModalOpp as any).stageLifecycleCategory || (['WON', 'PS-5'].includes((stageModalOpp.stageCode || stageModalOpp.stage || '').toUpperCase()) ? 'WON' : (stageModalOpp.stageCode || stageModalOpp.stage || '').toUpperCase() === 'LOST' ? 'LOST' : 'OPEN');
+              const toCat = targetObj?.lifecycleCategory || (selectedTargetStageId === 'WON' || selectedTargetStageId === 'PS-5' ? 'WON' : selectedTargetStageId === 'LOST' ? 'LOST' : 'OPEN');
+              const isReopen = (fromCat === 'WON' || fromCat === 'LOST') && toCat === 'OPEN';
+              const isLost = toCat === 'LOST';
+
+              return (
+                <>
+                  {isLost && (
+                    <div>
+                      <label className="block text-xs font-bold text-rose-700 mb-1.5">
+                        Business Loss Reason <span className="text-rose-500">*</span>
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={transitionLossReason}
+                        onChange={(e) => setTransitionLossReason(e.target.value)}
+                        placeholder="Reason why this project is lost (e.g. competitor pricing, budget cancelled)..."
+                        className="w-full p-2.5 bg-rose-50/50 border border-rose-200 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-rose-500/20"
+                      />
+                    </div>
+                  )}
+                  {isReopen && (
+                    <div>
+                      <label className="block text-xs font-bold text-indigo-700 mb-1.5">
+                        Reopen Reason <span className="text-indigo-500">*</span>
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={transitionReopenReason}
+                        onChange={(e) => setTransitionReopenReason(e.target.value)}
+                        placeholder="Reason for reopening this completed or lost deal..."
+                        className="w-full p-2.5 bg-indigo-50/50 border border-indigo-200 rounded-xl text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                      />
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setStageModalOpp(null)}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-800 bg-slate-100 rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!selectedTargetStageId || isTransitioning}
+                onClick={async () => {
+                  if (!stageModalOpp || !selectedTargetStageId) return;
+                  const targetObj = stagesToRender.find(s => s.key === selectedTargetStageId || s.code === selectedTargetStageId);
+                  const fromCat = (stageModalOpp as any).stageLifecycleCategory || (['WON', 'PS-5'].includes((stageModalOpp.stageCode || stageModalOpp.stage || '').toUpperCase()) ? 'WON' : (stageModalOpp.stageCode || stageModalOpp.stage || '').toUpperCase() === 'LOST' ? 'LOST' : 'OPEN');
+                  const toCat = targetObj?.lifecycleCategory || (selectedTargetStageId === 'WON' || selectedTargetStageId === 'PS-5' ? 'WON' : selectedTargetStageId === 'LOST' ? 'LOST' : 'OPEN');
+                  const isReopen = (fromCat === 'WON' || fromCat === 'LOST') && toCat === 'OPEN';
+                  const isLost = toCat === 'LOST';
+
+                  if (isLost && !transitionLossReason.trim()) {
+                    alert('A business loss reason is required to mark the project as LOST.');
+                    return;
+                  }
+                  if (isReopen && !transitionReopenReason.trim()) {
+                    alert('An explicit business reason is required to reopen this project.');
+                    return;
+                  }
+
+                  setIsTransitioning(true);
+                  try {
+                    const res = await crmApi.transitionProjectStage(stageModalOpp.id, selectedTargetStageId, {
+                      lossReason: isLost ? transitionLossReason.trim() : undefined,
+                      reopenReason: isReopen ? transitionReopenReason.trim() : undefined,
+                      isReopen,
+                      expectedFromStage: stageModalOpp.stageCode || stageModalOpp.stage || stageModalOpp.stageId
+                    });
+                    if (res.success) {
+                      setStageModalOpp(null);
+                      loadData();
+                    } else {
+                      alert(`Stage transition failed: ${res.error}`);
+                    }
+                  } catch (err: any) {
+                    alert(err.message || 'Stage transition failed');
+                  } finally {
+                    setIsTransitioning(false);
+                  }
+                }}
+                className="px-5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-xl shadow-sm flex items-center gap-1.5"
+              >
+                {isTransitioning ? 'Applying...' : 'Apply Stage'}
               </button>
             </div>
           </div>

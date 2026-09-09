@@ -56,24 +56,47 @@ const loadData = async () => {
         if (summaryRes.attentionSignals) {
           setAttentionSignals(summaryRes.attentionSignals);
         }
-        if (proj.customerId) {
-          const cust = await crmApi.fetchRecordById<Customer>('customers', proj.customerId);
-          if (cust) setCustomer(cust);
-        }
         if (summaryRes.tasks) setTasks(summaryRes.tasks);
         if (summaryRes.visits) setVisits(summaryRes.visits);
         if (summaryRes.followups) setFollowups(summaryRes.followups);
-        loadTimeline(1, false);
 
-        const naRes = await crmApi.fetchProjectNextAction(id);
-        if (naRes && naRes.nextAction) {
-          setNextAction(naRes.nextAction);
-        } else {
-          setNextAction(null);
+        // Secondary resources loaded resiliently via Promise.allSettled
+        const secondaryPromises: Promise<any>[] = [];
+
+        if (proj.customerId) {
+          secondaryPromises.push(
+            crmApi.fetchRecordById<Customer>('customers', proj.customerId)
+              .then(cust => { if (cust) setCustomer(cust); })
+              .catch(e => console.warn('Customer load failed resiliently:', e))
+          );
         }
+
+        secondaryPromises.push(
+          crmApi.fetchProjectNextAction(id)
+            .then(naRes => {
+              if (naRes && naRes.nextAction) {
+                setNextAction(naRes.nextAction);
+              } else {
+                setNextAction(null);
+              }
+            })
+            .catch(e => {
+              console.warn('Next action load failed resiliently:', e);
+              setNextAction(null);
+            })
+        );
+
+        secondaryPromises.push(
+          loadTimeline(1, false).catch(e => console.warn('Timeline load failed resiliently:', e))
+        );
+
+        await Promise.allSettled(secondaryPromises);
+      } else {
+        setProject(null);
       }
     } catch (err) {
       console.error('Error loading project details from DB:', err);
+      setProject(null);
     } finally {
       setIsLoading(false);
     }
@@ -87,21 +110,12 @@ const loadData = async () => {
   }, [tenantId]);
 
   const pipelineStages = useMemo(() => {
-    if (dbStages.length > 0) {
-      return dbStages.map(s => ({
-        key: s.id,
-        code: s.codeValue,
-        label: s.label,
-        lifecycleCategory: s.lifecycleCategory || 'OPEN'
-      }));
-    }
-    return [
-      { key: 'PS-1', code: 'LEAD', label: 'Leads', lifecycleCategory: 'OPEN' },
-      { key: 'PS-2', code: 'QUALIFICATION', label: 'Discuss/Follow up', lifecycleCategory: 'OPEN' },
-      { key: 'PS-3', code: 'PROPOSAL', label: 'Proposal Sent', lifecycleCategory: 'OPEN' },
-      { key: 'PS-4', code: 'NEGOTIATION', label: 'Negotiation', lifecycleCategory: 'OPEN' },
-      { key: 'PS-5', code: 'WON', label: 'Won / Deal', lifecycleCategory: 'WON' },
-    ];
+    return dbStages.map(s => ({
+      key: s.id,
+      code: s.codeValue,
+      label: s.label,
+      lifecycleCategory: s.lifecycleCategory || 'OPEN'
+    }));
   }, [dbStages]);
 
   const handleStageChange = async (targetStage: string, isReopen = false) => {
@@ -399,7 +413,10 @@ const loadData = async () => {
         </div>
 
         <div className="bg-slate-50 border-t md:border-t-0 md:border-l border-slate-200 p-6 flex flex-row md:flex-col items-center justify-center gap-3 shrink-0">
-          <button className="flex-1 w-full px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded-xl shadow-sm transition-colors flex items-center justify-center gap-2">
+          <button 
+            onClick={() => navigate(`/projects/${project.id}/edit`)}
+            className="flex-1 w-full px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded-xl shadow-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
+          >
             <span className="material-symbols-outlined text-[18px]">edit</span>
             Edit
           </button>
@@ -463,6 +480,10 @@ const loadData = async () => {
               <span className="material-symbols-outlined text-base">restart_alt</span>
               Reopen Deal
             </button>
+          </div>
+        ) : pipelineStages.length === 0 ? (
+          <div className="py-6 text-center text-xs text-slate-400 font-medium">
+            Stage master data unavailable.
           </div>
         ) : (
           <div className="relative flex justify-between items-center w-full">

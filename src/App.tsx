@@ -43,6 +43,7 @@ import { FollowupDetailPage } from './pages/followups/FollowupDetailPage';
 import { ProjectsPage } from './pages/projects/ProjectsPage';
 import { CreateProjectPage } from './pages/projects/CreateProjectPage';
 import { ProjectDetailPage } from './pages/projects/ProjectDetailPage';
+import { EditProjectPage } from './pages/projects/EditProjectPage';
 import { ActivitiesPage } from './pages/activities/ActivitiesPage';
 import { ActivityDetailPage } from './pages/activities/ActivityDetailPage';
 import { TargetsPage } from './pages/targets/TargetsPage';
@@ -467,6 +468,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <CreateProjectPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/projects/:id/edit"
+            element={
+              <ProtectedRoute>
+                <EditProjectPage />
               </ProtectedRoute>
             }
           />

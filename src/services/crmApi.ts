@@ -725,6 +725,35 @@ export const crmApi = {
     }
   },
 
+  fetchProjectById: async (projectId: string): Promise<Project | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${projectId}`, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch project`);
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchProjectById error]', err);
+      return null;
+    }
+  },
+
+  updateProject: async (projectId: string, payload: any): Promise<{ success: boolean; data?: any; error?: string; code?: string }> => {
+    try {
+      const res = await fetch(`${API_BASE}/projects/${projectId}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to update project', code: data.code };
+      }
+      return { success: true, data };
+    } catch (err: any) {
+      console.error('[crmApi.updateProject error]', err);
+      return { success: false, error: err.message || 'Network error' };
+    }
+  },
+
   // Maintenance Cadence APIs
   fetchCadences: async (filters: { customerId?: string; projectId?: string; tenantId?: string }): Promise<any[]> => {
     try {
