@@ -1187,7 +1187,7 @@ export interface AppMenuItem {
   parentId: string | null;
   parentLabel?: string | null;
   menuScope: 'PLATFORM' | 'TENANT';
-  menuType: 'GROUP' | 'ITEM' | 'SUBMENU';
+  menuType: 'GROUP' | 'ITEM' | 'SUBMENU' | 'MENU' | 'DIVIDER';
   displayOrder: number;
   isActive: boolean | number;
   roles?: string[];

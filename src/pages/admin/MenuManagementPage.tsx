@@ -12,7 +12,7 @@ interface MenuFormData {
   iconKey: string;
   parentId: string;
   menuScope: 'PLATFORM' | 'TENANT';
-  menuType: 'MENU' | 'SUBMENU' | 'ITEM' | 'DIVIDER';
+  menuType: 'GROUP' | 'ITEM' | 'SUBMENU' | 'MENU' | 'DIVIDER';
   displayOrder: number;
   isActive: boolean;
   roles: string[];
@@ -148,7 +148,7 @@ export const MenuManagementPage: React.FC = () => {
       menuScope: (menu.menuScope as any) || 'TENANT',
       menuType: (menu.menuType as any) || 'ITEM',
       displayOrder: menu.displayOrder ?? 10,
-      isActive: menu.isActive ?? true,
+      isActive: Boolean(menu.isActive),
       roles: menu.roles || [],
     });
     setIsFormModalOpen(true);

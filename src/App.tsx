@@ -117,8 +117,16 @@ const DashboardResolver: React.FC = () => {
 };
 
 // Protected Route Guard Wrapper
-function ProtectedRoute({ children, requiredPermission }: { children: React.ReactNode; requiredPermission?: string }) {
-  const { isAuthenticated, isLoading, hasPermission } = useAuth();
+function ProtectedRoute({
+  children,
+  requiredPermission,
+  requiredPlatformUser
+}: {
+  children: React.ReactNode;
+  requiredPermission?: string;
+  requiredPlatformUser?: boolean;
+}) {
+  const { isAuthenticated, isLoading, hasPermission, currentUser } = useAuth();
 
   if (isLoading) {
     return (
@@ -133,6 +141,15 @@ function ProtectedRoute({ children, requiredPermission }: { children: React.Reac
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
+  }
+
+  const isSuperAdmin =
+    currentUser?.role === 'SUPER_ADMIN' ||
+    (currentUser as any)?.roleCode === 'SUPER_ADMIN' ||
+    Boolean((currentUser as any)?.isPlatformUser);
+
+  if (requiredPlatformUser && !isSuperAdmin) {
+    return <Navigate to="/dashboard" replace />;
   }
 
   if (requiredPermission && !hasPermission(requiredPermission)) {

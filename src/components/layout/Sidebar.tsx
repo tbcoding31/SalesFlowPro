@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { navigationApi } from '../../services/navigationApi';
 import { AppMenuItem } from '../../types';
+import { resolveActiveMenuAndAncestors } from '../../utils/navigationResolution';
 
 interface SidebarProps {
   isOpen?: boolean;
@@ -60,8 +61,88 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => 
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // State to manage open/closed accordion sections and submenus
-  const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
+  // Manual expansion and collapse overrides (initial state is completely empty)
+  const [manuallyExpanded, setManuallyExpanded] = useState<Set<string>>(new Set());
+  const [manuallyCollapsed, setManuallyCollapsed] = useState<Set<string>>(new Set());
+
+  // Derive active menu item and its ancestor chain from the current route & query params
+  const activeResolution = useMemo(
+    () => resolveActiveMenuAndAncestors(menuTree, location.pathname, location.search),
+    [menuTree, location.pathname, location.search]
+  );
+
+  // Re-open route-derived parents on navigation/route changes
+  useEffect(() => {
+    setManuallyCollapsed(new Set());
+  }, [location.pathname, location.search]);
+
+  const isSectionOpen = (item: { id?: string; code?: string; label?: string } | string): boolean => {
+    const id = typeof item === 'string' ? item : item.id;
+    const code = typeof item === 'string' ? item : item.code;
+    const label = typeof item === 'string' ? item : item.label;
+
+    // Explicit manual collapse takes precedence for this section
+    if (
+      (id && manuallyCollapsed.has(id)) ||
+      (code && manuallyCollapsed.has(code)) ||
+      (label && manuallyCollapsed.has(label))
+    ) {
+      return false;
+    }
+    // Explicit manual expansion takes precedence
+    if (
+      (id && manuallyExpanded.has(id)) ||
+      (code && manuallyExpanded.has(code)) ||
+      (label && manuallyExpanded.has(label))
+    ) {
+      return true;
+    }
+    // Route-derived active ancestor calculation
+    if (id && activeResolution.ancestorKeys.has(id)) return true;
+    if (code && activeResolution.ancestorKeys.has(code)) return true;
+    if (label && activeResolution.ancestorKeys.has(label)) return true;
+
+    return false;
+  };
+
+  const toggleSection = (item: { id?: string; code?: string; label?: string } | string) => {
+    const id = typeof item === 'string' ? item : item.id;
+    const code = typeof item === 'string' ? item : item.code;
+    const label = typeof item === 'string' ? item : item.label;
+    const currentlyOpen = isSectionOpen(item);
+
+    if (currentlyOpen) {
+      setManuallyExpanded((prev) => {
+        const next = new Set(prev);
+        if (id) next.delete(id);
+        if (code) next.delete(code);
+        if (label) next.delete(label);
+        return next;
+      });
+      setManuallyCollapsed((prev) => {
+        const next = new Set(prev);
+        if (id) next.add(id);
+        if (code) next.add(code);
+        if (label) next.add(label);
+        return next;
+      });
+    } else {
+      setManuallyCollapsed((prev) => {
+        const next = new Set(prev);
+        if (id) next.delete(id);
+        if (code) next.delete(code);
+        if (label) next.delete(label);
+        return next;
+      });
+      setManuallyExpanded((prev) => {
+        const next = new Set(prev);
+        if (id) next.add(id);
+        if (code) next.add(code);
+        if (label) next.add(label);
+        return next;
+      });
+    }
+  };
 
   const loadNavigation = async () => {
     setIsLoading(true);
@@ -70,28 +151,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => 
       const res = await navigationApi.fetchMyNavigation();
       const tree = res.data || [];
       setMenuTree(tree);
-
-      // Auto-open sections containing current route or default first group open
-      const initialOpen: Record<string, boolean> = {};
-      tree.forEach((group, idx) => {
-        // Groups default open if first or active
-        if (idx === 0) initialOpen[group.code] = true;
-
-        if (group.children) {
-          group.children.forEach(item => {
-            if (item.menuType === 'SUBMENU' && item.children) {
-              const isChildActive = item.children.some(c => c.route && location.pathname.startsWith(c.route.split('?')[0]));
-              if (isChildActive) {
-                initialOpen[group.code] = true;
-                initialOpen[item.code] = true;
-              }
-            } else if (item.route && location.pathname.startsWith(item.route.split('?')[0])) {
-              initialOpen[group.code] = true;
-            }
-          });
-        }
-      });
-      setOpenSections(prev => ({ ...initialOpen, ...prev }));
     } catch (err: any) {
       console.error('Failed to load database navigation:', err);
       setLoadError('Failed to load authorized menus. Access denied.');
@@ -103,10 +162,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => 
   useEffect(() => {
     loadNavigation();
   }, [currentUser?.id, currentUser?.role]);
-
-  const toggleSection = (key: string) => {
-    setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
-  };
 
   const handleLogout = () => {
     if (onClose) onClose();
@@ -176,13 +231,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => 
             </div>
           ) : (
             menuTree.map((group) => {
-              const isOpen = openSections[group.code] ?? true;
+              const isOpen = isSectionOpen(group);
               return (
                 <div key={group.id}>
                   {/* Group Header */}
                   <div
                     className="px-3 mb-2 flex items-center justify-between cursor-pointer group"
-                    onClick={() => toggleSection(group.code)}
+                    onClick={() => toggleSection(group)}
                   >
                     <div className="text-[10px] font-bold text-[#464555] uppercase tracking-wider group-hover:text-[#1a1c1c]">
                       {group.label}
@@ -198,13 +253,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => 
                       {group.children.map((item) => {
                         // Case A: SUBMENU (e.g. Customers, Visits, Tasks)
                         if (item.menuType === 'SUBMENU' && item.children && item.children.length > 0) {
-                          const isSubmenuOpen = openSections[item.code] ?? false;
-                          const isParentPathActive = item.route ? location.pathname.startsWith(item.route.split('?')[0]) : false;
+                          const isSubmenuOpen = isSectionOpen(item);
+                          const isParentPathActive =
+                            (item.id && activeResolution.ancestorKeys.has(item.id)) ||
+                            (item.code && activeResolution.ancestorKeys.has(item.code)) ||
+                            (item.route ? location.pathname.startsWith(item.route.split('?')[0]) : false);
 
                           return (
                             <div key={item.id}>
                               <div
-                                onClick={() => toggleSection(item.code)}
+                                onClick={() => toggleSection(item)}
                                 className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm cursor-pointer transition-colors ${
                                   isParentPathActive
                                     ? 'bg-[#e1dfff] text-[#09006b] font-semibold border-l-4 border-[#4744e5]'
@@ -226,24 +284,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => 
                                 <div className="ml-7 mt-1 space-y-1">
                                   {item.children.map((subItem) => {
                                     if (!subItem.route) return null;
-                                    const [targetPath, targetQuery] = subItem.route.split('?');
-                                    const isPathMatch = location.pathname === targetPath;
-                                    let isMatch = isPathMatch;
-                                    if (targetQuery) {
-                                      const params = new URLSearchParams(targetQuery);
-                                      params.forEach((v, k) => {
-                                        if (new URLSearchParams(location.search).get(k) !== v) {
-                                          isMatch = false;
-                                        }
-                                      });
-                                    } else if (location.search && isPathMatch) {
-                                      // If subItem has no query but current has query e.g. /customers vs /customers?filter=my
-                                      // If target is exact /customers without query, check if other child has matching query
-                                      const siblingHasQuery = item.children?.some(c => c.route && c.route.includes('?') && c.route.startsWith(targetPath));
-                                      if (siblingHasQuery && location.search.length > 1) {
-                                        isMatch = false;
-                                      }
-                                    }
+                                    const isMatch =
+                                      activeResolution.activeNode?.id === subItem.id ||
+                                      activeResolution.activeNode?.code === subItem.code;
 
                                     return (
                                       <NavLink
@@ -269,18 +312,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => 
                         // Case B: Standard NavLink Item
                         if (!item.route) return null;
 
+                        const isMatch =
+                          activeResolution.activeNode?.id === item.id ||
+                          activeResolution.activeNode?.code === item.code;
+
                         return (
                           <NavLink
                             key={item.id}
                             to={item.route}
                             onClick={onClose}
-                            className={({ isActive }) =>
-                              `flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
-                                isActive
-                                  ? 'bg-[#e1dfff] text-[#09006b] font-semibold border-l-4 border-[#4744e5]'
-                                  : 'text-[#464555] hover:bg-[#f3f3f3] hover:text-[#1a1c1c]'
-                              }`
-                            }
+                            className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
+                              isMatch
+                                ? 'bg-[#e1dfff] text-[#09006b] font-semibold border-l-4 border-[#4744e5]'
+                                : 'text-[#464555] hover:bg-[#f3f3f3] hover:text-[#1a1c1c]'
+                            }`}
                           >
                             <span className="material-symbols-outlined text-[20px]">
                               {resolveIcon(item.iconKey)}
