@@ -344,9 +344,21 @@ export const CustomerVisitsTab: React.FC<CustomerVisitsTabProps> = ({ customerId
                         {/* Purpose & Subject */}
                         <td className="py-3 px-4">
                           <span className="font-bold text-[#1a1c1c] block text-xs">{v.title}</span>
-                          <span className="text-[10px] font-bold text-[#4744e5] bg-[#4744e5]/5 px-2 py-0.5 rounded inline-block mt-0.5">
-                            {v.purpose || v.purposeName || 'Sales Meeting'}
-                          </span>
+                          <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                            <span className="text-[10px] font-bold text-[#4744e5] bg-[#4744e5]/5 px-2 py-0.5 rounded inline-block">
+                              {v.purpose || v.purposeName || 'Sales Meeting'}
+                            </span>
+                            {v.relatedProjectId && (v.projectName || v.projectTitle) ? (
+                              <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded inline-flex items-center gap-1">
+                                <span className="material-symbols-outlined text-[11px] text-indigo-500">assignment</span>
+                                <span>{v.projectName || v.projectTitle}</span>
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-medium text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                                General Visit
+                              </span>
+                            )}
+                          </div>
                           {v.location && (
                             <span className="text-[11px] text-[#767587] flex items-center gap-1 mt-1">
                               <span className="material-symbols-outlined text-[12px]">location_on</span>

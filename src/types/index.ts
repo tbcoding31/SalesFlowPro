@@ -208,6 +208,11 @@ export interface Visit {
   nextAction?: string | null;
   relatedProjectId?: string | null;
   projectTitle?: string | null;
+  projectName?: string | null;
+  projectCode?: string | null;
+  projectStatusId?: string | null;
+  projectStatusCode?: string | null;
+  projectStatusName?: string | null;
   participants?: any[];
   createdAt: string;
   updatedAt?: string;

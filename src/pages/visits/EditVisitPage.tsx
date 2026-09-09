@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useNavigate, useParams, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { masterDataApi } from '../../services/masterDataApi';
-import { Customer, User, MasterDataItem, Visit } from '../../types';
+import { Customer, User, MasterDataItem, Visit, Project } from '../../types';
 import { crmApi } from '../../services/crmApi';
 import { usersApi } from '../../services/usersApi';
 import { formatDate } from '../../utils/formatters';
@@ -20,10 +20,11 @@ export const EditVisitPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const navContext = useMemo(() => resolveVisitOrigin(searchParams), [searchParams]);
-  const entry = navContext.entry || 'direct';
   const visitsUrl = useMemo(() => buildVisitsUrl(navContext), [navContext]);
   const detailUrl = useMemo(() => buildVisitDetailUrl(id || '', navContext), [id, navContext]);
+  const entry = navContext.entry;
   const returnUrl = useMemo(() => (entry === 'detail' ? detailUrl : visitsUrl), [entry, detailUrl, visitsUrl]);
+
   const { currentUser } = useAuth();
   const tenantId = currentUser?.tenantId;
 
@@ -39,6 +40,11 @@ export const EditVisitPage: React.FC = () => {
 
   // Form State
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+  const [customerProjects, setCustomerProjects] = useState<Project[]>([]);
+  const [isLoadingProjects, setIsLoadingProjects] = useState<boolean>(false);
+  const [historicalProject, setHistoricalProject] = useState<{ id: string; title: string; status: string } | null>(null);
+  const projectRequestSeqRef = useRef<number>(0);
   const [visitDate, setVisitDate] = useState<string>('');
   const [startTime, setStartTime] = useState<string>('09:00');
   const [endTime, setEndTime] = useState<string>('10:30');
@@ -123,6 +129,7 @@ export const EditVisitPage: React.FC = () => {
 
         // Hydrate form state exactly once
         setSelectedCustomerId(visitData.customerId || '');
+        setSelectedProjectId(visitData.relatedProjectId || '');
         setVisitDate(visitData.visitDate || '');
         setStartTime(visitData.startTime ? String(visitData.startTime).slice(0, 5) : '09:00');
         setEndTime(visitData.endTime ? String(visitData.endTime).slice(0, 5) : '10:30');
@@ -138,6 +145,36 @@ export const EditVisitPage: React.FC = () => {
         setAdditionalPicIds(partIds);
 
         setNotes(visitData.notes || '');
+
+        if (visitData.customerId) {
+          const currentSeq = ++projectRequestSeqRef.current;
+          setIsLoadingProjects(true);
+          crmApi.fetchProjects({ customerId: visitData.customerId, statusScope: 'active', pageSize: 100 })
+            .then((res: any) => {
+              if (projectRequestSeqRef.current === currentSeq) {
+                const list: Project[] = Array.isArray(res) ? res : (res?.data || []);
+                setCustomerProjects(list);
+                setIsLoadingProjects(false);
+                if (visitData.relatedProjectId) {
+                  const foundActive = list.some((p) => p.id === visitData.relatedProjectId);
+                  if (!foundActive) {
+                    setHistoricalProject({
+                      id: visitData.relatedProjectId,
+                      title: visitData.projectName || visitData.projectTitle || visitData.relatedProjectId,
+                      status: visitData.projectStatusName || 'Completed'
+                    });
+                  }
+                }
+              }
+            })
+            .catch((err) => {
+              console.error('[EditVisitPage fetchProjects error]', err);
+              if (projectRequestSeqRef.current === currentSeq) {
+                setIsLoadingProjects(false);
+              }
+            });
+        }
+
         setIsHydrated(true);
         setLoading(false);
       })
@@ -215,6 +252,36 @@ export const EditVisitPage: React.FC = () => {
     );
   };
 
+  const handleSelectCustomer = (newCustomerId: string) => {
+    setSelectedCustomerId(newCustomerId);
+    // Invariant: Customer change immediately clears selected project and historical project
+    setSelectedProjectId('');
+    setHistoricalProject(null);
+    setCustomerProjects([]);
+
+    if (errors.customerId) setErrors((prev) => ({ ...prev, customerId: '' }));
+
+    if (!newCustomerId) return;
+
+    const currentSeq = ++projectRequestSeqRef.current;
+    setIsLoadingProjects(true);
+    crmApi.fetchProjects({ customerId: newCustomerId, statusScope: 'active', pageSize: 100 })
+      .then((res: any) => {
+        if (projectRequestSeqRef.current === currentSeq) {
+          const list: Project[] = Array.isArray(res) ? res : (res?.data || []);
+          setCustomerProjects(list);
+          setIsLoadingProjects(false);
+        }
+      })
+      .catch((err) => {
+        console.error('[EditVisitPage fetchProjects on customer change error]', err);
+        if (projectRequestSeqRef.current === currentSeq) {
+          setCustomerProjects([]);
+          setIsLoadingProjects(false);
+        }
+      });
+  };
+
   // Validation
   const validateForm = (): boolean => {
     const newErrors: { [key: string]: string } = {};
@@ -258,6 +325,7 @@ export const EditVisitPage: React.FC = () => {
     try {
       const payload: any = {
         customerId: selectedCustomerId,
+        relatedProjectId: selectedProjectId ? selectedProjectId : null,
         title: title.trim() || (selectedCustomer ? `Client Visit - ${selectedCustomer.name}` : visit.title),
         visitDate,
         startTime,
@@ -431,10 +499,7 @@ export const EditVisitPage: React.FC = () => {
               <select
                 disabled={isTerminalStatus}
                 value={selectedCustomerId}
-                onChange={(e) => {
-                  setSelectedCustomerId(e.target.value);
-                  if (errors.customerId) setErrors({ ...errors, customerId: '' });
-                }}
+                onChange={(e) => handleSelectCustomer(e.target.value)}
                 className={`w-full px-3.5 py-2.5 border rounded-xl text-xs bg-white font-medium text-[#1a1c1c] focus:outline-none focus:border-[#4744e5] focus:ring-1 focus:ring-[#4744e5] ${
                   errors.customerId ? 'border-rose-400' : 'border-[#E1E1E1]'
                 }`}
@@ -448,6 +513,47 @@ export const EditVisitPage: React.FC = () => {
               </select>
               {errors.customerId && (
                 <p className="text-[11px] text-rose-500 font-medium">{errors.customerId}</p>
+              )}
+            </div>
+
+            {/* Related Project Selector */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] flex items-center justify-between">
+                <span>Related Project</span>
+                {isLoadingProjects && (
+                  <span className="text-[10px] text-[#4744e5] flex items-center gap-1 font-semibold">
+                    <span className="material-symbols-outlined text-[12px] animate-spin">progress_activity</span>
+                    Loading active projects...
+                  </span>
+                )}
+              </label>
+              <select
+                disabled={isTerminalStatus || !selectedCustomerId || isLoadingProjects}
+                value={selectedProjectId}
+                onChange={(e) => setSelectedProjectId(e.target.value)}
+                className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-xl text-xs bg-white font-medium text-[#1a1c1c] focus:outline-none focus:border-[#4744e5] focus:ring-1 focus:ring-[#4744e5] disabled:bg-slate-50 disabled:text-slate-400"
+              >
+                <option value="">
+                  {!selectedCustomerId ? '-- Select Customer First --' : '-- No Project / General Visit --'}
+                </option>
+                {historicalProject && historicalProject.id === selectedProjectId && (
+                  <option value={historicalProject.id} disabled>
+                    {historicalProject.title} — ({historicalProject.status})
+                  </option>
+                )}
+                {customerProjects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.title || (p as any).name || p.id}
+                  </option>
+                ))}
+              </select>
+              {selectedCustomerId && !isLoadingProjects && customerProjects.length === 0 && !historicalProject && (
+                <p className="text-[11px] text-[#767587]">No active projects available for this customer.</p>
+              )}
+              {historicalProject && historicalProject.id === selectedProjectId && (
+                <p className="text-[11px] text-amber-600 font-medium">
+                  This project is no longer active. It is retained because this visit is already associated with it.
+                </p>
               )}
             </div>
 

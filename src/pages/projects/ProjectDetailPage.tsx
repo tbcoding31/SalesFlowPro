@@ -548,6 +548,68 @@ const loadData = async () => {
 
           {/* Related Items Tabs (Simplified as stacked lists for now, or just sections) */}
           
+          {/* Visits */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <h3 className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                <span className="material-symbols-outlined text-indigo-500 text-[20px]">calendar_today</span>
+                Related Visits ({visits.length})
+              </h3>
+            </div>
+            <div className="divide-y divide-slate-100">
+              {visits.length > 0 ? (
+                visits.map((v) => (
+                  <div
+                    key={v.id}
+                    onClick={() => navigate(`/visits/${v.id}`)}
+                    className="p-4 hover:bg-slate-50 transition-colors flex items-start gap-3 cursor-pointer group"
+                  >
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+                      (v.statusCode || v.status) === 'COMPLETED' ? 'bg-emerald-100 text-emerald-600' :
+                      (v.statusCode || v.status) === 'CANCELLED' ? 'bg-rose-100 text-rose-600' :
+                      (v.statusCode || v.status) === 'IN_PROGRESS' ? 'bg-indigo-100 text-indigo-600' :
+                      'bg-slate-100 text-slate-500'
+                    }`}>
+                      <span className="material-symbols-outlined text-[16px]">
+                        {(v.statusCode || v.status) === 'COMPLETED' ? 'check_circle' : 'event'}
+                      </span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <h4 className="text-sm font-bold text-slate-800 group-hover:text-indigo-600 transition-colors truncate">
+                          {v.title}
+                        </h4>
+                        <span className={`px-2 py-0.5 text-[10px] font-bold rounded uppercase tracking-wider shrink-0 ${
+                          (v.statusCode || v.status) === 'COMPLETED' ? 'bg-emerald-100 text-emerald-700' :
+                          (v.statusCode || v.status) === 'CANCELLED' ? 'bg-rose-100 text-rose-700' :
+                          (v.statusCode || v.status) === 'IN_PROGRESS' ? 'bg-indigo-100 text-indigo-700' :
+                          'bg-slate-100 text-slate-700'
+                        }`}>
+                          {v.statusName || v.statusCode || v.status || 'Planned'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-slate-500">
+                        <span className="flex items-center gap-1">
+                          <span className="material-symbols-outlined text-[14px]">calendar_month</span>
+                          {v.visitDate ? new Date(v.visitDate).toLocaleDateString() : '-'}
+                        </span>
+                        {v.startTime && (
+                          <span className="flex items-center gap-1">
+                            <span className="material-symbols-outlined text-[14px]">schedule</span>
+                            {v.startTime} - {v.endTime}
+                          </span>
+                        )}
+                        <span>PIC: {v.picName || 'Unassigned'}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="p-6 text-center text-sm text-slate-500">No related visits found.</div>
+              )}
+            </div>
+          </div>
+
           {/* Tasks */}
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">

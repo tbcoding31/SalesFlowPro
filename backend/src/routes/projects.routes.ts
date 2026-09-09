@@ -26,7 +26,7 @@ projectsRoutes.get('/', async (req: any, res: any) => {
   try {
     let extraWhere = '';
     const extraParams: any[] = [];
-    const { customerId, picId, stageId, search } = req.query;
+    const { customerId, picId, stageId, search, statusScope, status } = req.query;
 
     if (customerId && customerId !== 'ALL') {
       extraWhere += ' AND p.customerId = ?';
@@ -40,6 +40,15 @@ projectsRoutes.get('/', async (req: any, res: any) => {
       extraWhere += ' AND p.stageId = ?';
       extraParams.push(stageId);
     }
+    if (statusScope === 'active' || status === 'active') {
+      extraWhere += ` AND (
+        p.stageId IS NULL 
+        OR (
+          p.stageId NOT IN ('PS-5', 'WON', 'COMPLETED', 'CLOSED_WON', 'LOST', 'CANCELLED', 'CLOSED_LOST', 'ARCHIVED')
+          AND (ps.code IS NULL OR ps.code NOT IN ('WON', 'COMPLETED', 'CLOSED_WON', 'LOST', 'CANCELLED', 'CLOSED_LOST', 'ARCHIVED'))
+        )
+      )`;
+    }
     if (search && typeof search === 'string' && search.trim()) {
       extraWhere += ' AND (p.title LIKE ? OR p.description LIKE ?)';
       const s = `%${search.trim()}%`;
@@ -50,10 +59,12 @@ projectsRoutes.get('/', async (req: any, res: any) => {
       SELECT 
         p.*,
         c.name as customerName, c.code as customerCode,
-        u.name as picName, u.email as picEmail, u.avatar as picAvatar
+        u.name as picName, u.email as picEmail, u.avatar as picAvatar,
+        ps.name as stageName, ps.code as stageCode
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
       LEFT JOIN users u ON u.id = p.picId
+      LEFT JOIN project_stages ps ON (ps.id = p.stageId OR ps.code = p.stageId)
       ${where.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
       ${extraWhere}
       ORDER BY p.createdAt DESC
@@ -85,10 +96,12 @@ projectsRoutes.get('/:id', async (req: any, res: any) => {
       SELECT 
         p.*,
         c.name as customerName, c.code as customerCode,
-        u.name as picName, u.email as picEmail, u.avatar as picAvatar
+        u.name as picName, u.email as picEmail, u.avatar as picAvatar,
+        ps.name as stageName, ps.code as stageCode
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
       LEFT JOIN users u ON u.id = p.picId
+      LEFT JOIN project_stages ps ON (ps.id = p.stageId OR ps.code = p.stageId)
       WHERE p.id = ? AND p.tenantId = ?
     `, [id, targetTenant]);
 

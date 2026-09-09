@@ -381,8 +381,8 @@ export const VisitDetailPage: React.FC = () => {
         </div>
       )}
 
-      {/* METRIC / ESSENTIAL DATA CARDS (6 CARDS) */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      {/* METRIC / ESSENTIAL DATA CARDS (7 CARDS) */}
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
         {/* Customer Account */}
         <div className="bg-white p-4 rounded-2xl border border-[#E1E1E1] shadow-2xs space-y-1">
           <div className="flex items-center gap-1.5 text-[#767587]">
@@ -391,6 +391,35 @@ export const VisitDetailPage: React.FC = () => {
           </div>
           <p className="text-xs font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk'] truncate">{visit.customerName}</p>
           <p className="text-[10px] text-[#767587]">{visit.customerCode || '—'}</p>
+        </div>
+
+        {/* Project Context */}
+        <div className="bg-white p-4 rounded-2xl border border-[#E1E1E1] shadow-2xs space-y-1">
+          <div className="flex items-center gap-1.5 text-[#767587]">
+            <span className="material-symbols-outlined text-[16px]">assignment</span>
+            <span className="text-[10px] font-extrabold uppercase tracking-wider font-['Hanken_Grotesk']">Project</span>
+          </div>
+          {visit.relatedProjectId ? (
+            <div>
+              <Link
+                to={`/projects/${visit.relatedProjectId}`}
+                className="text-xs font-extrabold text-[#4744e5] hover:underline font-['Hanken_Grotesk'] truncate block"
+                title={visit.projectName || visit.projectTitle || visit.relatedProjectId}
+              >
+                {visit.projectName || visit.projectTitle || visit.relatedProjectId}
+              </Link>
+              <p className="text-[10px] text-[#767587] truncate">
+                {visit.projectStatusName ? `Status: ${visit.projectStatusName}` : (visit.projectCode || 'Linked Project')}
+              </p>
+            </div>
+          ) : (
+            <div>
+              <p className="text-xs font-semibold text-[#767587] font-['Hanken_Grotesk']">
+                General Visit
+              </p>
+              <p className="text-[10px] text-slate-400">No Project associated</p>
+            </div>
+          )}
         </div>
 
         {/* Date */}

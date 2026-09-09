@@ -869,9 +869,23 @@ export const VisitsPage: React.FC = () => {
                         >
                           {v.customerName}
                         </Link>
-                        <span className="text-[10px] text-[#767587] font-mono bg-slate-100 px-1.5 py-0.5 rounded">
-                          {v.customerCode}
-                        </span>
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                          {v.customerCode && (
+                            <span className="text-[10px] text-[#767587] font-mono bg-slate-100 px-1.5 py-0.5 rounded">
+                              {v.customerCode}
+                            </span>
+                          )}
+                          {v.relatedProjectId && (v.projectName || v.projectTitle) && (
+                            <Link
+                              to={`/projects/${v.relatedProjectId}`}
+                              className="text-[10px] font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-1.5 py-0.5 rounded inline-flex items-center gap-0.5"
+                              title={v.projectName || v.projectTitle || ''}
+                            >
+                              <span className="material-symbols-outlined text-[11px]">assignment</span>
+                              <span className="max-w-[120px] truncate">{v.projectName || v.projectTitle}</span>
+                            </Link>
+                          )}
+                        </div>
                       </td>
 
                       {/* 4. Purpose */}
@@ -1281,6 +1295,14 @@ export const VisitsPage: React.FC = () => {
                               <div className="font-extrabold text-xs text-[#1a1c1c] group-hover:text-[#4744e5] transition-colors leading-tight font-['Hanken_Grotesk']">
                                 {v.customerName}
                               </div>
+
+                              {/* Project (only if associated) */}
+                              {v.relatedProjectId && (v.projectName || v.projectTitle) && (
+                                <div className="text-[10px] text-indigo-600 font-semibold truncate flex items-center gap-0.5">
+                                  <span className="material-symbols-outlined text-[11px]">assignment</span>
+                                  <span className="truncate">{v.projectName || v.projectTitle}</span>
+                                </div>
+                              )}
 
                               {/* Purpose */}
                               <div className="text-[11px] text-[#767587] font-medium leading-tight">

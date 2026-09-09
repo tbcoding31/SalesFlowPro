@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { masterDataApi } from '../../services/masterDataApi';
-import { Customer, User, VisitStatus, MasterDataItem } from '../../types';
+import { Customer, User, VisitStatus, MasterDataItem, Project } from '../../types';
 import { crmApi } from '../../services/crmApi';
 import { usersApi } from '../../services/usersApi';
 import { resolveVisitOrigin, buildVisitsUrl } from '../../utils/visitNavigation';
@@ -29,6 +29,11 @@ export const CreateVisitPage: React.FC = () => {
 
   // Form State
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+  const [customerProjects, setCustomerProjects] = useState<Project[]>([]);
+  const [isLoadingProjects, setIsLoadingProjects] = useState<boolean>(false);
+  const projectRequestSeqRef = useRef<number>(0);
+
   const [visitDate, setVisitDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
   const [startTime, setStartTime] = useState<string>('09:00');
   const [endTime, setEndTime] = useState<string>('10:30');
@@ -136,6 +141,14 @@ export const CreateVisitPage: React.FC = () => {
   // Handle Customer Selection
   const handleSelectCustomer = (id: string) => {
     setSelectedCustomerId(id);
+    // Invariant: Customer change immediately clears selected project
+    setSelectedProjectId('');
+    setCustomerProjects([]);
+
+    if (!id) {
+      return;
+    }
+
     const cus = customers.find((c) => c.id === id);
     if (cus) {
       if (!location || location === '') {
@@ -146,12 +159,36 @@ export const CreateVisitPage: React.FC = () => {
         setTitle(`${pLabel || 'Meeting'} - ${cus.name}`);
       }
     }
+
+    const currentSeq = ++projectRequestSeqRef.current;
+    setIsLoadingProjects(true);
+    crmApi.fetchProjects({ customerId: id, statusScope: 'active', pageSize: 100 })
+      .then((res: any) => {
+        if (projectRequestSeqRef.current === currentSeq) {
+          const list = Array.isArray(res) ? res : (res?.data || []);
+          setCustomerProjects(list);
+          setIsLoadingProjects(false);
+        }
+      })
+      .catch((err) => {
+        console.error('[CreateVisitPage fetchProjects error]', err);
+        if (projectRequestSeqRef.current === currentSeq) {
+          setCustomerProjects([]);
+          setIsLoadingProjects(false);
+        }
+      });
   };
 
   // Selected Customer details
   const selectedCustomer = useMemo(
     () => customers.find((c) => c.id === selectedCustomerId),
     [customers, selectedCustomerId]
+  );
+
+  // Selected Project details
+  const selectedProject = useMemo(
+    () => customerProjects.find((p) => p.id === selectedProjectId) || null,
+    [customerProjects, selectedProjectId]
   );
 
   // Selected PIC info
@@ -209,6 +246,7 @@ export const CreateVisitPage: React.FC = () => {
     try {
       const payload = {
         customerId: selectedCustomerId,
+        relatedProjectId: selectedProjectId ? selectedProjectId : null,
         picId: resolvedPicId,
         title: title || `${purpose || 'Meeting'} - ${cus?.name || 'Customer'}`,
         purpose: purpose,
@@ -311,6 +349,37 @@ export const CreateVisitPage: React.FC = () => {
                 </option>
               ))}
             </select>
+          </div>
+
+          {/* Related Project Selector */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-[#1a1c1c] font-['Hanken_Grotesk'] flex items-center justify-between">
+              <span>Related Project</span>
+              {isLoadingProjects && (
+                <span className="text-[10px] text-[#4744e5] flex items-center gap-1 font-semibold">
+                  <span className="material-symbols-outlined text-[12px] animate-spin">progress_activity</span>
+                  Loading active projects...
+                </span>
+              )}
+            </label>
+            <select
+              disabled={!selectedCustomerId || isLoadingProjects}
+              value={selectedProjectId}
+              onChange={(e) => setSelectedProjectId(e.target.value)}
+              className="w-full px-3.5 py-2.5 border border-[#E1E1E1] rounded-xl text-xs bg-white text-[#1a1c1c] focus:outline-none focus:border-[#4744e5] focus:ring-1 focus:ring-[#4744e5] font-medium disabled:bg-slate-50 disabled:text-slate-400"
+            >
+              <option value="">
+                {!selectedCustomerId ? '-- Select Customer First --' : '-- No Project / General Visit --'}
+              </option>
+              {customerProjects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.title || (p as any).name || p.id}
+                </option>
+              ))}
+            </select>
+            {selectedCustomerId && !isLoadingProjects && customerProjects.length === 0 && (
+              <p className="text-[11px] text-[#767587]">No active projects available for this customer.</p>
+            )}
           </div>
 
           {/* Visit Purpose */}
@@ -702,7 +771,7 @@ export const CreateVisitPage: React.FC = () => {
           </span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 bg-[#f8f8fb] p-4 rounded-xl border border-[#E1E1E1]">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 bg-[#f8f8fb] p-4 rounded-xl border border-[#E1E1E1]">
           {/* Summary Item: Customer */}
           <div className="space-y-0.5">
             <span className="text-[10px] font-extrabold text-[#767587] uppercase tracking-wider font-['Hanken_Grotesk'] block">
@@ -713,6 +782,19 @@ export const CreateVisitPage: React.FC = () => {
             </p>
             {selectedCustomer && (
               <p className="text-[10px] text-[#767587] font-medium">{selectedCustomer.code}</p>
+            )}
+          </div>
+
+          {/* Summary Item: Project */}
+          <div className="space-y-0.5">
+            <span className="text-[10px] font-extrabold text-[#767587] uppercase tracking-wider font-['Hanken_Grotesk'] block">
+              Project
+            </span>
+            <p className="text-xs font-extrabold text-[#1a1c1c] truncate font-['Hanken_Grotesk']">
+              {selectedProject ? selectedProject.title || (selectedProject as any).name : 'General Visit / No Project'}
+            </p>
+            {selectedProject && (
+              <p className="text-[10px] text-indigo-600 font-medium">{selectedProject.id}</p>
             )}
           </div>
 

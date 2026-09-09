@@ -94,9 +94,9 @@ visitsRoutes.get('/', async (req: any, res: any) => {
     }
 
     if (search && typeof search === 'string' && search.trim()) {
-      extraWhere += ' AND (v.title LIKE ? OR v.location LIKE ? OR v.result LIKE ?)';
+      extraWhere += ' AND (v.title LIKE ? OR v.location LIKE ? OR v.result LIKE ? OR p.title LIKE ?)';
       const s = `%${search.trim()}%`;
-      extraParams.push(s, s, s);
+      extraParams.push(s, s, s, s);
     }
 
     const countSql = `
@@ -104,6 +104,7 @@ visitsRoutes.get('/', async (req: any, res: any) => {
       FROM visits v
       LEFT JOIN visit_statuses vs ON vs.id = v.statusId
       LEFT JOIN visit_purposes vp ON vp.id = v.purposeId
+      LEFT JOIN projects p ON p.id = v.relatedProjectId AND p.tenantId = v.tenantId
       ${where.replace(/WHERE tenantId/g, 'WHERE v.tenantId')}
       ${extraWhere}
     `;
@@ -131,12 +132,18 @@ visitsRoutes.get('/', async (req: any, res: any) => {
         vp.code as purposeCode, vp.name as purposeName,
         vp.name as purpose,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
-        c.name as customerName, c.code as customerCode
+        c.name as customerName, c.code as customerCode,
+        p.title as projectTitle, p.title as projectName, p.id as projectCode,
+        COALESCE(ps.id, p.stageId) as projectStatusId,
+        COALESCE(ps.code, p.stageId) as projectStatusCode,
+        COALESCE(ps.name, p.stageId) as projectStatusName
       FROM visits v
       LEFT JOIN visit_statuses vs ON vs.id = v.statusId
       LEFT JOIN visit_purposes vp ON vp.id = v.purposeId
       LEFT JOIN users u ON u.id = v.picId
       LEFT JOIN customers c ON c.id = v.customerId
+      LEFT JOIN projects p ON p.id = v.relatedProjectId AND p.tenantId = v.tenantId
+      LEFT JOIN project_stages ps ON (ps.id = p.stageId OR ps.code = p.stageId)
       ${where.replace(/WHERE tenantId/g, 'WHERE v.tenantId')}
       ${extraWhere}
       ORDER BY v.visitDate DESC, v.createdAt DESC
@@ -194,13 +201,17 @@ visitsRoutes.get('/:id', async (req: any, res: any) => {
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
         c.name as customerName, c.code as customerCode,
         (SELECT address FROM customer_addresses ca WHERE ca.customerId = c.id ORDER BY ca.isPrimary DESC LIMIT 1) as customerAddress,
-        p.title as projectTitle
+        p.title as projectTitle, p.title as projectName, p.id as projectCode,
+        COALESCE(ps.id, p.stageId) as projectStatusId,
+        COALESCE(ps.code, p.stageId) as projectStatusCode,
+        COALESCE(ps.name, p.stageId) as projectStatusName
       FROM visits v
       LEFT JOIN visit_statuses vs ON vs.id = v.statusId
       LEFT JOIN visit_purposes vp ON vp.id = v.purposeId
       LEFT JOIN users u ON u.id = v.picId
       LEFT JOIN customers c ON c.id = v.customerId
-      LEFT JOIN projects p ON p.id = v.relatedProjectId
+      LEFT JOIN projects p ON p.id = v.relatedProjectId AND p.tenantId = v.tenantId
+      LEFT JOIN project_stages ps ON (ps.id = p.stageId OR ps.code = p.stageId)
       WHERE v.id = ? AND v.tenantId = ?
     `, [id, targetTenant]);
 
@@ -297,17 +308,35 @@ visitsRoutes.post('/', async (req: any, res: any) => {
 
   // Validate optional project
   let resolvedProjectId: string | null = null;
-  const projCandidate = relatedProjectId || data.projectId;
-  if (projCandidate) {
-    const [pRows]: any = await pool.query(
-      'SELECT id FROM projects WHERE id = ? AND tenantId = ? AND customerId = ?',
-      [projCandidate, targetTenant, customer.id]
+  const projCandidate = relatedProjectId !== undefined ? relatedProjectId : data.projectId;
+  if (projCandidate !== undefined && projCandidate !== null && String(projCandidate).trim() !== '' && String(projCandidate).trim().toLowerCase() !== 'null') {
+    const pId = String(projCandidate).trim();
+    // Validate project existence
+    const [pAllRows]: any = await pool.query(
+      'SELECT id, tenantId, customerId, stageId FROM projects WHERE id = ?',
+      [pId]
     );
-    if (pRows.length > 0) {
-      resolvedProjectId = pRows[0].id;
-    } else {
-      return res.status(400).json({ error: 'Invalid or cross-customer project specified', code: 'INVALID_PROJECT' });
+    if (pAllRows.length === 0) {
+      return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
     }
+    const candidateProj = pAllRows[0];
+    if (candidateProj.tenantId !== targetTenant) {
+      return res.status(403).json({ error: 'Cross-tenant project assignment denied', code: 'PROJECT_TENANT_MISMATCH' });
+    }
+    if (candidateProj.customerId !== customer.id) {
+      return res.status(400).json({ error: 'Project does not belong to the selected customer', code: 'PROJECT_CUSTOMER_MISMATCH' });
+    }
+    // Validate active status for new selection
+    const [psRows]: any = await pool.query(
+      'SELECT ps.code FROM projects p LEFT JOIN project_stages ps ON (ps.id = p.stageId OR ps.code = p.stageId) WHERE p.id = ?',
+      [pId]
+    );
+    const stageCode = psRows[0]?.code || candidateProj.stageId || '';
+    const inactiveStages = ['PS-5', 'WON', 'COMPLETED', 'CLOSED_WON', 'LOST', 'CANCELLED', 'CLOSED_LOST', 'ARCHIVED'];
+    if (inactiveStages.includes(candidateProj.stageId) || inactiveStages.includes(stageCode)) {
+      return res.status(400).json({ error: 'Completed or cancelled project cannot be assigned to a new visit', code: 'PROJECT_NOT_ACTIVE' });
+    }
+    resolvedProjectId = candidateProj.id;
   }
 
   // Resolve statusId
@@ -409,6 +438,7 @@ visitsRoutes.post('/', async (req: any, res: any) => {
         startTime: sTime,
         endTime: eTime,
         location: loc,
+        relatedProjectId: resolvedProjectId,
         statusId: resolvedStatusId,
         statusCode: 'PLANNED',
         statusName: 'Planned'
@@ -476,6 +506,46 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
       }
     }
 
+    let resolvedProjectId = current.relatedProjectId;
+    if ('relatedProjectId' in data || 'projectId' in data) {
+      const projCandidate = data.relatedProjectId !== undefined ? data.relatedProjectId : data.projectId;
+      if (projCandidate === null || projCandidate === '' || String(projCandidate).trim().toLowerCase() === 'null') {
+        resolvedProjectId = null;
+      } else {
+        const pId = String(projCandidate).trim();
+        const [pAllRows]: any = await pool.query(
+          'SELECT id, tenantId, customerId, stageId FROM projects WHERE id = ?',
+          [pId]
+        );
+        if (pAllRows.length === 0) {
+          return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
+        }
+        const candidateProj = pAllRows[0];
+        if (candidateProj.tenantId !== targetTenant) {
+          return res.status(403).json({ error: 'Cross-tenant project assignment denied', code: 'PROJECT_TENANT_MISMATCH' });
+        }
+        if (candidateProj.customerId !== customerId) {
+          return res.status(400).json({ error: 'Project does not belong to the selected customer', code: 'PROJECT_CUSTOMER_MISMATCH' });
+        }
+        // If changing to a DIFFERENT project than the current historical link, enforce ACTIVE
+        if (pId !== current.relatedProjectId) {
+          const [psRows]: any = await pool.query(
+            'SELECT ps.code FROM projects p LEFT JOIN project_stages ps ON (ps.id = p.stageId OR ps.code = p.stageId) WHERE p.id = ?',
+            [pId]
+          );
+          const stageCode = psRows[0]?.code || candidateProj.stageId || '';
+          const inactiveStages = ['PS-5', 'WON', 'COMPLETED', 'CLOSED_WON', 'LOST', 'CANCELLED', 'CLOSED_LOST', 'ARCHIVED'];
+          if (inactiveStages.includes(candidateProj.stageId) || inactiveStages.includes(stageCode)) {
+            return res.status(400).json({ error: 'Completed or cancelled project cannot be newly assigned to a visit', code: 'PROJECT_NOT_ACTIVE' });
+          }
+        }
+        resolvedProjectId = candidateProj.id;
+      }
+    } else if (data.customerId && customerId !== current.customerId) {
+      // Customer changed and no project specified: clear project
+      resolvedProjectId = null;
+    }
+
     let statusId = current.statusId;
     if (data.statusId || data.status) {
       const sVal = String(data.statusId || data.status).trim();
@@ -512,9 +582,9 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
 
     await pool.query(`
       UPDATE visits
-      SET customerId = ?, title = ?, visitDate = ?, startTime = ?, endTime = ?, location = ?, notes = ?, result = ?, nextAction = ?, statusId = ?, purposeId = ?, picId = ?, completedAt = ?, updatedAt = NOW()
+      SET customerId = ?, relatedProjectId = ?, title = ?, visitDate = ?, startTime = ?, endTime = ?, location = ?, notes = ?, result = ?, nextAction = ?, statusId = ?, purposeId = ?, picId = ?, completedAt = ?, updatedAt = NOW()
       WHERE id = ? AND tenantId = ?
-    `, [customerId, title, visitDate, startTime, endTime, location, notes, result, nextAction, statusId, purposeId, picId, completedAtVal, id, targetTenant]);
+    `, [customerId, resolvedProjectId, title, visitDate, startTime, endTime, location, notes, result, nextAction, statusId, purposeId, picId, completedAtVal, id, targetTenant]);
 
     if (Array.isArray(data.additionalPicIds)) {
       await pool.query('DELETE FROM visit_participants WHERE visitId = ?', [id]);
@@ -546,6 +616,7 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
       success: true,
       id,
       customerId,
+      relatedProjectId: resolvedProjectId,
       title,
       location,
       visitDate,
