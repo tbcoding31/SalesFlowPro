@@ -13,23 +13,26 @@ export const SalesDashboard: React.FC = () => {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
+  const [upcomingReminders, setUpcomingReminders] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   const loadData = async () => {
     setIsLoading(true);
     try {
-      const [agendaData, attentionData, cList, pList, aList] = await Promise.all([
+      const [agendaData, attentionData, cList, pList, aList, reminderList] = await Promise.all([
         crmApi.fetchSalesAgenda(),
         crmApi.fetchSalesAttention(),
         crmApi.fetchCollection<Customer>('customers', tenantId),
         crmApi.fetchCollection<Project>('projects', tenantId),
-        crmApi.fetchCollection<Activity>('activities', tenantId)
+        crmApi.fetchCollection<Activity>('activities', tenantId),
+        crmApi.fetchUpcomingVisitReminders()
       ]);
       setAgenda(agendaData);
       setAttention(attentionData);
       setCustomers(cList);
       setProjects(pList);
       setActivities(aList);
+      setUpcomingReminders(reminderList || []);
     } catch (err) {
       console.error('Failed to load dashboard data from DB:', err);
     } finally {
@@ -223,6 +226,82 @@ export const SalesDashboard: React.FC = () => {
             Active projects with zero future schedule
           </div>
         </div>
+      </div>
+
+      {/* Upcoming Visit Reminders (UAT-FEATURE-062) */}
+      <div className="bg-white p-6 rounded-xl border border-indigo-200/80 shadow-xs space-y-4 ring-1 ring-indigo-50">
+        <div className="flex justify-between items-center border-b border-indigo-100 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+              <span className="material-symbols-outlined text-[20px]">notifications_active</span>
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-slate-900 font-['Hanken_Grotesk'] flex items-center gap-2">
+                <span>Upcoming Visit Reminders</span>
+              </h2>
+              <p className="text-xs text-slate-500">Scheduled visits within your organization's reminder window</p>
+            </div>
+          </div>
+          <span className="px-2.5 py-0.5 bg-indigo-100 text-indigo-700 text-xs font-extrabold rounded-full">
+            {upcomingReminders.length} Active
+          </span>
+        </div>
+
+        {upcomingReminders.length === 0 ? (
+          <div className="p-6 text-center text-xs text-slate-500 bg-slate-50/50 rounded-xl border border-slate-200/60">
+            No upcoming visits scheduled within your configured reminder lead window.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {upcomingReminders.map((visit) => {
+              const chipColor =
+                visit.daysUntil === 0
+                  ? 'bg-rose-100 text-rose-800 border-rose-200'
+                  : visit.daysUntil === 1
+                  ? 'bg-amber-100 text-amber-800 border-amber-200'
+                  : 'bg-indigo-50 text-indigo-700 border-indigo-200';
+
+              return (
+                <div key={visit.id} className="p-4 bg-slate-50/70 hover:bg-slate-50 rounded-xl border border-slate-200 transition-all space-y-2.5 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between gap-2 mb-1.5">
+                      <span className={`px-2 py-0.5 text-[10px] font-bold rounded-md border ${chipColor}`}>
+                        {visit.countdownLabel || (visit.daysUntil === 0 ? 'Today' : visit.daysUntil === 1 ? 'Tomorrow' : `In ${visit.daysUntil} days`)}
+                      </span>
+                      <span className="text-[11px] font-mono text-slate-500">
+                        {visit.visitDate}
+                      </span>
+                    </div>
+                    <h3 className="font-bold text-xs text-slate-900 line-clamp-1">{visit.title}</h3>
+                    <p className="text-[11px] font-medium text-indigo-600 line-clamp-1 mt-0.5">
+                      {visit.customerName} {visit.projectName ? `• ${visit.projectName}` : ''}
+                    </p>
+                    <div className="flex items-center gap-1.5 text-[11px] text-slate-500 mt-2">
+                      <span className="material-symbols-outlined text-[14px]">schedule</span>
+                      <span>{visit.startTime} - {visit.endTime}</span>
+                      {visit.picName && (
+                        <>
+                          <span className="text-slate-300">•</span>
+                          <span className="truncate">PIC: {visit.picName}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-200/60 flex justify-end">
+                    <Link
+                      to={`/visits/${visit.id}`}
+                      className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1"
+                    >
+                      <span>View Visit</span>
+                      <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
+                    </Link>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Main Grid: Overdue & Today Agenda */}

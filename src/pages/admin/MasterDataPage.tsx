@@ -29,7 +29,18 @@ export const MasterDataPage: React.FC = () => {
   const [allowNewProject, setAllowNewProject] = useState<boolean>(true);
   const [isActive, setIsActive] = useState<boolean>(true);
 
-  const categories: { id: MasterDataItem['category']; name: string; icon: string }[] = [
+  // Platform Visit Reminder Defaults state (Super Admin)
+  const [reminderDefaults, setReminderDefaults] = useState({
+    dashboardReminderEnabled: true,
+    dashboardReminderDaysBefore: 5,
+    emailReminderEnabled: true,
+    emailReminderDaysBefore: 2,
+    immediateReminderInsideWindowEnabled: true
+  });
+  const [isSavingDefaults, setIsSavingDefaults] = useState(false);
+  const [defaultsMsg, setDefaultsMsg] = useState<{ text: string; isError: boolean } | null>(null);
+
+  const categories: { id: MasterDataItem['category'] | 'visit_reminder_defaults'; name: string; icon: string }[] = [
     { id: 'task_types', name: 'Task Types', icon: 'label' },
     { id: 'task_priorities', name: 'Task Priorities', icon: 'priority_high' },
     { id: 'customer_types', name: 'Customer Types', icon: 'category' },
@@ -39,18 +50,53 @@ export const MasterDataPage: React.FC = () => {
     { id: 'project_stages', name: 'Project Stages', icon: 'monetization_on' },
     { id: 'departments', name: 'Departments', icon: 'corporate_fare' },
     { id: 'positions', name: 'Positions', icon: 'badge' },
+    ...(isSuperAdmin ? [{ id: 'visit_reminder_defaults' as any, name: 'Visit Reminder Defaults', icon: 'notifications_active' }] : [])
   ];
 
-  const loadData = async (cat: MasterDataItem['category']) => {
+  const loadDefaults = async () => {
+    setIsLoading(true);
+    const data = await masterDataApi.fetchVisitReminderDefaults();
+    if (data) {
+      setReminderDefaults({
+        dashboardReminderEnabled: Boolean(data.dashboardReminderEnabled),
+        dashboardReminderDaysBefore: Number(data.dashboardReminderDaysBefore),
+        emailReminderEnabled: Boolean(data.emailReminderEnabled),
+        emailReminderDaysBefore: Number(data.emailReminderDaysBefore),
+        immediateReminderInsideWindowEnabled: Boolean(data.immediateReminderInsideWindowEnabled)
+      });
+    }
+    setIsLoading(false);
+  };
+
+  const loadData = async (cat: any) => {
+    if (cat === 'visit_reminder_defaults') {
+      await loadDefaults();
+      return;
+    }
     setIsLoading(true);
     const data = await masterDataApi.fetchMasterData(cat, effectiveTenantId);
     setItems(data);
     setIsLoading(false);
   };
 
+  const handleSaveDefaults = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingDefaults(true);
+    setDefaultsMsg(null);
+    try {
+      await masterDataApi.updateVisitReminderDefaults(reminderDefaults);
+      setDefaultsMsg({ text: 'Platform visit reminder defaults updated successfully!', isError: false });
+    } catch (err: any) {
+      setDefaultsMsg({ text: err.message || 'Failed to update reminder defaults', isError: true });
+    } finally {
+      setIsSavingDefaults(false);
+    }
+  };
+
   useEffect(() => {
     loadData(selectedCategory);
   }, [selectedCategory, effectiveTenantId]);
+
 
   const handleSelectCategory = (cat: MasterDataItem['category']) => {
     setSelectedCategory(cat);
@@ -185,23 +231,158 @@ export const MasterDataPage: React.FC = () => {
           })}
         </div>
 
-        {/* RIGHT PANE: ITEMS LIST TABLE */}
+        {/* RIGHT PANE: ITEMS LIST TABLE OR DEFAULTS FORM */}
         <div className="lg:col-span-3 bg-white rounded-xl border border-[#E1E1E1] shadow-sm overflow-hidden flex flex-col min-h-[500px]">
-          <div className="flex justify-between items-center border-b border-[#E1E1E1] p-6">
-            <div>
-              <h2 className="text-base font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">
-                {categories.find((c) => c.id === selectedCategory)?.name}
-              </h2>
-              <p className="text-xs text-[#767587]">Configured system values and order rankings</p>
+          {selectedCategory === 'visit_reminder_defaults' ? (
+            <div className="p-6 flex flex-col gap-6">
+              <div className="border-b border-[#E1E1E1] pb-4">
+                <h2 className="text-base font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">
+                  Platform Visit Reminder Defaults
+                </h2>
+                <p className="text-xs text-[#767587] mt-1">
+                  Global baseline snapshot copied to new tenants during onboarding and used when a tenant resets to defaults.
+                </p>
+              </div>
+
+              {defaultsMsg && (
+                <div className={`p-4 rounded-lg text-xs font-semibold ${defaultsMsg.isError ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>
+                  {defaultsMsg.text}
+                </div>
+              )}
+
+              <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4 text-xs text-indigo-900">
+                <div className="flex items-start gap-2">
+                  <span className="material-symbols-outlined text-indigo-600 text-[18px]">info</span>
+                  <div className="space-y-1">
+                    <p className="font-bold">Two-Tier Reminder Policy Architecture</p>
+                    <p className="text-indigo-800">
+                      Changes made here define the <strong>Platform Default Snapshot</strong>. Newly created tenants will automatically receive these values. Existing tenants will not be affected unless their Tenant Admin explicitly resets their settings.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <form onSubmit={handleSaveDefaults} className="space-y-6 max-w-2xl">
+                {/* Dashboard Reminder Section */}
+                <div className="border border-slate-200 rounded-xl p-5 bg-slate-50/50 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-800">Dashboard Reminder</h3>
+                      <p className="text-xs text-slate-500">Show upcoming visits on the user's dashboard widget</p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={reminderDefaults.dashboardReminderEnabled}
+                        onChange={(e) => setReminderDefaults({ ...reminderDefaults, dashboardReminderEnabled: e.target.checked })}
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#4744e5]"></div>
+                    </label>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Lead Days Before Visit (H-X)
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="number"
+                        min={0}
+                        max={30}
+                        value={reminderDefaults.dashboardReminderDaysBefore}
+                        onChange={(e) => setReminderDefaults({ ...reminderDefaults, dashboardReminderDaysBefore: parseInt(e.target.value) || 0 })}
+                        className="w-24 px-3 py-2 border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:ring-2 focus:ring-[#4744e5]/20 focus:border-[#4744e5]"
+                      />
+                      <span className="text-xs text-slate-500">days before scheduled visit date (0–30 days)</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Email Reminder Section */}
+                <div className="border border-slate-200 rounded-xl p-5 bg-slate-50/50 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-800">Email Reminder</h3>
+                      <p className="text-xs text-slate-500">Send automated email notifications to PIC and participants</p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={reminderDefaults.emailReminderEnabled}
+                        onChange={(e) => setReminderDefaults({ ...reminderDefaults, emailReminderEnabled: e.target.checked })}
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#4744e5]"></div>
+                    </label>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Lead Days Before Visit (H-X)
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="number"
+                        min={0}
+                        max={14}
+                        value={reminderDefaults.emailReminderDaysBefore}
+                        onChange={(e) => setReminderDefaults({ ...reminderDefaults, emailReminderDaysBefore: parseInt(e.target.value) || 0 })}
+                        className="w-24 px-3 py-2 border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:ring-2 focus:ring-[#4744e5]/20 focus:border-[#4744e5]"
+                      />
+                      <span className="text-xs text-slate-500">days before scheduled visit date (0–14 days)</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Immediate Reminder Inside Window */}
+                <div className="border border-slate-200 rounded-xl p-5 bg-slate-50/50 flex items-center justify-between">
+                  <div className="max-w-md">
+                    <h3 className="text-sm font-bold text-slate-800">Immediate Reminder Inside Window</h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      When a visit is newly created or rescheduled directly inside the reminder lead window, queue and send reminder immediately.
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={reminderDefaults.immediateReminderInsideWindowEnabled}
+                      onChange={(e) => setReminderDefaults({ ...reminderDefaults, immediateReminderInsideWindowEnabled: e.target.checked })}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#4744e5]"></div>
+                  </label>
+                </div>
+
+                <div>
+                  <button
+                    type="submit"
+                    disabled={isSavingDefaults}
+                    className="px-5 py-2.5 bg-[#4744e5] hover:bg-[#2c24ce] disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm transition-all flex items-center gap-2"
+                  >
+                    {isSavingDefaults && <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>}
+                    <span>Save Platform Defaults</span>
+                  </button>
+                </div>
+              </form>
             </div>
-            <button
-              onClick={handleOpenAddModal}
-              className="px-4 py-2 bg-[#4744e5] hover:bg-[#2c24ce] text-white text-xs font-bold rounded-lg shadow-sm transition-all flex items-center gap-2 font-['Hanken_Grotesk'] shrink-0"
-              >
-              <span className="material-symbols-outlined text-[18px]">add</span>
-              <span>Add Item</span>
-            </button>            
-          </div>
+          ) : (
+            <>
+              <div className="flex justify-between items-center border-b border-[#E1E1E1] p-6">
+                <div>
+                  <h2 className="text-base font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">
+                    {categories.find((c) => c.id === selectedCategory)?.name}
+                  </h2>
+                  <p className="text-xs text-[#767587]">Configured system values and order rankings</p>
+                </div>
+                <button
+                  onClick={handleOpenAddModal}
+                  className="px-4 py-2 bg-[#4744e5] hover:bg-[#2c24ce] text-white text-xs font-bold rounded-lg shadow-sm transition-all flex items-center gap-2 font-['Hanken_Grotesk'] shrink-0"
+                >
+                  <span className="material-symbols-outlined text-[18px]">add</span>
+                  <span>Add Item</span>
+                </button>            
+              </div>
 
           <div className="flex-1 overflow-x-auto">
             {isLoading ? (
@@ -348,6 +529,8 @@ export const MasterDataPage: React.FC = () => {
             </table>
             )}
           </div>
+          </>
+          )}
         </div>
       </div>
 

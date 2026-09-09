@@ -446,3 +446,243 @@ tenantsRoutes.put('/:id/trial', async (req, res) => {
       res.status(500).json({ error: 'Internal Server Error' });
     }
   });
+
+// --- TENANT VISIT REMINDER SETTINGS ---
+tenantsRoutes.get('/:id/visit-reminders', async (req: any, res: any) => {
+  const actorRole = req.userRole;
+  const actorTenant = req.userTenantId;
+  const requestedTenantId = req.params.id === 'current' ? actorTenant : req.params.id;
+
+  if (actorRole !== 'SUPER_ADMIN' && requestedTenantId !== actorTenant) {
+    return res.status(403).json({ error: 'Access denied. You may only view your own tenant reminder settings.' });
+  }
+
+  try {
+    const [rows]: any = await pool.query(
+      'SELECT * FROM tenant_visit_reminder_settings WHERE tenantId = ?',
+      [requestedTenantId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(500).json({
+        error: 'CONFIG_INTEGRITY_ERROR',
+        code: 'MISSING_TENANT_REMINDER_SETTINGS',
+        message: `Tenant ${requestedTenantId} has no reminder settings row. Runtime fallback prohibited.`
+      });
+    }
+
+    const s = rows[0];
+    res.json({
+      id: s.id,
+      tenantId: s.tenantId,
+      dashboardReminderEnabled: Boolean(s.dashboardReminderEnabled),
+      dashboardReminderDaysBefore: Number(s.dashboardReminderDaysBefore),
+      emailReminderEnabled: Boolean(s.emailReminderEnabled),
+      emailReminderDaysBefore: Number(s.emailReminderDaysBefore),
+      immediateReminderInsideWindowEnabled: Boolean(s.immediateReminderInsideWindowEnabled),
+      createdAt: s.createdAt,
+      updatedAt: s.updatedAt
+    });
+  } catch (err: any) {
+    console.error('Error fetching tenant visit reminders:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+tenantsRoutes.put('/:id/visit-reminders', async (req: any, res: any) => {
+  const actorRole = req.userRole;
+  const actorTenant = req.userTenantId;
+  const actorUserId = req.userId;
+  const requestedTenantId = req.params.id === 'current' ? actorTenant : req.params.id;
+
+  if (actorRole !== 'SUPER_ADMIN' && requestedTenantId !== actorTenant) {
+    return res.status(403).json({ error: 'Access denied. You may only update your own tenant reminder settings.' });
+  }
+
+  if (actorRole !== 'SUPER_ADMIN' && actorRole !== 'TENANT_ADMIN') {
+    return res.status(403).json({ error: 'Access denied. Tenant Admin capability required.' });
+  }
+
+  const {
+    dashboardReminderEnabled,
+    dashboardReminderDaysBefore,
+    emailReminderEnabled,
+    emailReminderDaysBefore,
+    immediateReminderInsideWindowEnabled
+  } = req.body;
+
+  // Domain boundary validations
+  if (typeof dashboardReminderEnabled !== 'boolean') {
+    return res.status(400).json({ error: 'INVALID_TYPE', message: 'dashboardReminderEnabled must be boolean' });
+  }
+  const dashDays = Number(dashboardReminderDaysBefore);
+  if (isNaN(dashDays) || !Number.isInteger(dashDays) || dashDays < 0 || dashDays > 30) {
+    return res.status(400).json({ error: 'INVALID_RANGE', message: 'dashboardReminderDaysBefore must be an integer between 0 and 30' });
+  }
+
+  if (typeof emailReminderEnabled !== 'boolean') {
+    return res.status(400).json({ error: 'INVALID_TYPE', message: 'emailReminderEnabled must be boolean' });
+  }
+  const emailDays = Number(emailReminderDaysBefore);
+  if (isNaN(emailDays) || !Number.isInteger(emailDays) || emailDays < 0 || emailDays > 14) {
+    return res.status(400).json({ error: 'INVALID_RANGE', message: 'emailReminderDaysBefore must be an integer between 0 and 14' });
+  }
+
+  if (typeof immediateReminderInsideWindowEnabled !== 'boolean') {
+    return res.status(400).json({ error: 'INVALID_TYPE', message: 'immediateReminderInsideWindowEnabled must be boolean' });
+  }
+
+  try {
+    const [existing]: any = await pool.query(
+      'SELECT id FROM tenant_visit_reminder_settings WHERE tenantId = ?',
+      [requestedTenantId]
+    );
+    if (existing.length === 0) {
+      return res.status(500).json({
+        error: 'CONFIG_INTEGRITY_ERROR',
+        code: 'MISSING_TENANT_REMINDER_SETTINGS',
+        message: `Tenant ${requestedTenantId} has no reminder settings row. Runtime fallback prohibited.`
+      });
+    }
+
+    await pool.query(`
+      UPDATE tenant_visit_reminder_settings
+      SET dashboardReminderEnabled = ?,
+          dashboardReminderDaysBefore = ?,
+          emailReminderEnabled = ?,
+          emailReminderDaysBefore = ?,
+          immediateReminderInsideWindowEnabled = ?,
+          updatedById = ?,
+          updatedAt = NOW()
+      WHERE tenantId = ?
+    `, [
+      dashboardReminderEnabled,
+      dashDays,
+      emailReminderEnabled,
+      emailDays,
+      immediateReminderInsideWindowEnabled,
+      actorUserId,
+      requestedTenantId
+    ]);
+
+    await logAudit(
+      requestedTenantId,
+      actorUserId,
+      'UPDATE',
+      'TenantVisitReminderSettings',
+      requestedTenantId,
+      `Updated visit reminder settings: dashboard=${dashDays}d (${dashboardReminderEnabled}), email=${emailDays}d (${emailReminderEnabled}), immediateInside=${immediateReminderInsideWindowEnabled}`,
+      req.ip,
+      req.get('User-Agent'),
+      'TENANT_SETTINGS'
+    );
+
+    res.json({
+      success: true,
+      message: 'Tenant visit reminder settings updated successfully',
+      settings: {
+        tenantId: requestedTenantId,
+        dashboardReminderEnabled,
+        dashboardReminderDaysBefore: dashDays,
+        emailReminderEnabled,
+        emailReminderDaysBefore: emailDays,
+        immediateReminderInsideWindowEnabled,
+        updatedAt: new Date()
+      }
+    });
+  } catch (err: any) {
+    console.error('Error updating tenant visit reminders:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+tenantsRoutes.post('/:id/visit-reminders/reset', async (req: any, res: any) => {
+  const actorRole = req.userRole;
+  const actorTenant = req.userTenantId;
+  const actorUserId = req.userId;
+  const requestedTenantId = req.params.id === 'current' ? actorTenant : req.params.id;
+
+  if (actorRole !== 'SUPER_ADMIN' && requestedTenantId !== actorTenant) {
+    return res.status(403).json({ error: 'Access denied. You may only reset your own tenant reminder settings.' });
+  }
+
+  if (actorRole !== 'SUPER_ADMIN' && actorRole !== 'TENANT_ADMIN') {
+    return res.status(403).json({ error: 'Access denied. Tenant Admin capability required.' });
+  }
+
+  try {
+    // 1. Fetch current active platform default snapshot (RESET = COPY, NOT INHERIT)
+    const [defaultRows]: any = await pool.query(
+      'SELECT * FROM visit_reminder_defaults WHERE isActive = 1 ORDER BY createdAt DESC LIMIT 1'
+    );
+    if (defaultRows.length === 0) {
+      return res.status(500).json({ error: 'CONFIG_INTEGRITY_ERROR', message: 'No active visit_reminder_defaults found' });
+    }
+    const def = defaultRows[0];
+
+    // 2. Fetch existing tenant settings for audit
+    const [existing]: any = await pool.query(
+      'SELECT * FROM tenant_visit_reminder_settings WHERE tenantId = ?',
+      [requestedTenantId]
+    );
+    if (existing.length === 0) {
+      return res.status(500).json({
+        error: 'CONFIG_INTEGRITY_ERROR',
+        code: 'MISSING_TENANT_REMINDER_SETTINGS',
+        message: `Tenant ${requestedTenantId} has no reminder settings row.`
+      });
+    }
+    const oldVals = existing[0];
+
+    // 3. Explicit copy into tenant row
+    await pool.query(`
+      UPDATE tenant_visit_reminder_settings
+      SET dashboardReminderEnabled = ?,
+          dashboardReminderDaysBefore = ?,
+          emailReminderEnabled = ?,
+          emailReminderDaysBefore = ?,
+          immediateReminderInsideWindowEnabled = ?,
+          updatedById = ?,
+          updatedAt = NOW()
+      WHERE tenantId = ?
+    `, [
+      def.dashboardReminderEnabled,
+      def.dashboardReminderDaysBefore,
+      def.emailReminderEnabled,
+      def.emailReminderDaysBefore,
+      def.immediateReminderInsideWindowEnabled,
+      actorUserId,
+      requestedTenantId
+    ]);
+
+    await logAudit(
+      requestedTenantId,
+      actorUserId,
+      'RESET',
+      'TenantVisitReminderSettings',
+      requestedTenantId,
+      `Reset visit reminder settings to platform default snapshot (dash=${def.dashboardReminderDaysBefore}d, email=${def.emailReminderDaysBefore}d). Previous: (dash=${oldVals.dashboardReminderDaysBefore}d, email=${oldVals.emailReminderDaysBefore}d)`,
+      req.ip,
+      req.get('User-Agent'),
+      'TENANT_SETTINGS'
+    );
+
+    res.json({
+      success: true,
+      message: 'Tenant visit reminder settings reset to platform default successfully',
+      settings: {
+        tenantId: requestedTenantId,
+        dashboardReminderEnabled: Boolean(def.dashboardReminderEnabled),
+        dashboardReminderDaysBefore: Number(def.dashboardReminderDaysBefore),
+        emailReminderEnabled: Boolean(def.emailReminderEnabled),
+        emailReminderDaysBefore: Number(def.emailReminderDaysBefore),
+        immediateReminderInsideWindowEnabled: Boolean(def.immediateReminderInsideWindowEnabled),
+        updatedAt: new Date()
+      }
+    });
+  } catch (err: any) {
+    console.error('Error resetting tenant visit reminders:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+

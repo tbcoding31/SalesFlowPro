@@ -161,6 +161,33 @@ onboardingRoutes.post('/tenant', async (req, res) => {
         await connection.query("INSERT INTO positions (id, tenantId, name, level) VALUES (?, ?, ?, ?)", [newPosId, tenantId, pos.name, pos.level]);
       }
 
+      // 7. Atomic Visit Reminder Settings Initialization (Snapshot Copy from Active Platform Default)
+      const [defaultRows]: any = await connection.query(
+        'SELECT * FROM visit_reminder_defaults WHERE isActive = 1 ORDER BY createdAt DESC LIMIT 1 FOR UPDATE'
+      );
+      if (defaultRows.length === 0) {
+        throw new Error('CONFIG_INTEGRITY_ERROR: No active visit_reminder_defaults found for tenant initialization.');
+      }
+      const platformDef = defaultRows[0];
+      const tvrsId = `TVRS-${Date.now()}-${randomUUID().substring(0, 6)}`;
+      await connection.query(
+        `INSERT INTO tenant_visit_reminder_settings (
+          id, tenantId, dashboardReminderEnabled, dashboardReminderDaysBefore,
+          emailReminderEnabled, emailReminderDaysBefore,
+          immediateReminderInsideWindowEnabled, createdAt, updatedAt, updatedById
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?)`,
+        [
+          tvrsId,
+          tenantId,
+          platformDef.dashboardReminderEnabled,
+          platformDef.dashboardReminderDaysBefore,
+          platformDef.emailReminderEnabled,
+          platformDef.emailReminderDaysBefore,
+          platformDef.immediateReminderInsideWindowEnabled,
+          userId
+        ]
+      );
+
       // Audit Log (without credentials)
     
 

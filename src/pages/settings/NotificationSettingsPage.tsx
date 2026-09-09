@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useAuth } from '../../context/AuthContext';
+import { crmApi } from '../../services/crmApi';
 
 const Toggle: React.FC<{ enabled: boolean; onChange: () => void }> = ({ enabled, onChange }) => (
   <button
@@ -16,6 +18,10 @@ const Toggle: React.FC<{ enabled: boolean; onChange: () => void }> = ({ enabled,
 );
 
 export const NotificationSettingsPage: React.FC = () => {
+  const { currentUser, currentTenant } = useAuth();
+  const isTenantAdmin = currentUser?.role === 'TENANT_ADMIN' || currentUser?.role === 'SUPER_ADMIN';
+  const tenantId = currentTenant?.id || '';
+
   const [settings, setSettings] = useState({
     taskAssigned: true,
     taskDueSoon: true,
@@ -28,6 +34,83 @@ export const NotificationSettingsPage: React.FC = () => {
     taskReassigned: true,
     visitReassigned: true,
   });
+
+  // Tenant Visit Reminder State
+  const [tenantReminderSettings, setTenantReminderSettings] = useState({
+    dashboardReminderEnabled: true,
+    dashboardReminderDaysBefore: 5,
+    emailReminderEnabled: true,
+    emailReminderDaysBefore: 2,
+    immediateReminderInsideWindowEnabled: true
+  });
+  const [isLoadingReminder, setIsLoadingReminder] = useState(false);
+  const [isSavingReminder, setIsSavingReminder] = useState(false);
+  const [reminderMsg, setReminderMsg] = useState<{ text: string; isError: boolean } | null>(null);
+
+  useEffect(() => {
+    if (tenantId && isTenantAdmin) {
+      setIsLoadingReminder(true);
+      crmApi.fetchTenantVisitReminders(tenantId)
+        .then((data) => {
+          if (data) {
+            setTenantReminderSettings({
+              dashboardReminderEnabled: Boolean(data.dashboardReminderEnabled),
+              dashboardReminderDaysBefore: Number(data.dashboardReminderDaysBefore),
+              emailReminderEnabled: Boolean(data.emailReminderEnabled),
+              emailReminderDaysBefore: Number(data.emailReminderDaysBefore),
+              immediateReminderInsideWindowEnabled: Boolean(data.immediateReminderInsideWindowEnabled)
+            });
+          }
+        })
+        .catch((err) => {
+          console.error('Failed to load tenant reminder settings', err);
+        })
+        .finally(() => {
+          setIsLoadingReminder(false);
+        });
+    }
+  }, [tenantId, isTenantAdmin]);
+
+  const handleSaveTenantReminders = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tenantId) return;
+    setIsSavingReminder(true);
+    setReminderMsg(null);
+    try {
+      await crmApi.updateTenantVisitReminders(tenantId, tenantReminderSettings);
+      setReminderMsg({ text: 'Company visit reminder settings saved successfully.', isError: false });
+    } catch (err: any) {
+      setReminderMsg({ text: err.message || 'Failed to update reminder settings', isError: true });
+    } finally {
+      setIsSavingReminder(false);
+    }
+  };
+
+  const handleResetToPlatformDefaults = async () => {
+    if (!tenantId) return;
+    if (!window.confirm('Are you sure you want to reset your company visit reminder settings to the current platform default snapshot?')) {
+      return;
+    }
+    setIsSavingReminder(true);
+    setReminderMsg(null);
+    try {
+      const resetData = await crmApi.resetTenantVisitReminders(tenantId);
+      if (resetData) {
+        setTenantReminderSettings({
+          dashboardReminderEnabled: Boolean(resetData.dashboardReminderEnabled),
+          dashboardReminderDaysBefore: Number(resetData.dashboardReminderDaysBefore),
+          emailReminderEnabled: Boolean(resetData.emailReminderEnabled),
+          emailReminderDaysBefore: Number(resetData.emailReminderDaysBefore),
+          immediateReminderInsideWindowEnabled: Boolean(resetData.immediateReminderInsideWindowEnabled)
+        });
+      }
+      setReminderMsg({ text: 'Reset to platform default snapshot successful.', isError: false });
+    } catch (err: any) {
+      setReminderMsg({ text: err.message || 'Failed to reset reminder settings', isError: true });
+    } finally {
+      setIsSavingReminder(false);
+    }
+  };
 
   const handleToggle = (key: keyof typeof settings) => {
     setSettings((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -49,7 +132,6 @@ export const NotificationSettingsPage: React.FC = () => {
   };
 
   const handleSave = () => {
-    // Placeholder for actual save logic
     console.log('Settings saved:', settings);
   };
 
@@ -84,6 +166,137 @@ export const NotificationSettingsPage: React.FC = () => {
       </div>
 
       <div className="flex flex-col gap-6">
+        
+        {/* Company Visit Reminder Policy (Tenant Admin / Super Admin) */}
+        {isTenantAdmin && (
+          <div className="bg-white rounded-2xl border border-indigo-200/80 shadow-xs overflow-hidden ring-1 ring-indigo-50">
+            <div className="p-6 border-b border-indigo-100/70 bg-gradient-to-r from-indigo-50/50 via-white to-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                  <span className="material-symbols-outlined text-[20px]">notifications_active</span>
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-extrabold text-slate-900 font-['Hanken_Grotesk']">
+                      Company Visit Reminder Orchestration
+                    </h2>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-700 tracking-wide">
+                      COMPANY POLICY
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Configure lead time windows for dashboard alerts and automated email notifications across all visits.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleResetToPlatformDefaults}
+                  disabled={isSavingReminder || isLoadingReminder}
+                  className="px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-lg shadow-2xs transition-colors flex items-center gap-1.5"
+                  title="Reset to Platform Default snapshot"
+                >
+                  <span className="material-symbols-outlined text-[16px]">restart_alt</span>
+                  <span>Reset to Platform Default</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveTenantReminders}
+                  disabled={isSavingReminder || isLoadingReminder}
+                  className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-2xs transition-colors flex items-center gap-1.5"
+                >
+                  {isSavingReminder && <span className="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>}
+                  <span>Save Policy</span>
+                </button>
+              </div>
+            </div>
+
+            {reminderMsg && (
+              <div className={`mx-6 mt-6 p-4 rounded-xl text-xs font-semibold ${reminderMsg.isError ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>
+                {reminderMsg.text}
+              </div>
+            )}
+
+            {isLoadingReminder ? (
+              <div className="p-8 flex justify-center items-center text-slate-400 gap-2 text-xs">
+                <span className="material-symbols-outlined animate-spin text-[18px]">progress_activity</span>
+                <span>Loading reminder settings...</span>
+              </div>
+            ) : (
+              <div className="p-6 space-y-6">
+                {/* Dashboard Reminder */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-100">
+                  <div className="max-w-md">
+                    <h3 className="text-sm font-bold text-slate-900">Dashboard Reminder Window</h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Days before a scheduled visit when it starts appearing on user's dashboard Upcoming Visits widget.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-600">Lead Days:</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={30}
+                        value={tenantReminderSettings.dashboardReminderDaysBefore}
+                        onChange={(e) => setTenantReminderSettings(prev => ({ ...prev, dashboardReminderDaysBefore: parseInt(e.target.value) || 0 }))}
+                        className="w-18 px-2.5 py-1 text-xs font-bold text-slate-800 border border-slate-300 rounded-lg text-center focus:ring-2 focus:ring-indigo-500/20"
+                      />
+                    </div>
+                    <Toggle
+                      enabled={tenantReminderSettings.dashboardReminderEnabled}
+                      onChange={() => setTenantReminderSettings(prev => ({ ...prev, dashboardReminderEnabled: !prev.dashboardReminderEnabled }))}
+                    />
+                  </div>
+                </div>
+
+                {/* Email Reminder */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-100">
+                  <div className="max-w-md">
+                    <h3 className="text-sm font-bold text-slate-900">Automated Email Notifications</h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Days before a scheduled visit when automated email reminders are dispatched to PIC and participants.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-600">Lead Days:</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={14}
+                        value={tenantReminderSettings.emailReminderDaysBefore}
+                        onChange={(e) => setTenantReminderSettings(prev => ({ ...prev, emailReminderDaysBefore: parseInt(e.target.value) || 0 }))}
+                        className="w-18 px-2.5 py-1 text-xs font-bold text-slate-800 border border-slate-300 rounded-lg text-center focus:ring-2 focus:ring-indigo-500/20"
+                      />
+                    </div>
+                    <Toggle
+                      enabled={tenantReminderSettings.emailReminderEnabled}
+                      onChange={() => setTenantReminderSettings(prev => ({ ...prev, emailReminderEnabled: !prev.emailReminderEnabled }))}
+                    />
+                  </div>
+                </div>
+
+                {/* Immediate Reminder Inside Window */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="max-w-md">
+                    <h3 className="text-sm font-bold text-slate-900">Immediate Reminder Inside Window</h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      If a visit is created or rescheduled with a start date inside the reminder window, dispatch immediately on next scheduler run.
+                    </p>
+                  </div>
+                  <Toggle
+                    enabled={tenantReminderSettings.immediateReminderInsideWindowEnabled}
+                    onChange={() => setTenantReminderSettings(prev => ({ ...prev, immediateReminderInsideWindowEnabled: !prev.immediateReminderInsideWindowEnabled }))}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         
         {/* Tasks Settings */}
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">

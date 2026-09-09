@@ -28,6 +28,7 @@ import { tenantUsersRoutes } from './routes/tenant_users.routes';
 import { onboardingRoutes } from './routes/onboarding.routes';
 import { navigationRoutes } from './routes/navigation.routes';
 import { platformMenusRoutes } from './routes/platformMenus.routes';
+import { startVisitReminderScheduler } from './workers/visitReminder.worker';
 
 import { authMiddleware } from './middleware/auth';
 import { tenantMiddleware } from './middleware/tenant';
@@ -82,5 +83,6 @@ if (require.main === module) {
   const port = env.PORT || 5000;
   app.listen(port, () => {
     console.log('Server listening on port ' + port);
+    startVisitReminderScheduler();
   });
 }

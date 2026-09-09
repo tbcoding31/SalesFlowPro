@@ -559,6 +559,72 @@ export const crmApi = {
     }
   },
 
+  fetchUpcomingVisitReminders: async (scope?: string): Promise<any[]> => {
+    try {
+      const url = `${API_BASE}/visits/reminders${scope ? `?scope=${scope}` : ''}`;
+      const res = await fetch(url, { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch visit reminders`);
+      const json = await res.json();
+      return json.data || (Array.isArray(json) ? json : []);
+    } catch (err) {
+      console.error('[crmApi.fetchUpcomingVisitReminders error]', err);
+      return [];
+    }
+  },
+
+  fetchTenantVisitReminders: async (tenantId: string): Promise<any> => {
+    try {
+      const res = await fetch(`${API_BASE}/tenants/${tenantId}/visit-reminders`, { headers: getAuthHeaders() });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.message || 'Failed to fetch tenant visit reminders');
+      }
+      const json = await res.json();
+      return json.data || json;
+    } catch (err) {
+      console.error('[crmApi.fetchTenantVisitReminders error]', err);
+      throw err;
+    }
+  },
+
+  updateTenantVisitReminders: async (tenantId: string, settings: any): Promise<any> => {
+    try {
+      const res = await fetch(`${API_BASE}/tenants/${tenantId}/visit-reminders`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(settings)
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.message || 'Failed to update tenant visit reminders');
+      }
+      const json = await res.json();
+      return json.data || json;
+    } catch (err) {
+      console.error('[crmApi.updateTenantVisitReminders error]', err);
+      throw err;
+    }
+  },
+
+  resetTenantVisitReminders: async (tenantId: string): Promise<any> => {
+    try {
+      const res = await fetch(`${API_BASE}/tenants/${tenantId}/visit-reminders/reset`, {
+        method: 'POST',
+        headers: getAuthHeaders()
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.message || 'Failed to reset tenant visit reminders');
+      }
+      const json = await res.json();
+      return json.data || json;
+    } catch (err) {
+      console.error('[crmApi.resetTenantVisitReminders error]', err);
+      throw err;
+    }
+  },
+
+
   fetchVisitHistory: async (id: string): Promise<any[]> => {
     try {
       const res = await fetch(`${API_BASE}/visits/${id}/history`, { headers: getAuthHeaders() });

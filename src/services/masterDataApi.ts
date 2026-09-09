@@ -127,5 +127,40 @@ export const masterDataApi = {
       console.error(err);
       return false;
     }
+  },
+
+  fetchVisitReminderDefaults: async (): Promise<any> => {
+    try {
+      const res = await fetch(`${API_BASE}/master-data/platform/visit-reminder-defaults`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('sfp_auth_token')}` }
+      });
+      if (!res.ok) throw new Error('Failed to fetch visit reminder defaults');
+      return await res.json();
+    } catch (err) {
+      console.error(err);
+      return null;
+    }
+  },
+
+  updateVisitReminderDefaults: async (settings: any): Promise<boolean> => {
+    try {
+      const res = await fetch(`${API_BASE}/master-data/platform/visit-reminder-defaults`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('sfp_auth_token')}`
+        },
+        body: JSON.stringify(settings)
+      });
+      if (!res.ok) {
+        const errJson = await res.json();
+        throw new Error(errJson.message || 'Failed to update visit reminder defaults');
+      }
+      return true;
+    } catch (err) {
+      console.error(err);
+      throw err;
+    }
   }
 };
+

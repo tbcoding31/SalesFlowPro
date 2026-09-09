@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../db';
 import { validateTargetTenant } from '../utils/scope';
+import { logAudit } from '../utils/audit';
 
 export const masterDataRoutes = Router();
 
@@ -462,4 +463,137 @@ masterDataRoutes.put('/:category/:id', handleTenantPutMasterData);
 
 masterDataRoutes.delete('/tenant/:category/:id', handleTenantDeleteMasterData);
 masterDataRoutes.delete('/:category/:id', handleTenantDeleteMasterData);
+
+// --- SUPER ADMIN VISIT REMINDER PLATFORM DEFAULTS ---
+const handleGetVisitReminderDefaults = async (req: any, res: any) => {
+  const actorRole = req.userRole;
+  if (actorRole !== 'SUPER_ADMIN') {
+    return res.status(403).json({ error: 'Access denied. Super Admin required.' });
+  }
+
+  try {
+    const [rows]: any = await pool.query(
+      'SELECT * FROM visit_reminder_defaults WHERE isActive = 1 ORDER BY createdAt DESC LIMIT 1'
+    );
+    if (rows.length === 0) {
+      return res.status(500).json({ error: 'CONFIG_INTEGRITY_ERROR', message: 'No active visit_reminder_defaults found' });
+    }
+    const def = rows[0];
+    res.json({
+      id: def.id,
+      dashboardReminderEnabled: Boolean(def.dashboardReminderEnabled),
+      dashboardReminderDaysBefore: Number(def.dashboardReminderDaysBefore),
+      emailReminderEnabled: Boolean(def.emailReminderEnabled),
+      emailReminderDaysBefore: Number(def.emailReminderDaysBefore),
+      immediateReminderInsideWindowEnabled: Boolean(def.immediateReminderInsideWindowEnabled),
+      isActive: Boolean(def.isActive),
+      createdAt: def.createdAt,
+      updatedAt: def.updatedAt
+    });
+  } catch (err: any) {
+    console.error('Error fetching visit_reminder_defaults:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+const handlePutVisitReminderDefaults = async (req: any, res: any) => {
+  const actorRole = req.userRole;
+  const actorUserId = req.userId;
+  if (actorRole !== 'SUPER_ADMIN') {
+    return res.status(403).json({ error: 'Access denied. Super Admin required.' });
+  }
+
+  const {
+    dashboardReminderEnabled,
+    dashboardReminderDaysBefore,
+    emailReminderEnabled,
+    emailReminderDaysBefore,
+    immediateReminderInsideWindowEnabled
+  } = req.body;
+
+  // Domain boundary validations
+  if (typeof dashboardReminderEnabled !== 'boolean') {
+    return res.status(400).json({ error: 'INVALID_TYPE', message: 'dashboardReminderEnabled must be boolean' });
+  }
+  const dashDays = Number(dashboardReminderDaysBefore);
+  if (isNaN(dashDays) || !Number.isInteger(dashDays) || dashDays < 0 || dashDays > 30) {
+    return res.status(400).json({ error: 'INVALID_RANGE', message: 'dashboardReminderDaysBefore must be an integer between 0 and 30' });
+  }
+
+  if (typeof emailReminderEnabled !== 'boolean') {
+    return res.status(400).json({ error: 'INVALID_TYPE', message: 'emailReminderEnabled must be boolean' });
+  }
+  const emailDays = Number(emailReminderDaysBefore);
+  if (isNaN(emailDays) || !Number.isInteger(emailDays) || emailDays < 0 || emailDays > 14) {
+    return res.status(400).json({ error: 'INVALID_RANGE', message: 'emailReminderDaysBefore must be an integer between 0 and 14' });
+  }
+
+  if (typeof immediateReminderInsideWindowEnabled !== 'boolean') {
+    return res.status(400).json({ error: 'INVALID_TYPE', message: 'immediateReminderInsideWindowEnabled must be boolean' });
+  }
+
+  try {
+    const [activeRows]: any = await pool.query(
+      'SELECT * FROM visit_reminder_defaults WHERE isActive = 1 ORDER BY createdAt DESC LIMIT 1'
+    );
+    if (activeRows.length === 0) {
+      return res.status(500).json({ error: 'CONFIG_INTEGRITY_ERROR', message: 'No active visit_reminder_defaults found' });
+    }
+    const current = activeRows[0];
+
+    await pool.query(`
+      UPDATE visit_reminder_defaults
+      SET dashboardReminderEnabled = ?,
+          dashboardReminderDaysBefore = ?,
+          emailReminderEnabled = ?,
+          emailReminderDaysBefore = ?,
+          immediateReminderInsideWindowEnabled = ?,
+          updatedById = ?,
+          updatedAt = NOW()
+      WHERE id = ?
+    `, [
+      dashboardReminderEnabled,
+      dashDays,
+      emailReminderEnabled,
+      emailDays,
+      immediateReminderInsideWindowEnabled,
+      actorUserId,
+      current.id
+    ]);
+
+    await logAudit(
+      null,
+      actorUserId,
+      'UPDATE',
+      'VisitReminderDefaults',
+      current.id,
+      `Super Admin updated platform visit reminder defaults: dashboard=${dashDays}d (${dashboardReminderEnabled}), email=${emailDays}d (${emailReminderEnabled}), immediateInside=${immediateReminderInsideWindowEnabled}`,
+      req.ip,
+      req.get('User-Agent'),
+      'MASTER_DATA'
+    );
+
+    res.json({
+      success: true,
+      message: 'Platform visit reminder defaults updated successfully',
+      settings: {
+        id: current.id,
+        dashboardReminderEnabled,
+        dashboardReminderDaysBefore: dashDays,
+        emailReminderEnabled,
+        emailReminderDaysBefore: emailDays,
+        immediateReminderInsideWindowEnabled,
+        updatedAt: new Date()
+      }
+    });
+  } catch (err: any) {
+    console.error('Error updating visit_reminder_defaults:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+masterDataRoutes.get('/platform/visit-reminder-defaults', handleGetVisitReminderDefaults);
+masterDataRoutes.get('/visit-reminder-defaults', handleGetVisitReminderDefaults);
+masterDataRoutes.put('/platform/visit-reminder-defaults', handlePutVisitReminderDefaults);
+masterDataRoutes.put('/visit-reminder-defaults', handlePutVisitReminderDefaults);
 

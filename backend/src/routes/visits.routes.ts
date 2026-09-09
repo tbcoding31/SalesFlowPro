@@ -4,6 +4,7 @@ import { pool } from '../db';
 import { buildReportScopeWhere, validateTargetTenant } from '../utils/scope';
 import { logAudit } from '../utils/audit';
 import { syncVisitAssignmentTasks } from '../services/taskAssignment.service';
+import { runVisitReminderWorker } from '../workers/visitReminder.worker';
 
 import { normalizeSemanticRole } from './navigation.routes';
 
@@ -169,6 +170,124 @@ visitsRoutes.get('/', async (req: any, res: any) => {
   } catch (err: any) {
     console.error('GET /api/visits error:', err);
     res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// GET /api/visits/reminders - Authoritative real-time upcoming non-terminal visit reminders
+visitsRoutes.get('/reminders', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { scope } = req.query;
+
+  try {
+    // 1. Authoritative Tenant Reminder Settings (Strict Zero Fallback)
+    const [settingsRows]: any = await pool.query(
+      'SELECT * FROM tenant_visit_reminder_settings WHERE tenantId = ?',
+      [targetTenant]
+    );
+
+    if (settingsRows.length === 0) {
+      return res.status(500).json({
+        error: 'CONFIG_INTEGRITY_ERROR',
+        code: 'MISSING_TENANT_REMINDER_SETTINGS',
+        message: `Tenant ${targetTenant} has no reminder settings row. Runtime fallback prohibited.`
+      });
+    }
+
+    const settings = settingsRows[0];
+    if (!settings.dashboardReminderEnabled) {
+      return res.json([]);
+    }
+
+    const reminderDays = Number(settings.dashboardReminderDaysBefore);
+
+    // 2. Real-time SQL query (Gate 1: vs.isTerminal = 0, no physical VS-* IDs)
+    let userFilter = 'AND (v.picId = ? OR EXISTS (SELECT 1 FROM visit_participants vp WHERE vp.visitId = v.id AND vp.userId = ?))';
+    let queryParams: any[] = [targetTenant, reminderDays, actorUserId, actorUserId];
+
+    if (scope === 'all') {
+      const semanticRole = normalizeSemanticRole(actorRole, isPlatformUser);
+      if (semanticRole === 'TENANT_ADMIN' || semanticRole === 'SUPERVISOR' || semanticRole === 'SUPER_ADMIN') {
+        userFilter = '';
+        queryParams = [targetTenant, reminderDays];
+      }
+    }
+
+    const [rows]: any = await pool.query(`
+      SELECT 
+        v.id, v.tenantId, v.title, v.customerId, v.relatedProjectId, v.purposeId, v.statusId,
+        DATE_FORMAT(v.visitDate, '%Y-%m-%d') as visitDate,
+        TIME_FORMAT(v.startTime, '%H:%i') as startTime,
+        TIME_FORMAT(v.endTime, '%H:%i') as endTime,
+        v.location, v.notes, v.picId,
+        vs.code as statusCode, vs.name as statusName,
+        u.name as picName, u.email as picEmail, u.avatar as picAvatar,
+        c.name as customerName, c.code as customerCode,
+        p.title as projectName, p.id as projectCode,
+        DATEDIFF(v.visitDate, CURDATE()) as daysUntilVisit
+      FROM visits v
+      JOIN visit_statuses vs ON vs.id = v.statusId
+      LEFT JOIN users u ON u.id = v.picId
+      LEFT JOIN customers c ON c.id = v.customerId
+      LEFT JOIN projects p ON p.id = v.relatedProjectId AND p.tenantId = v.tenantId
+      WHERE v.tenantId = ?
+        AND vs.isTerminal = 0
+        AND v.visitDate >= CURDATE()
+        AND v.visitDate <= DATE_ADD(CURDATE(), INTERVAL ? DAY)
+        ${userFilter}
+      ORDER BY v.visitDate ASC, v.startTime ASC
+    `, queryParams);
+
+    res.json(rows);
+  } catch (err: any) {
+    console.error('GET /api/visits/reminders error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// POST /api/visits/reminders/process - Operational/Worker trigger for visit reminders
+visitsRoutes.post('/reminders/process', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { forceDate } = req.body || {};
+
+  // Gate 8: Production forceDate Ban
+  if (forceDate && process.env.NODE_ENV === 'production') {
+    return res.status(400).json({
+      error: 'SECURITY_VIOLATION',
+      code: 'FORCE_DATE_NOT_PERMITTED_IN_PRODUCTION',
+      message: 'forceDate parameter is prohibited in production execution'
+    });
+  }
+
+  try {
+    const runResult = await runVisitReminderWorker({
+      tenantId: targetTenant,
+      forceDate: forceDate ? String(forceDate).trim() : undefined
+    });
+
+    res.json({
+      success: true,
+      result: runResult
+    });
+  } catch (err: any) {
+    console.error('POST /api/visits/reminders/process error:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
   }
 });
 
@@ -580,6 +699,34 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
       WHERE id = ? AND tenantId = ?
     `, [customerId, resolvedProjectId, title, visitDate, startTime, endTime, location, notes, result, nextAction, statusId, purposeId, picId, completedAtVal, id, targetTenant]);
 
+    // Gate 7: Reschedule / Terminal Obsolescence on Visit Update
+    const oldVDate = current.visitDate ? new Date(current.visitDate).toISOString().split('T')[0] : '';
+    const oldVTime = current.startTime ? String(current.startTime).substring(0, 5) : '';
+    const newVDate = String(visitDate).split('T')[0];
+    const newVTime = String(startTime).substring(0, 5);
+    const scheduleChanged = oldVDate !== newVDate || oldVTime !== newVTime;
+
+    const [termCheck]: any = await pool.query('SELECT isTerminal FROM visit_statuses WHERE id = ?', [statusId]);
+    const isNowTerminal = termCheck.length > 0 && Boolean(termCheck[0].isTerminal);
+
+    if (isNowTerminal) {
+      await pool.query(`
+        UPDATE visit_reminder_deliveries
+        SET deliveryStatus = 'OBSOLETE',
+            errorMessage = 'Visit reached terminal status',
+            updatedAt = NOW()
+        WHERE visitId = ? AND deliveryStatus IN ('PENDING', 'RETRY_PENDING')
+      `, [id]);
+    } else if (scheduleChanged) {
+      await pool.query(`
+        UPDATE visit_reminder_deliveries
+        SET deliveryStatus = 'OBSOLETE',
+            errorMessage = CONCAT('Superseded by schedule change to ', ?, ' ', ?),
+            updatedAt = NOW()
+        WHERE visitId = ? AND deliveryStatus IN ('PENDING', 'RETRY_PENDING')
+      `, [visitDate, startTime, id]);
+    }
+
     if (Array.isArray(data.additionalPicIds)) {
       await pool.query('DELETE FROM visit_participants WHERE visitId = ?', [id]);
       for (const pUserId of data.additionalPicIds) {
@@ -676,6 +823,15 @@ visitsRoutes.post('/:id/cancel', async (req: any, res: any) => {
       WHERE id = ? AND tenantId = ?
     `, [cancelReasonText, id, targetTenant]);
 
+    // Gate 7: Mark unsent reminder occurrences OBSOLETE on cancellation
+    await conn.query(`
+      UPDATE visit_reminder_deliveries
+      SET deliveryStatus = 'OBSOLETE',
+          errorMessage = 'Visit cancelled',
+          updatedAt = NOW()
+      WHERE visitId = ? AND deliveryStatus IN ('PENDING', 'RETRY_PENDING')
+    `, [id]);
+
     await logAudit(
       targetTenant,
       actorUserId,
@@ -768,6 +924,15 @@ visitsRoutes.post('/:id/reschedule', async (req: any, res: any) => {
       SET visitDate = ?, startTime = ?, endTime = ?, statusId = 'VS-1', cancellationReason = NULL, updatedAt = NOW()
       WHERE id = ? AND tenantId = ?
     `, [visitDate, newStart, newEnd, id, targetTenant]);
+
+    // Gate 7: Reschedule Obsolescence (Date or Time change)
+    await conn.query(`
+      UPDATE visit_reminder_deliveries
+      SET deliveryStatus = 'OBSOLETE',
+          errorMessage = CONCAT('Superseded by reschedule to ', ?, ' ', ?),
+          updatedAt = NOW()
+      WHERE visitId = ? AND deliveryStatus IN ('PENDING', 'RETRY_PENDING')
+    `, [visitDate, newStart, id]);
 
     const auditDesc = `Rescheduled from ${oldDate} (${oldStart}-${oldEnd}) to ${visitDate} (${newStart ? newStart.substring(0, 5) : ''}-${newEnd ? newEnd.substring(0, 5) : ''}). Reason: ${rescheduleReasonText || 'N/A'}`;
 
