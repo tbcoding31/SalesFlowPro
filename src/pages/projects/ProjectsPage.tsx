@@ -23,20 +23,22 @@ export const ProjectsPage: React.FC = () => {
   const [draggedOppId, setDraggedOppId] = useState<string | null>(null);
 
   
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   const loadData = async (page = currentPage) => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       if (viewMode === 'LIST') {
         const [pRes, cList] = await Promise.all([
           crmApi.fetchProjects({ page, pageSize, search: searchQuery || undefined, tenantId }),
           crmApi.fetchCollection('customers', tenantId)
         ]);
-        if ((pRes as any).data) {
-          setProjects((pRes as any).data);
-          setTotalItems((pRes as any).pagination.totalItems);
-          // setTotalPages((pRes as any).pagination.totalPages);
-          setCurrentPage((pRes as any).pagination.page);
-        }
+        const list = Array.isArray(pRes) ? pRes : (pRes?.data || []);
+        const pagination = (pRes as any)?.pagination || { totalItems: list.length, totalPages: 1, page: 1 };
+        setProjects(list);
+        setTotalItems(pagination.totalItems);
+        setCurrentPage(pagination.page);
         setCustomers(cList as any);
       } else {
         const [pListRes, cList] = await Promise.all([
@@ -44,11 +46,12 @@ export const ProjectsPage: React.FC = () => {
           crmApi.fetchCollection('customers', tenantId)
         ]);
         setProjects(pListRes.data as any);
-        setPipelineAggregates(pListRes.aggregates);
+        setPipelineAggregates(pListRes.aggregates || {});
         setCustomers(cList as any);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to load projects', err);
+      setLoadError(err.message || 'Unable to load project pipeline');
     } finally {
       setIsLoading(false);
     }
@@ -57,11 +60,6 @@ export const ProjectsPage: React.FC = () => {
   React.useEffect(() => {
     loadData(1);
   }, [tenantId, viewMode, pageSize, searchQuery]);
-
-
-  React.useEffect(() => {
-    loadData();
-  }, [tenantId]);
 
   // Follow Up Modal State
   const [showFollowUpModal, setShowFollowUpModal] = useState(false);
@@ -92,13 +90,35 @@ export const ProjectsPage: React.FC = () => {
     { key: 'PROPOSAL', label: 'Proposal Sent', color: 'border-indigo-300' },
     { key: 'NEGOTIATION', label: 'Negotiation', color: 'border-amber-300' },
     { key: 'WON', label: 'Won / Deal', color: 'border-emerald-300' },
-    { key: 'LOST', label: 'Lost', color: 'border-rose-300' },
   ];
 
   // Summaries
-  const totalPipeline = useMemo(() => projects.reduce((acc, curr) => acc + (curr.estimatedValue || 0), 0), [projects]);
-  const weightedPipeline = useMemo(() => projects.reduce((acc, curr) => acc + ((curr.estimatedValue || 0) * ((curr.probability || 0) / 100)), 0), [projects]);
-  const totalWon = useMemo(() => projects.filter(o => o.stage === 'WON').reduce((acc, curr) => acc + (curr.estimatedValue || 0), 0), [projects]);
+  const openStageKeys = useMemo(() => new Set(['LEAD', 'QUALIFICATION', 'PROPOSAL', 'NEGOTIATION', 'PS-1', 'PS-2', 'PS-3', 'PS-4']), []);
+
+  const totalPipeline = useMemo(() => {
+    return projects
+      .filter(o => openStageKeys.has((o.stageCode || o.stage || o.stageId || '').toUpperCase()))
+      .reduce((acc, curr) => acc + (Number(curr.value ?? curr.estimatedValue) || 0), 0);
+  }, [projects, openStageKeys]);
+
+  const weightedPipeline = useMemo(() => {
+    return projects
+      .filter(o => openStageKeys.has((o.stageCode || o.stage || o.stageId || '').toUpperCase()))
+      .reduce((acc, curr) => {
+        const val = Number(curr.value ?? curr.estimatedValue) || 0;
+        const prob = Number((curr as any).effectiveProbability ?? curr.probability ?? 0);
+        return acc + ((val * prob) / 100);
+      }, 0);
+  }, [projects, openStageKeys]);
+
+  const totalWon = useMemo(() => {
+    return projects
+      .filter(o => {
+        const s = (o.stageCode || o.stage || o.stageId || '').toUpperCase();
+        return s === 'WON' || s === 'PS-5';
+      })
+      .reduce((acc, curr) => acc + (Number(curr.value ?? curr.estimatedValue) || 0), 0);
+  }, [projects]);
 
   const formatMoney = (val: number) => {
     return new Intl.NumberFormat('id-ID', {
@@ -221,13 +241,25 @@ export const ProjectsPage: React.FC = () => {
   // List View Filtering
   const filteredList = useMemo(() => {
     return projects.filter(opp => {
+      const pTitle = (opp.title || opp.name || '').toLowerCase();
+      const cName = (opp.customerName || '').toLowerCase();
       if (searchTerm) {
         const term = searchTerm.toLowerCase();
-        if (!opp.name.toLowerCase().includes(term) && !opp.customerName.toLowerCase().includes(term)) {
+        if (!pTitle.includes(term) && !cName.includes(term)) {
           return false;
         }
       }
-      if (stageFilter !== 'ALL' && opp.stage !== stageFilter) return false;
+      const pStage = (opp.stageCode || opp.stage || opp.stageId || '').toUpperCase();
+      if (stageFilter !== 'ALL') {
+        const filterUpper = stageFilter.toUpperCase();
+        const stageMatch = pStage === filterUpper || 
+          (filterUpper === 'LEAD' && pStage === 'PS-1') ||
+          (filterUpper === 'QUALIFICATION' && pStage === 'PS-2') ||
+          (filterUpper === 'PROPOSAL' && pStage === 'PS-3') ||
+          (filterUpper === 'NEGOTIATION' && pStage === 'PS-4') ||
+          (filterUpper === 'WON' && pStage === 'PS-5');
+        if (!stageMatch) return false;
+      }
       if (customerFilter !== 'ALL' && opp.customerId !== customerFilter) return false;
       return true;
     });
@@ -251,16 +283,27 @@ export const ProjectsPage: React.FC = () => {
     setSelectedIds(newSet);
   };
 
-  const getStageBadge = (stage: ProjectStage) => {
-    switch (stage) {
-      case 'LEAD': return <span className="px-2 py-0.5 bg-slate-100 text-slate-700 text-[10px] font-bold rounded uppercase tracking-wider border border-slate-200">Leads</span>;
-      case 'QUALIFICATION': return <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold rounded uppercase tracking-wider border border-blue-200">Discuss/Follow up</span>;
-      case 'PROPOSAL': return <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 text-[10px] font-bold rounded uppercase tracking-wider border border-indigo-200">Proposal Sent</span>;
-      case 'NEGOTIATION': return <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-bold rounded uppercase tracking-wider border border-amber-200">Negotiation</span>;
-      case 'WON': return <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded uppercase tracking-wider border border-emerald-200">Won / Deal</span>;
-      case 'LOST': return <span className="px-2 py-0.5 bg-rose-100 text-rose-700 text-[10px] font-bold rounded uppercase tracking-wider border border-rose-200">Lost</span>;
-      default: return null;
+  const getStageBadge = (stage: string) => {
+    const s = (stage || '').toUpperCase();
+    if (s === 'LEAD' || s === 'PS-1') {
+      return <span className="px-2 py-0.5 bg-slate-100 text-slate-700 text-[10px] font-bold rounded uppercase tracking-wider border border-slate-200">Leads</span>;
     }
+    if (s === 'QUALIFICATION' || s === 'PS-2') {
+      return <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold rounded uppercase tracking-wider border border-blue-200">Discuss/Follow up</span>;
+    }
+    if (s === 'PROPOSAL' || s === 'PS-3') {
+      return <span className="px-2 py-0.5 bg-indigo-100 text-indigo-700 text-[10px] font-bold rounded uppercase tracking-wider border border-indigo-200">Proposal Sent</span>;
+    }
+    if (s === 'NEGOTIATION' || s === 'PS-4') {
+      return <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-bold rounded uppercase tracking-wider border border-amber-200">Negotiation</span>;
+    }
+    if (s === 'WON' || s === 'PS-5') {
+      return <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded uppercase tracking-wider border border-emerald-200">Won / Deal</span>;
+    }
+    if (s === 'LOST') {
+      return <span className="px-2 py-0.5 bg-rose-100 text-rose-700 text-[10px] font-bold rounded uppercase tracking-wider border border-rose-200">Lost</span>;
+    }
+    return <span className="px-2 py-0.5 bg-slate-100 text-slate-600 text-[10px] font-bold rounded uppercase tracking-wider border border-slate-200">{stage || 'Unknown'}</span>;
   };
 
   return (
@@ -303,6 +346,21 @@ export const ProjectsPage: React.FC = () => {
         </div>
       </div>
 
+      {loadError && (
+        <div className="bg-rose-50 border border-rose-200 text-rose-700 px-4 py-3 rounded-xl flex items-center justify-between text-sm shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-[18px]">error</span>
+            <span>{loadError}</span>
+          </div>
+          <button 
+            onClick={() => loadData(currentPage)} 
+            className="px-3 py-1 bg-rose-600 text-white text-xs font-bold rounded-lg hover:bg-rose-700 transition-colors cursor-pointer"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Summary Row */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 shrink-0">
         <div className="bg-white p-5 rounded-2xl border border-[#E1E1E1] shadow-2xs flex items-center justify-between">
@@ -339,8 +397,16 @@ export const ProjectsPage: React.FC = () => {
         <div className="flex-1 overflow-hidden flex flex-col">
           <div className="flex gap-4 overflow-x-auto overflow-y-hidden pb-4 h-full snap-x">
             {stages.map((stage) => {
-              const stageOpps = projects.filter(o => o.stage === stage.key);
-              const stageValue = stageOpps.reduce((acc, curr) => acc + curr.estimatedValue, 0);
+              const stageOpps = projects.filter(o => {
+                const s = (o.stageCode || o.stage || o.stageId || '').toUpperCase();
+                return s === stage.key || 
+                  (stage.key === 'LEAD' && s === 'PS-1') || 
+                  (stage.key === 'QUALIFICATION' && s === 'PS-2') || 
+                  (stage.key === 'PROPOSAL' && s === 'PS-3') || 
+                  (stage.key === 'NEGOTIATION' && s === 'PS-4') || 
+                  (stage.key === 'WON' && s === 'PS-5');
+              });
+              const stageValue = stageOpps.reduce((acc, curr) => acc + (Number(curr.value ?? curr.estimatedValue) || 0), 0);
 
               return (
                 <div 
@@ -359,16 +425,11 @@ export const ProjectsPage: React.FC = () => {
                       </span>
                     </div>
                     <div className="text-xs font-bold text-slate-500">
-                      {formatSummary(0)}
+                      {formatSummary(stageValue)}
                     </div>
                   </div>
 
                   <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                    {stageOpps.length < stageOpps.length && (
-                      <div className="text-[10px] font-bold text-center text-slate-400 uppercase tracking-wider mb-2">
-                        Showing {stageOpps.length} of {stageOpps.length} (Load More)
-                      </div>
-                    )}
                     {stageOpps.map(opp => (
                       <div
                         key={opp.id}
@@ -381,18 +442,18 @@ export const ProjectsPage: React.FC = () => {
                         <div className="flex flex-col gap-3">
                           <div>
                             <div className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider mb-1 truncate">
-                              {opp.customerName}
+                              {opp.customerName || 'Customer'}
                             </div>
                             <h4 
                               onClick={() => navigate(`/projects/${opp.id}`)}
                               className="text-sm font-bold text-[#1a1c1c] leading-tight hover:text-indigo-600 transition-colors cursor-pointer"
                             >
-                              {opp.name}
+                              {opp.title || opp.name || opp.id}
                             </h4>
                           </div>
                           
                           <div className="text-sm font-extrabold text-[#008f53]">
-                            {formatMoney(opp.estimatedValue)}
+                            {formatMoney(Number(opp.value ?? opp.estimatedValue) || 0)}
                           </div>
 
                           <div className="flex items-center justify-between pt-3 border-t border-slate-100">
@@ -411,7 +472,7 @@ export const ProjectsPage: React.FC = () => {
                             <div className="flex items-center gap-1 text-slate-500">
                               <span className="material-symbols-outlined text-[12px]">event</span>
                               <span className="text-[10px] font-semibold">
-                                {new Date(opp.expectedCloseDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                                {opp.expectedCloseDate ? new Date(opp.expectedCloseDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '-'}
                               </span>
                             </div>
                           </div>
@@ -562,28 +623,28 @@ export const ProjectsPage: React.FC = () => {
                           onClick={() => navigate(`/projects/${opp.id}`)}
                           className="font-bold text-[#1a1c1c] text-sm leading-tight group-hover:text-indigo-600 transition-colors cursor-pointer hover:underline"
                         >
-                          {opp.name}
+                          {opp.title || opp.name || opp.id}
                         </div>
                         <div className="text-xs text-indigo-600 font-semibold mt-1 flex items-center gap-1">
                           <span className="material-symbols-outlined text-[14px]">domain</span>
-                          {opp.customerName}
+                          {opp.customerName || 'Customer'}
                         </div>
                       </td>
                       <td className="px-5 py-4">
                         <div className="text-sm font-extrabold text-[#008f53]">
-                          {formatMoney(opp.estimatedValue)}
+                          {formatMoney(Number(opp.value ?? opp.estimatedValue) || 0)}
                         </div>
                         <div className="mt-1.5 flex items-center gap-2">
                           <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden max-w-[60px]">
-                            <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${opp.probability}%` }}></div>
+                            <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${opp.probability ?? (opp as any).effectiveProbability ?? 0}%` }}></div>
                           </div>
                           <div className="text-[10px] text-slate-500 font-bold">
-                            {opp.probability}%
+                            {opp.probability ?? (opp as any).effectiveProbability ?? 0}%
                           </div>
                         </div>
                       </td>
                       <td className="px-5 py-4">
-                        {getStageBadge(opp.stage)}
+                        {getStageBadge(opp.stageCode || opp.stage || opp.stageId || '')}
                       </td>
                       <td className="px-5 py-4">
                         <div className="flex items-center gap-2">
@@ -600,15 +661,19 @@ export const ProjectsPage: React.FC = () => {
                       <td className="px-5 py-4">
                         <div className="flex items-center gap-1.5 text-sm font-semibold text-[#1a1c1c]">
                           <span className="material-symbols-outlined text-[14px] text-slate-400">event</span>
-                          {new Date(opp.expectedCloseDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                          {opp.expectedCloseDate ? new Date(opp.expectedCloseDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '-'}
                         </div>
                         <div className="text-[10px] text-slate-400 font-medium mt-1">
-                          Updated {new Date(opp.updatedAt).toLocaleDateString()}
+                          Updated {opp.updatedAt ? new Date(opp.updatedAt).toLocaleDateString() : '-'}
                         </div>
                       </td>
                       <td className="px-5 py-4 text-right">
                         <div className="flex items-center justify-end gap-1">
-                          <button className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer" title="Edit">
+                          <button 
+                            onClick={() => navigate(`/projects/${opp.id}`)}
+                            className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer" 
+                            title="Edit"
+                          >
                             <span className="material-symbols-outlined text-[18px]">edit</span>
                           </button>
                           <button className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer" title="More">

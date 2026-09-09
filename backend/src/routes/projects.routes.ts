@@ -7,7 +7,7 @@ import { syncProjectAssignmentTasks } from '../services/taskAssignment.service';
 
 export const projectsRoutes = Router();
 
-// GET /api/projects - List projects with role/tenant scoping
+// GET /api/projects - List projects with role/tenant scoping (Canonical { data, pagination } shape)
 projectsRoutes.get('/', async (req: any, res: any) => {
   const actorRole = (req as any).userRole;
   const actorTenant = (req as any).userTenantId;
@@ -37,8 +37,8 @@ projectsRoutes.get('/', async (req: any, res: any) => {
       extraParams.push(picId);
     }
     if (stageId && stageId !== 'ALL') {
-      extraWhere += ' AND p.stageId = ?';
-      extraParams.push(stageId);
+      extraWhere += ' AND (p.stageId = ? OR ps.code = ?)';
+      extraParams.push(stageId, stageId);
     }
     if (statusScope === 'active' || status === 'active') {
       extraWhere += ` AND (
@@ -55,12 +55,35 @@ projectsRoutes.get('/', async (req: any, res: any) => {
       extraParams.push(s, s);
     }
 
+    const pNum = parseInt(req.query.page as string, 10);
+    const pSize = parseInt(req.query.pageSize as string, 10);
+    const hasExplicitPagination = !isNaN(pNum) && !isNaN(pSize) && pNum > 0 && pSize > 0;
+    const page = hasExplicitPagination ? pNum : 1;
+    const pageSize = hasExplicitPagination ? pSize : 100;
+
+    // Count total items
+    const countSql = `
+      SELECT COUNT(*) as total
+      FROM projects p
+      LEFT JOIN project_stages ps ON (ps.id = p.stageId OR ps.code = p.stageId)
+      ${where.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
+      ${extraWhere}
+    `;
+    const [countRows]: any = await pool.query(countSql, [...params, ...extraParams]);
+    const totalItems = countRows[0]?.total || 0;
+    const totalPages = Math.ceil(totalItems / pageSize) || 1;
+    const offset = (page - 1) * pageSize;
+
     const selectSql = `
       SELECT 
         p.*,
+        p.title as name,
+        p.value as estimatedValue,
+        COALESCE(ps.code, p.stageId) as stage,
         c.name as customerName, c.code as customerCode,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
-        ps.name as stageName, ps.code as stageCode
+        ps.name as stageName, ps.code as stageCode,
+        COALESCE(p.probability, ps.probability, 0) as effectiveProbability
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
       LEFT JOIN users u ON u.id = p.picId
@@ -68,13 +91,196 @@ projectsRoutes.get('/', async (req: any, res: any) => {
       ${where.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
       ${extraWhere}
       ORDER BY p.createdAt DESC
+      LIMIT ? OFFSET ?
     `;
 
-    const [rows]: any = await pool.query(selectSql, [...params, ...extraParams]);
-    res.json(rows);
+    const [rows]: any = await pool.query(selectSql, [...params, ...extraParams, pageSize, offset]);
+
+    res.json({
+      data: rows,
+      pagination: {
+        page,
+        pageSize,
+        totalItems,
+        totalPages
+      }
+    });
   } catch (err: any) {
     console.error('GET /api/projects error:', err);
     res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// GET /api/projects/pipeline - Pipeline Kanban grouping & KPI aggregates
+projectsRoutes.get('/pipeline', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { where, params } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'p.picId');
+
+  try {
+    const selectSql = `
+      SELECT 
+        p.*,
+        p.title as name,
+        p.value as estimatedValue,
+        COALESCE(ps.code, p.stageId) as stage,
+        c.name as customerName, c.code as customerCode,
+        u.name as picName, u.email as picEmail, u.avatar as picAvatar,
+        ps.name as stageName, ps.code as stageCode,
+        COALESCE(p.probability, ps.probability, 0) as effectiveProbability
+      FROM projects p
+      LEFT JOIN customers c ON c.id = p.customerId
+      LEFT JOIN users u ON u.id = p.picId
+      LEFT JOIN project_stages ps ON (ps.id = p.stageId OR ps.code = p.stageId)
+      ${where.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
+      ORDER BY p.createdAt DESC
+    `;
+
+    const [rows]: any = await pool.query(selectSql, params);
+
+    const aggregates: Record<string, { count: number; value: number }> = {
+      LEAD: { count: 0, value: 0 },
+      QUALIFICATION: { count: 0, value: 0 },
+      PROPOSAL: { count: 0, value: 0 },
+      NEGOTIATION: { count: 0, value: 0 },
+      WON: { count: 0, value: 0 }
+    };
+
+    let totalPipeline = 0;
+    let weightedPipeline = 0;
+    let totalWon = 0;
+
+    const openStageCodes = new Set(['LEAD', 'QUALIFICATION', 'PROPOSAL', 'NEGOTIATION']);
+
+    rows.forEach((p: any) => {
+      const stageCode = (p.stageCode || p.stageId || '').toUpperCase();
+      const val = Number(p.value) || 0;
+      const prob = Number(p.effectiveProbability) || 0;
+
+      if (aggregates[stageCode]) {
+        aggregates[stageCode].count++;
+        aggregates[stageCode].value += val;
+      }
+
+      if (openStageCodes.has(stageCode)) {
+        totalPipeline += val;
+        weightedPipeline += (val * prob) / 100;
+      } else if (stageCode === 'WON' || p.stageId === 'PS-5') {
+        totalWon += val;
+      }
+    });
+
+    res.json({
+      success: true,
+      data: rows,
+      aggregates,
+      summary: {
+        totalPipeline,
+        totalPipelineValue: totalPipeline,
+        weightedPipeline,
+        totalWon,
+        totalProjects: rows.length
+      }
+    });
+  } catch (err: any) {
+    console.error('GET /api/projects/pipeline error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// PATCH /api/projects/:id/stage - Transition project commercial stage
+projectsRoutes.patch('/:id/stage', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { id } = req.params;
+  const targetStage = req.body?.stageId || req.body?.stage;
+  const { lossReason, reopenReason, notes } = req.body || {};
+
+  if (!targetStage) {
+    return res.status(400).json({ error: 'Stage ID is required', code: 'MISSING_STAGE_ID' });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [pRows]: any = await conn.query(
+      'SELECT * FROM projects WHERE id = ? AND tenantId = ? FOR UPDATE',
+      [id, targetTenant]
+    );
+
+    if (pRows.length === 0) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    const currentProject = pRows[0];
+
+    // Strictly validate and resolve target stage against MySQL project_stages
+    const [sRows]: any = await conn.query(
+      'SELECT id, code, name FROM project_stages WHERE id = ? OR code = ? LIMIT 1',
+      [targetStage, targetStage]
+    );
+
+    if (sRows.length === 0) {
+      await conn.rollback();
+      return res.status(400).json({ error: `Invalid project stage: ${targetStage}`, code: 'INVALID_STAGE' });
+    }
+
+    const resolvedStageId = sRows[0].id;
+    const resolvedStageCode = sRows[0].code;
+    const resolvedStageName = sRows[0].name;
+
+    await conn.query(
+      'UPDATE projects SET stageId = ? WHERE id = ? AND tenantId = ?',
+      [resolvedStageId, id, targetTenant]
+    );
+
+    await conn.commit();
+
+    await logAudit(
+      targetTenant,
+      actorUserId,
+      'PROJECT_STAGE_CHANGED',
+      'Project',
+      id,
+      `Project '${currentProject.title}' transitioned to stage '${resolvedStageName}'`,
+      req.ip,
+      req.get('User-Agent'),
+      'CRM'
+    );
+
+    res.json({
+      success: true,
+      id,
+      stageId: resolvedStageId,
+      stageCode: resolvedStageCode,
+      stageName: resolvedStageName,
+      currentStage: resolvedStageCode
+    });
+  } catch (err: any) {
+    await conn.rollback();
+    console.error(`PATCH /api/projects/${id}/stage error:`, err);
+    res.status(500).json({ error: err.message || 'Internal Server Error' });
+  } finally {
+    conn.release();
   }
 });
 
@@ -95,9 +301,13 @@ projectsRoutes.get('/:id', async (req: any, res: any) => {
     const [rows]: any = await pool.query(`
       SELECT 
         p.*,
+        p.title as name,
+        p.value as estimatedValue,
+        COALESCE(ps.code, p.stageId) as stage,
         c.name as customerName, c.code as customerCode,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
-        ps.name as stageName, ps.code as stageCode
+        ps.name as stageName, ps.code as stageCode,
+        COALESCE(p.probability, ps.probability, 0) as effectiveProbability
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
       LEFT JOIN users u ON u.id = p.picId
@@ -133,11 +343,17 @@ projectsRoutes.get('/:id/summary', async (req: any, res: any) => {
     const [projRows]: any = await pool.query(`
       SELECT 
         p.*,
+        p.title as name,
+        p.value as estimatedValue,
+        COALESCE(ps.code, p.stageId) as stage,
         c.name as customerName, c.code as customerCode,
-        u.name as picName, u.email as picEmail, u.avatar as picAvatar
+        u.name as picName, u.email as picEmail, u.avatar as picAvatar,
+        ps.name as stageName, ps.code as stageCode,
+        COALESCE(p.probability, ps.probability, 0) as effectiveProbability
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
       LEFT JOIN users u ON u.id = p.picId
+      LEFT JOIN project_stages ps ON (ps.id = p.stageId OR ps.code = p.stageId)
       WHERE p.id = ? AND p.tenantId = ?
     `, [id, targetTenant]);
 

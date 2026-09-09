@@ -92,10 +92,49 @@ export const crmApi = {
     const url = `${API_BASE}/projects${q.toString() ? '?' + q.toString() : ''}`;
     const res = await fetch(url, { headers: getAuthHeaders() });
     if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch projects`);
-    return await res.json();
+    const json = await res.json();
+    if (json && Array.isArray(json.data)) {
+      const page = json.pagination?.page || 1;
+      const totalPages = json.pagination?.totalPages || 1;
+      return {
+        data: json.data,
+        pagination: {
+          page,
+          pageSize: json.pagination?.pageSize || 20,
+          totalItems: json.pagination?.totalItems || json.data.length,
+          totalPages,
+          hasNextPage: json.pagination?.hasNextPage ?? (page < totalPages),
+          hasPreviousPage: json.pagination?.hasPreviousPage ?? (page > 1)
+        }
+      };
+    }
+    if (Array.isArray(json)) {
+      return {
+        data: json,
+        pagination: {
+          page: 1,
+          pageSize: json.length,
+          totalItems: json.length,
+          totalPages: 1,
+          hasNextPage: false,
+          hasPreviousPage: false
+        }
+      };
+    }
+    return {
+      data: [],
+      pagination: {
+        page: 1,
+        pageSize: 20,
+        totalItems: 0,
+        totalPages: 1,
+        hasNextPage: false,
+        hasPreviousPage: false
+      }
+    };
   },
 
-  fetchProjectPipeline: async (tenantId?: string): Promise<{ data: Project[], aggregates: Record<string, { count: number, value: number }> }> => {
+  fetchProjectPipeline: async (tenantId?: string): Promise<{ data: Project[], aggregates: Record<string, { count: number, value: number }>, summary?: any }> => {
     try {
       const params = new URLSearchParams();
       if (tenantId && tenantId !== 'ALL') params.set('tenantId', tenantId);
@@ -104,10 +143,10 @@ export const crmApi = {
       const res = await fetch(url, { headers: getAuthHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch project pipeline`);
       const data = await res.json();
-      return { data: data.data || [], aggregates: data.aggregates || {} };
+      return { data: data.data || [], aggregates: data.aggregates || {}, summary: data.summary || {} };
     } catch (err) {
       console.error('[crmApi.fetchProjectPipeline error]', err);
-      return { data: [], aggregates: {} };
+      return { data: [], aggregates: {}, summary: {} };
     }
   },
 

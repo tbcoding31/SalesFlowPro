@@ -26,6 +26,7 @@ export const CreateProjectPage: React.FC = () => {
   const [picId, setPicId] = useState('');
   const [description, setDescription] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // PIC Dropdown State
   const [isPicDropdownOpen, setIsPicDropdownOpen] = useState(false);
@@ -94,7 +95,10 @@ export const CreateProjectPage: React.FC = () => {
     setIsSubmitting(false);
 
     if (res.success) {
-      navigate('/projects');
+      setToastMessage(isDraft ? 'Project draft saved successfully!' : 'Project created successfully!');
+      setTimeout(() => {
+        navigate('/projects');
+      }, 1000);
     } else {
       alert(`Failed to create project: ${res.error}`);
     }
@@ -154,24 +158,35 @@ export const CreateProjectPage: React.FC = () => {
         <div className="flex items-center gap-3 w-full sm:w-auto">
           <button 
             onClick={() => navigate('/projects')}
-            className="flex-1 sm:flex-none px-4 py-2 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 text-sm font-bold rounded-xl shadow-sm transition-colors"
+            disabled={isSubmitting || !!toastMessage}
+            className="flex-1 sm:flex-none px-4 py-2 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-50 text-sm font-bold rounded-xl shadow-sm transition-colors cursor-pointer"
           >
             Cancel
           </button>
           <button 
             onClick={() => handleSave(true)}
-            className="flex-1 sm:flex-none px-4 py-2 bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 text-sm font-bold rounded-xl shadow-sm transition-colors"
+            disabled={isSubmitting || !!toastMessage}
+            className="flex-1 sm:flex-none px-4 py-2 bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 text-sm font-bold rounded-xl shadow-sm transition-colors cursor-pointer"
           >
-            Save Draft
+            {isSubmitting ? 'Saving...' : 'Save Draft'}
           </button>
           <button 
             onClick={() => handleSave(false)}
-            className="flex-1 sm:flex-none px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded-xl shadow-sm transition-colors"
+            disabled={isSubmitting || !!toastMessage}
+            className="flex-1 sm:flex-none px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 text-sm font-bold rounded-xl shadow-sm transition-colors cursor-pointer"
           >
-            Create Project
+            {isSubmitting ? 'Creating...' : 'Create Project'}
           </button>
         </div>
       </div>
+
+      {/* Floating Success Toast */}
+      {toastMessage && (
+        <div className="fixed top-6 right-6 z-50 flex items-center gap-2.5 px-5 py-3.5 bg-emerald-600 text-white rounded-xl shadow-xl border border-emerald-500 animate-in fade-in duration-200">
+          <span className="material-symbols-outlined text-[22px]">check_circle</span>
+          <span className="text-sm font-semibold">{toastMessage}</span>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left Column - Project Information */}

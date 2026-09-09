@@ -315,9 +315,14 @@ export interface Project {
   picName: string;
   picAvatar?: string;
   estimatedValue: number;
+  value?: number;
   probability: number;
+  effectiveProbability?: number;
   expectedCloseDate: string;
   stage: ProjectStage;
+  stageId?: string;
+  stageCode?: string;
+  stageName?: string;
   source: string;
   description?: string;
   createdAt: string;
