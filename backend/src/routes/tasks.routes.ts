@@ -10,9 +10,9 @@ const TASK_JOIN_CLAUSES = `
   LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
   LEFT JOIN task_priorities tp ON tp.id = t.priorityId AND tp.tenantId = t.tenantId
   LEFT JOIN users u ON u.id = t.picId
-  LEFT JOIN customers c ON c.id = t.customerId
-  LEFT JOIN projects p ON p.id = t.relatedProjectId
-  LEFT JOIN visits v ON v.id = t.relatedVisitId
+  LEFT JOIN customers c ON c.id = t.customerId AND c.tenantId = t.tenantId
+  LEFT JOIN projects p ON p.id = t.relatedProjectId AND p.tenantId = t.tenantId
+  LEFT JOIN visits v ON v.id = t.relatedVisitId AND v.tenantId = t.tenantId
 `;
 
 const TASK_SELECT_FIELDS = `
@@ -21,26 +21,29 @@ const TASK_SELECT_FIELDS = `
   t.title,
   t.description,
   COALESCE(t.sourceType, 'MANUAL') as sourceType,
-  COALESCE(ts.id, t.statusId) as statusId,
-  COALESCE(ts.code, t.statusId) as statusCode,
-  COALESCE(ts.name, t.statusId) as statusName,
+  t.statusId as statusId,
+  ts.code as statusCode,
+  ts.name as statusName,
   ts.color as statusColor,
   CASE 
     WHEN ts.code = 'COMPLETED' OR ts.code = 'TSK_COMPLETED' OR ts.isTerminal = 1 THEN 'COMPLETED'
     WHEN ts.code = 'IN_PROGRESS' OR ts.code = 'TSK_INPROGRESS' THEN 'IN_PROGRESS'
     WHEN ts.code = 'CANCELLED' OR ts.code = 'TSK_CANCELLED' THEN 'CANCELLED'
-    ELSE 'TODO'
+    WHEN ts.code = 'TODO' OR ts.code = 'TSK_TODO' THEN 'TODO'
+    WHEN ts.code IS NOT NULL THEN ts.code
+    ELSE 'UNKNOWN'
   END as status,
-  COALESCE(tp.id, t.priorityId) as priorityId,
-  COALESCE(tp.code, t.priorityId) as priorityCode,
-  COALESCE(tp.name, t.priorityId) as priorityName,
+  t.priorityId as priorityId,
+  tp.code as priorityCode,
+  tp.name as priorityName,
   tp.color as priorityColor,
   CASE
     WHEN tp.code = 'URGENT' OR tp.code = 'PRI_URGENT' THEN 'URGENT'
     WHEN tp.code = 'HIGH' OR tp.code = 'PRI_HIGH' THEN 'HIGH'
     WHEN tp.code = 'LOW' OR tp.code = 'PRI_LOW' THEN 'LOW'
     WHEN tp.code = 'MEDIUM' OR tp.code = 'PRI_MEDIUM' OR tp.code = 'NORMAL' THEN 'MEDIUM'
-    ELSE COALESCE(tp.code, 'MEDIUM')
+    WHEN tp.code IS NOT NULL THEN tp.code
+    ELSE 'UNKNOWN'
   END as priority,
   t.picId,
   COALESCE(u.name, 'Unassigned') as picName,

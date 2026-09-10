@@ -135,14 +135,14 @@ visitsRoutes.get('/', async (req: any, res: any) => {
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
         c.name as customerName, c.code as customerCode,
         p.title as projectTitle, p.title as projectName, p.id as projectCode,
-        COALESCE(ps.id, p.stageId) as projectStatusId,
-        COALESCE(ps.code, p.stageId) as projectStatusCode,
-        COALESCE(ps.name, p.stageId) as projectStatusName
+        p.stageId as projectStatusId,
+        ps.code as projectStatusCode,
+        ps.name as projectStatusName
       FROM visits v
       LEFT JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
       LEFT JOIN visit_purposes vp ON vp.id = v.purposeId AND vp.tenantId = v.tenantId
       LEFT JOIN users u ON u.id = v.picId
-      LEFT JOIN customers c ON c.id = v.customerId
+      LEFT JOIN customers c ON c.id = v.customerId AND c.tenantId = v.tenantId
       LEFT JOIN projects p ON p.id = v.relatedProjectId AND p.tenantId = v.tenantId
       LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       ${where.replace(/WHERE tenantId/g, 'WHERE v.tenantId')}
@@ -321,14 +321,14 @@ visitsRoutes.get('/:id', async (req: any, res: any) => {
         c.name as customerName, c.code as customerCode,
         (SELECT address FROM customer_addresses ca WHERE ca.customerId = c.id ORDER BY ca.isPrimary DESC LIMIT 1) as customerAddress,
         p.title as projectTitle, p.title as projectName, p.id as projectCode,
-        COALESCE(ps.id, p.stageId) as projectStatusId,
-        COALESCE(ps.code, p.stageId) as projectStatusCode,
-        COALESCE(ps.name, p.stageId) as projectStatusName
+        p.stageId as projectStatusId,
+        ps.code as projectStatusCode,
+        ps.name as projectStatusName
       FROM visits v
       LEFT JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
       LEFT JOIN visit_purposes vp ON vp.id = v.purposeId AND vp.tenantId = v.tenantId
       LEFT JOIN users u ON u.id = v.picId
-      LEFT JOIN customers c ON c.id = v.customerId
+      LEFT JOIN customers c ON c.id = v.customerId AND c.tenantId = v.tenantId
       LEFT JOIN projects p ON p.id = v.relatedProjectId AND p.tenantId = v.tenantId
       LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       WHERE v.id = ? AND v.tenantId = ?
@@ -457,22 +457,26 @@ visitsRoutes.post('/', async (req: any, res: any) => {
 
   // Resolve statusId
   let resolvedStatusId: string | null = null;
+  let resolvedStatusCode: string = '';
+  let resolvedStatusName: string = '';
   // Resolve statusId (Must be active for new visit)
   const statusCandidate = data.statusId || data.status;
   if (statusCandidate) {
     const sVal = String(statusCandidate).trim();
     const [sRows]: any = await pool.query(
-      'SELECT id FROM visit_statuses WHERE (id = ? OR code = ? OR name = ?) AND tenantId = ? AND isActive = 1 LIMIT 1',
+      'SELECT id, code, name FROM visit_statuses WHERE (id = ? OR code = ? OR name = ?) AND tenantId = ? AND isActive = 1 LIMIT 1',
       [sVal, sVal, sVal, targetTenant]
     );
     if (sRows.length > 0) {
       resolvedStatusId = sRows[0].id;
+      resolvedStatusCode = sRows[0].code;
+      resolvedStatusName = sRows[0].name;
     } else {
       return res.status(400).json({ error: 'Invalid or inactive visit status', code: 'INVALID_VISIT_STATUS' });
     }
   } else {
     const [dRows]: any = await pool.query(
-      'SELECT id FROM visit_statuses WHERE tenantId = ? AND isActive = 1 AND isTerminal = 0 ORDER BY displayOrder ASC, id ASC LIMIT 1',
+      'SELECT id, code, name FROM visit_statuses WHERE tenantId = ? AND isActive = 1 AND isTerminal = 0 ORDER BY displayOrder ASC, id ASC LIMIT 1',
       [targetTenant]
     );
     if (dRows.length === 0) {
@@ -483,6 +487,8 @@ visitsRoutes.post('/', async (req: any, res: any) => {
       });
     }
     resolvedStatusId = dRows[0].id;
+    resolvedStatusCode = dRows[0].code;
+    resolvedStatusName = dRows[0].name;
   }
 
   // Resolve purposeId (Must be active for new visit)
@@ -568,8 +574,8 @@ visitsRoutes.post('/', async (req: any, res: any) => {
       success: true,
       id: visitId,
       message: 'Visit scheduled successfully',
-      statusCode: 'PLANNED',
-      statusName: 'Planned',
+      statusCode: resolvedStatusCode,
+      statusName: resolvedStatusName,
       visitDate,
       startTime: sTime,
       endTime: eTime,
@@ -588,8 +594,8 @@ visitsRoutes.post('/', async (req: any, res: any) => {
         location: loc,
         relatedProjectId: resolvedProjectId,
         statusId: resolvedStatusId,
-        statusCode: 'PLANNED',
-        statusName: 'Planned'
+        statusCode: resolvedStatusCode,
+        statusName: resolvedStatusName
       }
     });
   } catch (err: any) {
@@ -978,7 +984,7 @@ visitsRoutes.post('/:id/reschedule', async (req: any, res: any) => {
     const rescheduleReasonText = reason ? String(reason).trim() : null;
 
     // Rescheduling sets status to SCHEDULED or PLANNED for this tenant and clears cancellationReason
-    const [planStatusRows]: any = await conn.query("SELECT id FROM visit_statuses WHERE code IN ('SCHEDULED', 'PLANNED') AND tenantId = ? AND isActive = 1 ORDER BY displayOrder ASC LIMIT 1", [targetTenant]);
+    const [planStatusRows]: any = await conn.query("SELECT id, code, name FROM visit_statuses WHERE code IN ('SCHEDULED', 'PLANNED') AND tenantId = ? AND isActive = 1 ORDER BY displayOrder ASC LIMIT 1", [targetTenant]);
     if (planStatusRows.length === 0) {
       await conn.rollback();
       return res.status(500).json({
@@ -1027,8 +1033,8 @@ visitsRoutes.post('/:id/reschedule', async (req: any, res: any) => {
       id,
       message: 'Visit rescheduled successfully',
       statusId: planStatusId,
-      statusCode: 'PLANNED',
-      statusName: 'Planned',
+      statusCode: planStatusRows[0].code,
+      statusName: planStatusRows[0].name,
       visitDate,
       startTime: newStart,
       endTime: newEnd
@@ -1091,26 +1097,29 @@ visitsRoutes.get('/:id/tasks', async (req: any, res: any) => {
       SELECT 
         t.id, t.tenantId, t.title, t.description,
         COALESCE(t.sourceType, 'MANUAL') as sourceType,
-        COALESCE(ts.id, t.statusId) as statusId,
-        COALESCE(ts.code, t.statusId) as statusCode,
-        COALESCE(ts.name, t.statusId) as statusName,
+        t.statusId as statusId,
+        ts.code as statusCode,
+        ts.name as statusName,
         ts.color as statusColor,
         CASE 
           WHEN ts.code IN ('COMPLETED', 'TSK_COMPLETED') OR ts.isTerminal = 1 THEN 'COMPLETED'
           WHEN ts.code IN ('CANCELLED', 'TSK_CANCELLED') THEN 'CANCELLED'
           WHEN ts.code IN ('IN_PROGRESS', 'TSK_INPROGRESS') THEN 'IN_PROGRESS'
-          ELSE 'TODO'
+          WHEN ts.code IN ('TODO', 'TSK_TODO') THEN 'TODO'
+          WHEN ts.code IS NOT NULL THEN ts.code
+          ELSE 'UNKNOWN'
         END as status,
-        COALESCE(tp.id, t.priorityId) as priorityId,
-        COALESCE(tp.code, t.priorityId) as priorityCode,
-        COALESCE(tp.name, t.priorityId) as priorityName,
+        t.priorityId as priorityId,
+        tp.code as priorityCode,
+        tp.name as priorityName,
         tp.color as priorityColor,
         CASE
           WHEN tp.code IN ('URGENT', 'PRI_URGENT') THEN 'URGENT'
           WHEN tp.code IN ('HIGH', 'PRI_HIGH') THEN 'HIGH'
           WHEN tp.code IN ('LOW', 'PRI_LOW') THEN 'LOW'
           WHEN tp.code IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') THEN 'MEDIUM'
-          ELSE COALESCE(tp.code, 'MEDIUM')
+          WHEN tp.code IS NOT NULL THEN tp.code
+          ELSE 'UNKNOWN'
         END as priority,
         t.picId,
         COALESCE(u.name, 'Unassigned') as picName,
@@ -1129,7 +1138,7 @@ visitsRoutes.get('/:id/tasks', async (req: any, res: any) => {
       LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
       LEFT JOIN task_priorities tp ON tp.id = t.priorityId AND tp.tenantId = t.tenantId
       LEFT JOIN users u ON u.id = t.picId
-      LEFT JOIN customers c ON c.id = t.customerId
+      LEFT JOIN customers c ON c.id = t.customerId AND c.tenantId = t.tenantId
       WHERE t.tenantId = ? AND t.relatedVisitId = ?
       ORDER BY t.dueDate ASC, t.createdAt DESC
     `, [targetTenant, id]);

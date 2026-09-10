@@ -155,7 +155,7 @@ reportsRoutes.get('/tasks', async (req: any, res: any) => {
       FROM tasks t
       LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
       LEFT JOIN task_priorities tp ON tp.id = t.priorityId AND tp.tenantId = t.tenantId
-      LEFT JOIN customers c ON c.id = t.customerId
+      LEFT JOIN customers c ON c.id = t.customerId AND c.tenantId = t.tenantId
       LEFT JOIN users u ON u.id = t.picId
       ${taskWhere.replace(/WHERE tenantId/g, 'WHERE t.tenantId')}
       ORDER BY t.dueDate ASC, t.createdAt DESC
@@ -302,7 +302,7 @@ reportsRoutes.get('/visits', async (req: any, res: any) => {
       FROM visits v
       LEFT JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
       LEFT JOIN visit_purposes vp ON vp.id = v.purposeId AND vp.tenantId = v.tenantId
-      LEFT JOIN customers c ON c.id = v.customerId
+      LEFT JOIN customers c ON c.id = v.customerId AND c.tenantId = v.tenantId
       LEFT JOIN users u ON u.id = v.picId
       ${visitWhere.replace(/WHERE tenantId/g, 'WHERE v.tenantId')}
       ORDER BY v.visitDate DESC, v.startTime DESC
@@ -319,11 +319,11 @@ reportsRoutes.get('/visits', async (req: any, res: any) => {
     const purposePalette = ['#6366F1', '#8B5CF6', '#3B82F6', '#14B8A6', '#F59E0B'];
 
     const tableData = visits.map((v: any) => {
-      const sCode = v.statusCode || 'SCHEDULED';
+      const sCode = v.statusCode || 'UNKNOWN';
       const sName = v.statusName || sCode;
       const sColor = v.statusColor || '#3B82F6';
 
-      if (sCode === 'COMPLETED') completed++;
+      if (v.isTerminal === 1 || sCode === 'COMPLETED') completed++;
       else if (sCode === 'CANCELLED') cancelled++;
       else if (sCode === 'RESCHEDULED') rescheduled++;
 

@@ -77,7 +77,7 @@ projectsRoutes.get('/', async (req: any, res: any) => {
         p.*,
         p.title as name,
         p.value as estimatedValue,
-        COALESCE(ps.code, p.stageId) as stage,
+        COALESCE(ps.code, 'UNKNOWN') as stage,
         c.name as customerName, c.code as customerCode,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
         ps.name as stageName, ps.code as stageCode,
@@ -89,7 +89,7 @@ projectsRoutes.get('/', async (req: any, res: any) => {
         ps.allowNewProject as stageAllowNewProject,
         COALESCE(p.probability, ps.probability, 0) as effectiveProbability
       FROM projects p
-      LEFT JOIN customers c ON c.id = p.customerId
+      LEFT JOIN customers c ON c.id = p.customerId AND c.tenantId = p.tenantId
       LEFT JOIN users u ON u.id = p.picId
       LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       ${where.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
@@ -144,7 +144,7 @@ projectsRoutes.get('/pipeline', async (req: any, res: any) => {
         p.*,
         p.title as name,
         p.value as estimatedValue,
-        COALESCE(ps.code, p.stageId) as stage,
+        COALESCE(ps.code, 'UNKNOWN') as stage,
         c.name as customerName, c.code as customerCode,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
         ps.name as stageName, ps.code as stageCode,
@@ -156,7 +156,7 @@ projectsRoutes.get('/pipeline', async (req: any, res: any) => {
         ps.allowNewProject as stageAllowNewProject,
         COALESCE(p.probability, ps.probability, 0) as effectiveProbability
       FROM projects p
-      LEFT JOIN customers c ON c.id = p.customerId
+      LEFT JOIN customers c ON c.id = p.customerId AND c.tenantId = p.tenantId
       LEFT JOIN users u ON u.id = p.picId
       LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       ${where.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
@@ -446,7 +446,7 @@ export async function executeProjectStageTransition(params: ProjectStageTransiti
       p.*,
       p.title as name,
       p.value as estimatedValue,
-      COALESCE(ps.code, p.stageId) as stage,
+      COALESCE(ps.code, 'UNKNOWN') as stage,
       c.name as customerName, c.code as customerCode,
       u.name as picName, u.email as picEmail, u.avatar as picAvatar,
       ps.name as stageName, ps.code as stageCode,
@@ -459,7 +459,7 @@ export async function executeProjectStageTransition(params: ProjectStageTransiti
       ps.allowNewProject as stageAllowNewProject,
       COALESCE(p.probability, ps.probability, 0) as effectiveProbability
     FROM projects p
-    LEFT JOIN customers c ON c.id = p.customerId
+    LEFT JOIN customers c ON c.id = p.customerId AND c.tenantId = p.tenantId
     LEFT JOIN users u ON u.id = p.picId
     LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
     WHERE p.id = ? AND p.tenantId = ?
@@ -703,7 +703,7 @@ projectsRoutes.get('/:id', async (req: any, res: any) => {
         p.*,
         p.title as name,
         p.value as estimatedValue,
-        COALESCE(ps.code, p.stageId) as stage,
+        COALESCE(ps.code, 'UNKNOWN') as stage,
         c.name as customerName, c.code as customerCode,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
         ps.name as stageName, ps.code as stageCode,
@@ -716,7 +716,7 @@ projectsRoutes.get('/:id', async (req: any, res: any) => {
         ps.allowNewProject as stageAllowNewProject,
         COALESCE(p.probability, ps.probability, 0) as effectiveProbability
       FROM projects p
-      LEFT JOIN customers c ON c.id = p.customerId
+      LEFT JOIN customers c ON c.id = p.customerId AND c.tenantId = p.tenantId
       LEFT JOIN users u ON u.id = p.picId
       LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       WHERE p.id = ? AND p.tenantId = ?
@@ -1086,7 +1086,7 @@ projectsRoutes.get('/:id/next-action', async (req: any, res: any) => {
       SELECT 
         t.id, t.title, DATE_FORMAT(t.dueDate, '%Y-%m-%d') as actionDate,
         'TASK' as type, u.name as picName, t.picId,
-        COALESCE(ts.name, 'Pending') as statusName
+        COALESCE(ts.name, 'UNKNOWN') as statusName
       FROM tasks t
       LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
       LEFT JOIN users u ON u.id = t.picId
@@ -1118,7 +1118,7 @@ projectsRoutes.get('/:id/next-action', async (req: any, res: any) => {
       SELECT 
         v.id, v.title, DATE_FORMAT(v.visitDate, '%Y-%m-%d') as actionDate,
         v.startTime, 'VISIT' as type, u.name as picName, v.picId,
-        COALESCE(vs.name, 'Planned') as statusName
+        COALESCE(vs.name, 'UNKNOWN') as statusName
       FROM visits v
       LEFT JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
       LEFT JOIN users u ON u.id = v.picId
@@ -1151,7 +1151,7 @@ projectsRoutes.get('/:id/next-action', async (req: any, res: any) => {
       SELECT 
         f.id, f.title, DATE_FORMAT(f.followUpDate, '%Y-%m-%d') as actionDate,
         'FOLLOW_UP' as type, u.name as picName, f.picId,
-        'Pending' as statusName
+        COALESCE(f.status, 'UNKNOWN') as statusName
       FROM follow_ups f
       LEFT JOIN users u ON u.id = f.picId
       WHERE f.tenantId = ? 
@@ -1214,7 +1214,7 @@ projectsRoutes.get('/:id/summary', async (req: any, res: any) => {
         p.*,
         p.title as name,
         p.value as estimatedValue,
-        COALESCE(ps.code, p.stageId) as stage,
+        COALESCE(ps.code, 'UNKNOWN') as stage,
         c.name as customerName, c.code as customerCode,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
         ps.name as stageName, ps.code as stageCode,
@@ -1227,7 +1227,7 @@ projectsRoutes.get('/:id/summary', async (req: any, res: any) => {
         ps.allowNewProject as stageAllowNewProject,
         COALESCE(p.probability, ps.probability, 0) as effectiveProbability
       FROM projects p
-      LEFT JOIN customers c ON c.id = p.customerId
+      LEFT JOIN customers c ON c.id = p.customerId AND c.tenantId = p.tenantId
       LEFT JOIN users u ON u.id = p.picId
       LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       WHERE p.id = ? AND p.tenantId = ?
@@ -1251,26 +1251,29 @@ projectsRoutes.get('/:id/summary', async (req: any, res: any) => {
       SELECT 
         t.id, t.tenantId, t.title, t.description,
         COALESCE(t.sourceType, 'MANUAL') as sourceType,
-        COALESCE(ts.id, t.statusId) as statusId,
-        COALESCE(ts.code, t.statusId) as statusCode,
-        COALESCE(ts.name, t.statusId) as statusName,
+        t.statusId as statusId,
+        ts.code as statusCode,
+        ts.name as statusName,
         ts.color as statusColor,
         CASE 
           WHEN ts.code IN ('COMPLETED', 'TSK_COMPLETED') OR ts.isTerminal = 1 THEN 'COMPLETED'
           WHEN ts.code IN ('CANCELLED', 'TSK_CANCELLED') THEN 'CANCELLED'
           WHEN ts.code IN ('IN_PROGRESS', 'TSK_INPROGRESS') THEN 'IN_PROGRESS'
-          ELSE 'TODO'
+          WHEN ts.code IN ('TODO', 'TSK_TODO') THEN 'TODO'
+          WHEN ts.code IS NOT NULL THEN ts.code
+          ELSE 'UNKNOWN'
         END as status,
-        COALESCE(tp.id, t.priorityId) as priorityId,
-        COALESCE(tp.code, t.priorityId) as priorityCode,
-        COALESCE(tp.name, t.priorityId) as priorityName,
+        t.priorityId as priorityId,
+        tp.code as priorityCode,
+        tp.name as priorityName,
         tp.color as priorityColor,
         CASE
           WHEN tp.code IN ('URGENT', 'PRI_URGENT') THEN 'URGENT'
           WHEN tp.code IN ('HIGH', 'PRI_HIGH') THEN 'HIGH'
           WHEN tp.code IN ('LOW', 'PRI_LOW') THEN 'LOW'
           WHEN tp.code IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') THEN 'MEDIUM'
-          ELSE COALESCE(tp.code, 'MEDIUM')
+          WHEN tp.code IS NOT NULL THEN tp.code
+          ELSE 'UNKNOWN'
         END as priority,
         t.picId,
         COALESCE(u.name, 'Unassigned') as picName,
@@ -1354,26 +1357,29 @@ projectsRoutes.get('/:id/tasks', async (req: any, res: any) => {
       SELECT 
         t.id, t.tenantId, t.title, t.description,
         COALESCE(t.sourceType, 'MANUAL') as sourceType,
-        COALESCE(ts.id, t.statusId) as statusId,
-        COALESCE(ts.code, t.statusId) as statusCode,
-        COALESCE(ts.name, t.statusId) as statusName,
+        t.statusId as statusId,
+        ts.code as statusCode,
+        ts.name as statusName,
         ts.color as statusColor,
         CASE 
           WHEN ts.code IN ('COMPLETED', 'TSK_COMPLETED') OR ts.isTerminal = 1 THEN 'COMPLETED'
           WHEN ts.code IN ('CANCELLED', 'TSK_CANCELLED') THEN 'CANCELLED'
           WHEN ts.code IN ('IN_PROGRESS', 'TSK_INPROGRESS') THEN 'IN_PROGRESS'
-          ELSE 'TODO'
+          WHEN ts.code IN ('TODO', 'TSK_TODO') THEN 'TODO'
+          WHEN ts.code IS NOT NULL THEN ts.code
+          ELSE 'UNKNOWN'
         END as status,
-        COALESCE(tp.id, t.priorityId) as priorityId,
-        COALESCE(tp.code, t.priorityId) as priorityCode,
-        COALESCE(tp.name, t.priorityId) as priorityName,
+        t.priorityId as priorityId,
+        tp.code as priorityCode,
+        tp.name as priorityName,
         tp.color as priorityColor,
         CASE
           WHEN tp.code IN ('URGENT', 'PRI_URGENT') THEN 'URGENT'
           WHEN tp.code IN ('HIGH', 'PRI_HIGH') THEN 'HIGH'
           WHEN tp.code IN ('LOW', 'PRI_LOW') THEN 'LOW'
           WHEN tp.code IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') THEN 'MEDIUM'
-          ELSE COALESCE(tp.code, 'MEDIUM')
+          WHEN tp.code IS NOT NULL THEN tp.code
+          ELSE 'UNKNOWN'
         END as priority,
         t.picId,
         COALESCE(u.name, 'Unassigned') as picName,
@@ -1394,8 +1400,8 @@ projectsRoutes.get('/:id/tasks', async (req: any, res: any) => {
       LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
       LEFT JOIN task_priorities tp ON tp.id = t.priorityId AND tp.tenantId = t.tenantId
       LEFT JOIN users u ON u.id = t.picId
-      LEFT JOIN customers c ON c.id = t.customerId
-      LEFT JOIN visits v ON v.id = t.relatedVisitId
+      LEFT JOIN customers c ON c.id = t.customerId AND c.tenantId = t.tenantId
+      LEFT JOIN visits v ON v.id = t.relatedVisitId AND v.tenantId = t.tenantId
       WHERE t.tenantId = ? AND t.relatedProjectId = ?
       ORDER BY t.dueDate ASC, t.createdAt DESC
     `, [targetTenant, id]);

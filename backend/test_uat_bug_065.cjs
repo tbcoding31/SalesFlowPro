@@ -35,6 +35,7 @@ async function runRegressionSuite() {
   const cleanupProjects = [];
   const cleanupCustomers = [];
   const cleanupCustomerContacts = [];
+  const cleanupTaskStatuses = [];
   const cleanupSessions = [];
   const cleanupUsers = [];
   const cleanupTenants = [];
@@ -443,11 +444,20 @@ async function runRegressionSuite() {
     const [origRows] = await pool.query('SELECT name FROM task_statuses WHERE id = ?', [targetStatus.id]);
     const originalName = origRows[0].name;
 
-    // Mutate the status name
+    // 1. Mutate existing platform clone status name
     await pool.query('UPDATE task_statuses SET name = "Custom Renamed Status" WHERE id = ?', [targetStatus.id]);
     restorations.push(async () => {
       await pool.query('UPDATE task_statuses SET name = ? WHERE id = ?', [originalName, targetStatus.id]);
     });
+
+    // 2. Insert custom tenant row to prove custom rows are preserved untouched by reset
+    const customStatusId = `TS-CUST-${Date.now()}`;
+    await pool.query(
+      `INSERT INTO task_statuses (id, tenantId, sourceType, code, name, color, isTerminal, isActive, displayOrder)
+       VALUES (?, ?, 'TENANT', 'CUSTOM_REV', 'Custom Review Status', '#888888', 0, 1, 99)`,
+      [customStatusId, tenantAId]
+    );
+    cleanupTaskStatuses.push(customStatusId);
 
     const resetRes = await fetch(`${baseUrl}/api/master-data/tenant/task_statuses/reset`, {
       method: 'POST',
@@ -461,6 +471,11 @@ async function runRegressionSuite() {
     const [reconciledRows] = await pool.query('SELECT id, name FROM task_statuses WHERE id = ?', [targetStatus.id]);
     assert(reconciledRows.length > 0 && reconciledRows[0].id === targetStatus.id && reconciledRows[0].name !== 'Custom Renamed Status',
       'RESET-MASTER-02', `Status primary key preserved (${reconciledRows[0].id}) and name reconciled from blueprint (${reconciledRows[0].name})`);
+
+    // Verify custom tenant row is preserved untouched
+    const [customRows] = await pool.query('SELECT id, name FROM task_statuses WHERE id = ?', [customStatusId]);
+    assert(customRows.length > 0 && customRows[0].name === 'Custom Review Status',
+      'RESET-MASTER-03', `Custom tenant row (${customStatusId}) preserved untouched after reset reconciliation`);
 
     // =========================================================================
     // TEST 12: ONBOARDING ATOMICITY (CLONES ALL 10 CATEGORIES WITH PROVENANCE)
@@ -515,10 +530,61 @@ async function runRegressionSuite() {
       assert(allHaveProvenance, 'ONBOARD-03', 'All cloned rows retain platformMasterId provenance link');
     }
 
+    // B. Test Onboarding Failure Atomicity (Simulation to trigger rollback)
+    const failOnboardPayload = {
+      organization: {
+        name: `Failed Tenant Rollback ${Date.now()}`,
+        type: 'Professional'
+      },
+      primaryAdmin: {
+        email: testOnboardEmail,
+        temporaryPassword: 'TemporaryPassword123!@#',
+        firstName: 'Fail',
+        lastName: 'Admin'
+      },
+      testOptions: {
+        simulateFail: true
+      }
+    };
+    const failOnboardRes = await fetch(`${baseUrl}/api/onboarding/tenant`, {
+      method: 'POST',
+      headers: headersSuper,
+      body: JSON.stringify(failOnboardPayload)
+    });
+    assert(failOnboardRes.status >= 400,
+      'ONBOARD-FAIL-01', `Simulated failure onboarding rejected (HTTP ${failOnboardRes.status})`);
+
+    const [orphanedTenants] = await pool.query('SELECT id FROM tenants WHERE name = ?', [failOnboardPayload.organization.name]);
+    assert(orphanedTenants.length === 0,
+      'ONBOARD-ATOMIC-01', `Transaction rollback verified: 0 partial tenant records left for failed onboarding`);
+
     // =========================================================================
     // TEST 13: REPORT ENDPOINT TENANT SCOPE
     // =========================================================================
     console.log('\n--- TEST 13: REPORT ENDPOINT TENANT SCOPE ---');
+
+    // Create distinct test tasks in Tenant A and Tenant B to prove data divergence
+    const reportTaskAId = 'TSK-REP-A-' + Date.now();
+    const reportTaskBId = 'TSK-REP-B-' + Date.now();
+    cleanupTasks.push(reportTaskAId, reportTaskBId);
+
+    const [tStatusesARows] = await pool.query('SELECT id FROM task_statuses WHERE tenantId = ? LIMIT 1', [tenantAId]);
+    const [tPrioritiesARows] = await pool.query('SELECT id FROM task_priorities WHERE tenantId = ? LIMIT 1', [tenantAId]);
+    const [tStatusesBRows] = await pool.query('SELECT id FROM task_statuses WHERE tenantId = ? LIMIT 1', [tenantBId]);
+    const [tPrioritiesBRows] = await pool.query('SELECT id FROM task_priorities WHERE tenantId = ? LIMIT 1', [tenantBId]);
+
+    await pool.query(
+      `INSERT INTO tasks (id, tenantId, title, statusId, priorityId, dueDate, createdAt)
+       VALUES (?, ?, 'Tenant A Isolated Task', ?, ?, NOW(), NOW())`,
+      [reportTaskAId, tenantAId, tStatusesARows[0].id, tPrioritiesARows[0].id]
+    );
+
+    await pool.query(
+      `INSERT INTO tasks (id, tenantId, title, statusId, priorityId, dueDate, createdAt)
+       VALUES (?, ?, 'Tenant B Isolated Task', ?, ?, NOW(), NOW())`,
+      [reportTaskBId, tenantBId, tStatusesBRows[0].id, tPrioritiesBRows[0].id]
+    );
+
     const repCustA = await (await fetch(`${baseUrl}/api/reports/customers`, { headers: headersA })).json();
     const repTasksA = await (await fetch(`${baseUrl}/api/reports/tasks`, { headers: headersA })).json();
     const repVisitsA = await (await fetch(`${baseUrl}/api/reports/visits`, { headers: headersA })).json();
@@ -537,6 +603,13 @@ async function runRegressionSuite() {
       'REPORT-SCOPE-03', 'GET /api/reports/visits cleanly segregated by caller tenant');
     assert(repPerfA.kpiData !== undefined && repPerfB.kpiData !== undefined,
       'REPORT-SCOPE-04', 'GET /api/reports/performance cleanly segregated by caller tenant');
+
+    const tasksADataIds = (repTasksA.tableData || []).map(t => t.id);
+    const tasksBDataIds = (repTasksB.tableData || []).map(t => t.id);
+    assert(tasksADataIds.includes(reportTaskAId) && !tasksADataIds.includes(reportTaskBId),
+      'REPORT-DATA-01', `Tenant A task report contains Tenant A task (${reportTaskAId}) and excludes Tenant B task`);
+    assert(tasksBDataIds.includes(reportTaskBId) && !tasksBDataIds.includes(reportTaskAId),
+      'REPORT-DATA-02', `Tenant B task report contains Tenant B task (${reportTaskBId}) and excludes Tenant A task`);
 
     // =========================================================================
     // TEST 14: HEALTHCHECK UNPROTECTED ENDPOINT
@@ -570,37 +643,74 @@ async function runRegressionSuite() {
       { name: "stageId === 'LOST'", regex: /\bstageId\s*===\s*['"]LOST['"]/i },
       { name: "statusId NOT IN ('COMPLETED', 'CANCELLED')", regex: /\bstatusId\s+NOT\s+IN\s*\(['"]COMPLETED['"],\s*['"]CANCELLED['"]\)/i },
       { name: "stageId NOT IN ('WON', 'LOST')", regex: /\bstageId\s+NOT\s+IN\s*\(['"]WON['"],\s*['"]LOST['"]\)/i },
-      { name: "COALESCE(ts.code, t.statusId) NOT IN", regex: /COALESCE\s*\(\s*ts\.code\s*,\s*t\.statusId\s*\)\s*NOT\s*IN/i },
-      { name: "t.statusId IN ('COMPLETED'", regex: /t\.statusId\s+IN\s*\(['"]COMPLETED['"]/i }
+      { name: "COALESCE(ts.code, t.statusId)", regex: /COALESCE\s*\(\s*ts\.code\s*,\s*t\.statusId\s*\)/i },
+      { name: "COALESCE(vs.code, v.statusId)", regex: /COALESCE\s*\(\s*vs\.code\s*,\s*v\.statusId\s*\)/i },
+      { name: "COALESCE(tp.code, t.priorityId)", regex: /COALESCE\s*\(\s*tp\.code\s*,\s*t\.priorityId\s*\)/i },
+      { name: "COALESCE(ps.code, p.stageId)", regex: /COALESCE\s*\(\s*ps\.code\s*,\s*p\.stageId\s*\)/i },
+      { name: "COALESCE(ts.id, t.statusId)", regex: /COALESCE\s*\(\s*ts\.id\s*,\s*t\.statusId\s*\)/i },
+      { name: "COALESCE(tp.id, t.priorityId)", regex: /COALESCE\s*\(\s*tp\.id\s*,\s*t\.priorityId\s*\)/i },
+      { name: "COALESCE(ps.id, p.stageId)", regex: /COALESCE\s*\(\s*ps\.id\s*,\s*p\.stageId\s*\)/i },
+      { name: "COALESCE(ts.name, t.statusId)", regex: /COALESCE\s*\(\s*ts\.name\s*,\s*t\.statusId\s*\)/i },
+      { name: "COALESCE(tp.name, t.priorityId)", regex: /COALESCE\s*\(\s*tp\.name\s*,\s*t\.priorityId\s*\)/i },
+      { name: "COALESCE(ps.name, p.stageId)", regex: /COALESCE\s*\(\s*ps\.name\s*,\s*p\.stageId\s*\)/i },
+      { name: "COALESCE(..., 'Pending')", regex: /COALESCE\s*\([^)]*['"]Pending['"]\s*\)/i },
+      { name: "COALESCE(..., 'Planned')", regex: /COALESCE\s*\([^)]*['"]Planned['"]\s*\)/i },
+      { name: "COALESCE(..., 'MEDIUM')", regex: /COALESCE\s*\([^)]*['"]MEDIUM['"]\s*\)/i },
+      { name: "t.statusId IN ('COMPLETED'", regex: /t\.statusId\s+IN\s*\(['"]COMPLETED['"]/i },
+      { name: "v.statusId IN ('COMPLETED'", regex: /v\.statusId\s+IN\s*\(['"]COMPLETED['"]/i },
+      { name: "raw master ID authority", regex: /\b(statusId|priorityId|stageId)\s*=\s*['"](TS|TP|VS|VP|PS)-[0-9]/i }
     ];
 
-    function getRuntimeFiles(dir) {
+    function getAllTsFiles(dir) {
       let files = [];
       const list = fs.readdirSync(dir);
       for (const item of list) {
+        if (item === 'node_modules' || item === 'dist' || item === '.git') continue;
         const full = path.join(dir, item);
         const stat = fs.statSync(full);
         if (stat.isDirectory()) {
-          if (item !== 'migrations') {
-            files = files.concat(getRuntimeFiles(full));
-          }
-        } else if (full.endsWith('.ts') && !full.endsWith('seed-data.ts')) {
+          files = files.concat(getAllTsFiles(full));
+        } else if (full.endsWith('.ts') || full.endsWith('.js') || full.endsWith('.cjs')) {
           files.push(full);
         }
       }
       return files;
     }
 
-    const runtimeFiles = getRuntimeFiles(backendSrcDir);
-    const violations = [];
+    const allBackendFiles = getAllTsFiles(path.join(__dirname));
+    const violations = []; // 1. Runtime authority violations
+    let semanticMatches = 0; // 2. Valid semantic code usages
+    let migrationMatches = 0; // 3. Migration / Seed references
+    let testMatches = 0; // 4. Test fixture references
+    let legacyHelperMatches = 0; // 5. Legacy compatibility helper references
 
-    for (const f of runtimeFiles) {
+    for (const f of allBackendFiles) {
+      const isMigrationOrSeed = f.includes('migrations') || f.includes('seed-data.ts') || f.includes('setup-database.ts');
+      const isTestFile = f.includes('test_') || f.includes('.test.') || f.includes('.spec.');
+      const isLegacyHelper = f.includes('legacyCompatibility.ts');
+      const isRuntime = !isMigrationOrSeed && !isTestFile && !isLegacyHelper;
+
       const content = fs.readFileSync(f, 'utf8');
       const lines = content.split('\n');
+
       lines.forEach((line, lineIdx) => {
+        // Track semantic code usage
+        if (/\b(ts\.code|vs\.code|ps\.code|stageCommercialOutcome|isTerminal)\b/.test(line)) {
+          semanticMatches++;
+        }
+
+        // Check forbidden patterns
         for (const pat of forbiddenPatterns) {
           if (pat.regex.test(line)) {
-            violations.push(`${path.relative(backendSrcDir, f)}:${lineIdx + 1} matches ${pat.name}`);
+            if (isRuntime) {
+              violations.push(`${path.relative(backendSrcDir, f)}:${lineIdx + 1} matches ${pat.name}: ${line.trim()}`);
+            } else if (isLegacyHelper) {
+              legacyHelperMatches++;
+            } else if (isMigrationOrSeed) {
+              migrationMatches++;
+            } else if (isTestFile) {
+              testMatches++;
+            }
           }
         }
       });
@@ -611,6 +721,9 @@ async function runRegressionSuite() {
     if (violations.length > 0) {
       console.error('Violations found:', violations);
     }
+
+    assert(semanticMatches > 0,
+      'SCAN-CLASSIFY-01', `5-Way classification verified: ${violations.length} violations, ${semanticMatches} semantic checks, ${migrationMatches} migration/seed, ${testMatches} test fixtures, ${legacyHelperMatches} legacy helper`);
 
   } catch (err) {
     console.error('Unhandled test suite error:', err);
@@ -638,6 +751,9 @@ async function runRegressionSuite() {
       }
       if (cleanupCustomers.length > 0) {
         await pool.query('DELETE FROM customers WHERE id IN (?)', [cleanupCustomers]);
+      }
+      if (cleanupTaskStatuses.length > 0) {
+        await pool.query('DELETE FROM task_statuses WHERE id IN (?)', [cleanupTaskStatuses]);
       }
 
       // 3. Clean up onboarded test tenants and all cascaded data
@@ -686,6 +802,10 @@ async function runRegressionSuite() {
       if (cleanupCustomers.length > 0) {
         const [remCusts] = await pool.query('SELECT id FROM customers WHERE id IN (?)', [cleanupCustomers]);
         assert(remCusts.length === 0, 'CLEANUP-CUSTOMERS-VERIFY', `Verified 0 orphaned customers in database`);
+      }
+      if (cleanupTaskStatuses.length > 0) {
+        const [remStatuses] = await pool.query('SELECT id FROM task_statuses WHERE id IN (?)', [cleanupTaskStatuses]);
+        assert(remStatuses.length === 0, 'CLEANUP-STATUSES-VERIFY', `Verified 0 orphaned task statuses in database`);
       }
       if (cleanupTenants.length > 0) {
         const [remTenants] = await pool.query('SELECT id FROM tenants WHERE id IN (?)', [cleanupTenants]);

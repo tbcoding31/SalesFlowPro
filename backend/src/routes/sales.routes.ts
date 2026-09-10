@@ -32,14 +32,14 @@ salesRoutes.get('/agenda', async (req, res) => {
       SELECT 
         t.id, t.title, t.description, t.customerId, t.relatedProjectId, t.relatedVisitId,
         t.priorityId as priority, t.statusId as status, t.dueDate, t.picId, t.completedAt,
-        COALESCE(ts.code, t.statusId) as statusCode, ts.isTerminal as statusIsTerminal,
+        ts.code as statusCode, ts.isTerminal as statusIsTerminal,
         c.name as customerName, c.code as customerCode,
         p.title as projectName, p.stageId as projectStage,
         u.name as picName, u.avatar as picAvatar
       FROM tasks t
       LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
-      LEFT JOIN customers c ON c.id = t.customerId
-      LEFT JOIN projects p ON p.id = t.relatedProjectId
+      LEFT JOIN customers c ON c.id = t.customerId AND c.tenantId = t.tenantId
+      LEFT JOIN projects p ON p.id = t.relatedProjectId AND p.tenantId = t.tenantId
       LEFT JOIN users u ON u.id = t.picId
       ${taskWhere.replace(/WHERE tenantId/g, 'WHERE t.tenantId')}
     `, taskParams);
@@ -50,14 +50,14 @@ salesRoutes.get('/agenda', async (req, res) => {
         v.id, v.title, v.customerId, v.relatedProjectId, v.purposeId as purpose,
         v.statusId as status, v.visitDate, v.startTime, v.endTime, v.location,
         v.result, v.nextAction, v.picId, v.completedAt,
-        COALESCE(vs.code, v.statusId) as statusCode, vs.isTerminal as statusIsTerminal,
+        vs.code as statusCode, vs.isTerminal as statusIsTerminal,
         c.name as customerName, c.code as customerCode,
         p.title as projectName, p.stageId as projectStage,
         u.name as picName, u.avatar as picAvatar
       FROM visits v
       LEFT JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
-      LEFT JOIN customers c ON c.id = v.customerId
-      LEFT JOIN projects p ON p.id = v.relatedProjectId
+      LEFT JOIN customers c ON c.id = v.customerId AND c.tenantId = v.tenantId
+      LEFT JOIN projects p ON p.id = v.relatedProjectId AND p.tenantId = v.tenantId
       LEFT JOIN users u ON u.id = v.picId
       ${visitWhere.replace(/WHERE tenantId/g, 'WHERE v.tenantId')}
     `, visitParams);
@@ -252,7 +252,7 @@ salesRoutes.get('/agenda', async (req, res) => {
     const [openProjects]: any = await pool.query(`
       SELECT p.id, p.title, p.stageId, p.value, p.customerId, c.name as customerName, u.name as picName
       FROM projects p
-      LEFT JOIN customers c ON c.id = p.customerId
+      LEFT JOIN customers c ON c.id = p.customerId AND c.tenantId = p.tenantId
       LEFT JOIN users u ON u.id = p.picId
       LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       ${projWhere.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}

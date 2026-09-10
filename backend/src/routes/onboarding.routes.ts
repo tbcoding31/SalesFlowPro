@@ -287,8 +287,9 @@ onboardingRoutes.post('/tenant', async (req, res) => {
         ]
       );
 
-      // Audit Log (without credentials)
-    
+      if (testOptions?.simulateFail && process.env.NODE_ENV !== 'production') {
+        throw new Error('SIMULATED_ONBOARDING_FAILURE');
+      }
 
     await connection.commit();
 
