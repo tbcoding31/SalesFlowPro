@@ -1,5 +1,5 @@
 import { MasterDataItem } from '../types';
-import { isColorValue } from '../components/master-data/MasterDataIndicator';
+import { isColorValue, isValidIconName } from '../components/master-data/MasterDataIndicator';
 
 const API_BASE = '/api';
 
@@ -10,8 +10,52 @@ export const getTableName = (category: MasterDataItem['category']): string => {
 };
 
 const mapFromDb = (category: MasterDataItem['category'], row: any): MasterDataItem => {
-  const icon = row.icon || undefined;
-  const color = row.color || undefined;
+  let icon = row.icon || undefined;
+  let color = row.color || undefined;
+
+  // If color contains an icon name (e.g. 'flag', 'keyboard_arrow_down', 'arrow_downward'),
+  // it is actually an icon identifier!
+  if (color && !isColorValue(color) && isValidIconName(color)) {
+    if (!icon) icon = color;
+    color = undefined;
+  }
+
+  // If icon contains a color value, do not treat it as an icon
+  if (icon && isColorValue(icon)) {
+    if (!color) color = icon;
+    icon = undefined;
+  }
+
+  // For task_priorities, ensure icon and color are present according to standard priority mappings
+  if (category === 'task_priorities') {
+    if (!icon) {
+      const codeUpper = String(row.code || row.name || row.id || '').toUpperCase();
+      if (codeUpper.includes('URGENT') || codeUpper.includes('CRITICAL')) {
+        icon = 'double_arrow';
+      } else if (codeUpper.includes('HIGH')) {
+        icon = 'arrow_upward';
+      } else if (codeUpper.includes('MEDIUM') || codeUpper.includes('NORMAL')) {
+        icon = 'remove';
+      } else if (codeUpper.includes('LOW')) {
+        icon = 'arrow_downward';
+      } else {
+        icon = 'flag';
+      }
+    }
+    if (!color) {
+      const codeUpper = String(row.code || row.name || row.id || '').toUpperCase();
+      if (codeUpper.includes('URGENT') || codeUpper.includes('CRITICAL')) {
+        color = '#EF4444';
+      } else if (codeUpper.includes('HIGH')) {
+        color = '#F59E0B';
+      } else if (codeUpper.includes('MEDIUM') || codeUpper.includes('NORMAL')) {
+        color = '#3B82F6';
+      } else if (codeUpper.includes('LOW')) {
+        color = '#6B7280';
+      }
+    }
+  }
+
   return {
     id: row.id,
     category,
@@ -45,9 +89,13 @@ const mapToDb = (category: MasterDataItem['category'], item: MasterDataItem, ten
     displayOrder: item.displayOrder || 1,
   };
 
-  // Derive separated color and icon without cross-pollination
-  const resolvedColor = item.color || (isColorValue(item.indicator) ? item.indicator : null);
-  const resolvedIcon = item.icon || (!isColorValue(item.indicator) ? item.indicator : null);
+  const resolvedColor = (item.color && isColorValue(item.color))
+    ? item.color
+    : (isColorValue(item.indicator) ? item.indicator : null);
+
+  const resolvedIcon = (item.icon && isValidIconName(item.icon))
+    ? item.icon
+    : (isValidIconName(item.indicator) && !isColorValue(item.indicator) ? item.indicator : null);
 
   switch (category) {
     case 'task_types':
@@ -59,7 +107,9 @@ const mapToDb = (category: MasterDataItem['category'], item: MasterDataItem, ten
     case 'task_priorities':
       return {
         ...base,
-        color: resolvedColor || null,
+        // In task_priorities schema, color column holds the indicator (icon or color)
+        color: resolvedIcon || resolvedColor || null,
+        icon: resolvedIcon || null,
         isDefault: item.isDefault ? 1 : 0
       };
     case 'task_statuses':

@@ -1232,43 +1232,55 @@ salesRoutes.get('/pipeline-velocity', async (req, res) => {
     }
 
     // Build baselines dynamically per tenant stage
+    // Build baselines dynamically per tenant stage
     const baselines: Record<string, any> = {};
     for (const stage of tenantStages) {
       const durs = stageDurations[stage.id] || [];
       const sampleCount = durs.length;
       if (sampleCount === 0) {
         baselines[stage.id] = {
-          stageId: stage.id,
+          stageId: stage.name || stage.code || stage.id,
+          stageRawId: stage.id,
           stageName: stage.name,
           stageCode: stage.code,
           commercialOutcome: stage.commercialOutcome,
           isTerminal: Boolean(stage.isTerminal),
           hasBaseline: false,
+          sampleSize: 0,
           sampleCount: 0,
           averageDays: null,
           medianDays: null,
+          p25Days: null,
           p75Days: null,
-          p90Days: null
+          p90Days: null,
+          comparisonAvailable: false,
+          comparisonPolicyConfigured: true
         };
       } else {
         const sum = durs.reduce((a, b) => a + b, 0);
         const avg = Math.round((sum / sampleCount) * 10) / 10;
         const median = calculatePercentile(durs, 50);
+        const p25 = calculatePercentile(durs, 25);
         const p75 = calculatePercentile(durs, 75);
         const p90 = calculatePercentile(durs, 90);
 
         baselines[stage.id] = {
-          stageId: stage.id,
+          stageId: stage.name || stage.code || stage.id,
+          stageRawId: stage.id,
           stageName: stage.name,
           stageCode: stage.code,
           commercialOutcome: stage.commercialOutcome,
           isTerminal: Boolean(stage.isTerminal),
           hasBaseline: true,
+          sampleSize: sampleCount,
           sampleCount,
           averageDays: avg,
           medianDays: median,
+          p25Days: p25,
           p75Days: p75,
-          p90Days: p90
+          p90Days: p90,
+          comparisonAvailable: sampleCount >= 1,
+          comparisonPolicyConfigured: true
         };
       }
     }
@@ -1295,6 +1307,30 @@ salesRoutes.get('/pipeline-velocity', async (req, res) => {
     }
 
     const [scopedActiveProjects]: any = await pool.query(activeProjSql, finalProjParams);
+
+    // Batch fetch upcoming actions for scoped projects
+    const scopedProjectIds = scopedActiveProjects.map((p: any) => p.id);
+    const nextActionsMap: Record<string, any> = {};
+    if (scopedProjectIds.length > 0) {
+      const [nextTaskRows]: any = await pool.query(`
+        SELECT t.relatedProjectId as projectId, t.title, t.dueDate, COALESCE(t.taskType, 'Task') as typeName
+        FROM tasks t
+        LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
+        WHERE t.tenantId = ? AND t.relatedProjectId IN (?) 
+          AND (ts.code NOT IN ('COMPLETED', 'CANCELLED', 'TSK_COMPLETED', 'TSK_CANCELLED') OR ts.code IS NULL)
+          AND t.completedAt IS NULL
+        ORDER BY t.dueDate ASC
+      `, [targetTenant, scopedProjectIds]);
+      for (const t of nextTaskRows) {
+        if (!nextActionsMap[t.projectId]) {
+          nextActionsMap[t.projectId] = {
+            type: t.typeName || 'Task',
+            title: t.title,
+            date: t.dueDate ? String(t.dueDate).slice(0, 10) : null
+          };
+        }
+      }
+    }
 
     // Active project evaluation against baselines
     const projectVelocities: any[] = [];
@@ -1326,18 +1362,22 @@ salesRoutes.get('/pipeline-velocity', async (req, res) => {
       const baseline = pStageMeta ? baselines[pStageMeta.id] : null;
 
       let velocityStatus: 'FAST' | 'NORMAL' | 'DELAYED' | 'UNBASELINED' = 'UNBASELINED';
+      let relativePosition: 'BELOW_MEDIAN' | 'AT_MEDIAN' | 'ABOVE_MEDIAN' | 'ABOVE_P75' | 'UNBASELINED' = 'UNBASELINED';
       let delayDays = 0;
 
       if (baseline && baseline.hasBaseline && baseline.p75Days !== null) {
         if (daysInStage > baseline.p75Days) {
           velocityStatus = 'DELAYED';
+          relativePosition = 'ABOVE_P75';
           delayDays = daysInStage - baseline.p75Days;
           delayedProjectsCount++;
         } else if (baseline.medianDays !== null && daysInStage < Math.round(baseline.medianDays * 0.5)) {
           velocityStatus = 'FAST';
+          relativePosition = 'BELOW_MEDIAN';
           fastProjectsCount++;
         } else {
           velocityStatus = 'NORMAL';
+          relativePosition = (baseline.medianDays !== null && daysInStage > baseline.medianDays) ? 'ABOVE_MEDIAN' : (daysInStage === baseline?.medianDays ? 'AT_MEDIAN' : 'BELOW_MEDIAN');
           normalProjectsCount++;
         }
       } else {
@@ -1346,23 +1386,34 @@ salesRoutes.get('/pipeline-velocity', async (req, res) => {
 
       projectVelocities.push({
         projectId: p.id,
+        projectTitle: p.title,
+        projectName: p.title || p.name || 'Untitled Project',
+        name: p.title || p.name || 'Untitled Project',
         title: p.title,
         customerId: p.customerId,
-        customerName: p.customerName,
+        customerName: p.customerName || 'Unknown Customer',
         picId: p.picId,
-        picName: p.picName,
-        stageId: p.stageId,
+        picName: p.picName || 'Unassigned',
+        stageId: pStageMeta?.name || p.stageName || p.stageCode || p.stageId,
+        stageRawId: p.stageId,
         stageName: pStageMeta?.name || p.stageName || p.stageCode || p.stageId,
         stageCode: pStageMeta?.code || p.stageCode,
+        daysInCurrentStage: daysInStage,
         daysInStage,
+        baselineMedianDays: baseline?.medianDays ?? null,
+        baselineP75Days: baseline?.p75Days ?? null,
         expectedDays: baseline?.medianDays ?? null,
         p75ThresholdDays: baseline?.p75Days ?? null,
+        relativePosition,
         velocityStatus,
         delayDays,
         value: Number(p.value) || 0,
-        probability: p.probability !== null ? Number(p.probability) : (pStageMeta?.probability ?? null)
+        probability: p.probability !== null ? Number(p.probability) : (pStageMeta?.probability ?? null),
+        nextAction: nextActionsMap[p.id] || null
       });
     }
+
+    const baselinesList = tenantStages.map((stage: any) => baselines[stage.id]);
 
     res.json({
       evaluatedAt,
@@ -1371,8 +1422,11 @@ salesRoutes.get('/pipeline-velocity', async (req, res) => {
       baselineScope: 'ORGANIZATION',
       comparisonPolicyConfigured: true,
       comparisonMinimumSampleSize: 1,
-      baselines,
-      baselinesList: Object.values(baselines),
+      baselines: baselinesList,
+      baselinesList,
+      baselinesMap: baselines,
+      currentProjects: projectVelocities,
+      projectVelocities,
       summary: {
         evaluatedProjects: projectVelocities.length,
         delayedProjects: delayedProjectsCount,
@@ -1382,8 +1436,7 @@ salesRoutes.get('/pipeline-velocity', async (req, res) => {
         totalStageIntervalsAnalyzed: totalStageIntervals,
         validStageIntervals,
         invalidIntervalsExcluded
-      },
-      projectVelocities
+      }
     });
   } catch (err: any) {
     console.error('Error GET /api/sales/pipeline-velocity:', err);

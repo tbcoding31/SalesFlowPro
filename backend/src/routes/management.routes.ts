@@ -2,8 +2,17 @@ import { Router } from 'express';
 import { pool } from '../db';
 import { buildReportScopeWhere, validateTargetTenant } from '../utils/scope';
 import { getBusinessDate } from '../utils/date';
+import {
+  handleGetProjectInterventions,
+  handleGetProjectInterventionHistory,
+  handleGetInterventionAnalytics
+} from '../controllers/interventions.controller';
 
 export const managementRoutes = Router();
+
+managementRoutes.get('/project-interventions', handleGetProjectInterventions);
+managementRoutes.get('/project-intervention-history', handleGetProjectInterventionHistory);
+managementRoutes.get('/intervention-analytics', handleGetInterventionAnalytics);
 
 managementRoutes.get('/control-tower', async (req, res) => {
   const actorRole = (req as any).userRole;

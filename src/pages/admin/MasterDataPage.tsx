@@ -127,7 +127,7 @@ export const MasterDataPage: React.FC = () => {
     setLabel('');
     setCodeValue('');
     setIndicator('');
-    setIcon(selectedCategory === 'task_types' ? 'task' : '');
+    setIcon(selectedCategory === 'task_types' ? 'task' : selectedCategory === 'task_priorities' ? 'flag' : '');
     setColor(
       selectedCategory === 'task_priorities' ? '#EF4444' :
       selectedCategory === 'task_statuses' ? '#3B82F6' :
@@ -153,7 +153,11 @@ export const MasterDataPage: React.FC = () => {
     setLabel(item.label);
     setCodeValue(item.codeValue);
     setIndicator(item.indicator || '');
-    setIcon(item.icon || (!isColorValue(item.indicator) ? item.indicator || '' : ''));
+    const defaultPriorityIcon = item.codeValue === 'LOW' ? 'arrow_downward' :
+      (item.codeValue === 'NORMAL' || item.codeValue === 'MEDIUM') ? 'remove' :
+      item.codeValue === 'HIGH' ? 'arrow_upward' :
+      (item.codeValue === 'URGENT' || item.codeValue === 'CRITICAL') ? 'double_arrow' : 'flag';
+    setIcon(item.icon || (!isColorValue(item.indicator) && item.indicator ? item.indicator : (selectedCategory === 'task_priorities' ? defaultPriorityIcon : '')));
     setColor(item.color || (isColorValue(item.indicator) ? item.indicator || '#6366F1' : '#6366F1'));
     setDescription(item.description || item.codeValue || '');
     setLevel(item.level !== undefined ? item.level : 1);
@@ -178,8 +182,8 @@ export const MasterDataPage: React.FC = () => {
       }
     }
 
-    const isColorCategory = ['task_priorities', 'task_statuses', 'customer_status', 'customer_statuses', 'visit_statuses'].includes(selectedCategory);
-    const isIconAndColorCategory = selectedCategory === 'task_types';
+    const isColorCategory = ['task_statuses', 'customer_status', 'customer_statuses', 'visit_statuses'].includes(selectedCategory);
+    const isIconAndColorCategory = ['task_types', 'task_priorities'].includes(selectedCategory);
 
     const isNew = !editingItem;
     const itemToSave: MasterDataItem = {
@@ -891,7 +895,85 @@ export const MasterDataPage: React.FC = () => {
                     </>
                   )}
 
-                  {['task_priorities', 'task_statuses', 'customer_status', 'customer_statuses', 'visit_statuses'].includes(selectedCategory) && (
+                  {selectedCategory === 'task_priorities' && (
+                    <>
+                      <div>
+                        <label className="block text-xs font-bold text-[#1a1c1c] mb-1">
+                          Icon Identifier *
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={icon}
+                            onChange={(e) => {
+                              setIcon(e.target.value);
+                              setIndicator(e.target.value || color);
+                            }}
+                            placeholder="e.g. flag, arrow_upward, double_arrow"
+                            className="flex-1 px-3 py-1.5 border border-[#E1E1E1] rounded text-xs font-mono"
+                          />
+                          {icon && (
+                            <div className="w-8 h-8 rounded border border-slate-200 flex items-center justify-center bg-slate-50 shrink-0">
+                              <span className="material-symbols-outlined text-[18px]" style={{ color }}>
+                                {icon}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {['flag', 'arrow_downward', 'remove', 'arrow_upward', 'double_arrow'].map((sugg) => (
+                            <button
+                              key={sugg}
+                              type="button"
+                              onClick={() => {
+                                setIcon(sugg);
+                                setIndicator(sugg || color);
+                              }}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono border transition-colors ${
+                                icon === sugg
+                                  ? 'bg-[#4744e5]/10 text-[#4744e5] border-[#4744e5]/30 font-semibold'
+                                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                              }`}
+                            >
+                              <span className="material-symbols-outlined text-[13px]">{sugg}</span>
+                              {sugg}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Badge / Theme Color (HEX)</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="color"
+                            value={color && color.startsWith('#') ? color : '#EF4444'}
+                            onChange={(e) => {
+                              setColor(e.target.value);
+                              if (!icon) setIndicator(e.target.value);
+                            }}
+                            className="w-8 h-8 p-0.5 border border-[#E1E1E1] rounded cursor-pointer shrink-0"
+                          />
+                          <input
+                            type="text"
+                            value={color}
+                            onChange={(e) => {
+                              setColor(e.target.value);
+                              if (!icon) setIndicator(e.target.value);
+                            }}
+                            placeholder="#EF4444"
+                            className="flex-1 px-3 py-1.5 border border-[#E1E1E1] rounded text-xs font-mono"
+                          />
+                          <span
+                            className="w-6 h-6 rounded-full border border-black/15 shrink-0"
+                            style={{ backgroundColor: color }}
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {['task_statuses', 'customer_status', 'customer_statuses', 'visit_statuses'].includes(selectedCategory) && (
                     <div>
                       <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Badge Color (HEX)</label>
                       <div className="flex items-center gap-2">

@@ -3,6 +3,11 @@ import { pool } from '../db';
 import { validateTargetTenant, buildReportScopeWhere } from '../utils/scope';
 import { getBusinessDate } from '../utils/date';
 import { salesRoutes } from './sales.routes';
+import {
+  handleGetInterventionAnalytics,
+  handleGetProjectInterventions,
+  handleGetProjectInterventionHistory
+} from '../controllers/interventions.controller';
 
 export const reportsRoutes = Router();
 
@@ -557,4 +562,10 @@ reportsRoutes.get('/pipeline-velocity', (req, res, next) => {
   req.url = '/pipeline-velocity' + (req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '');
   salesRoutes(req, res, next);
 });
+
+// Interventions & Intervention Analytics
+reportsRoutes.get('/intervention-analytics', handleGetInterventionAnalytics);
+reportsRoutes.get('/project-interventions', handleGetProjectInterventions);
+reportsRoutes.get('/project-intervention-history', handleGetProjectInterventionHistory);
+
 

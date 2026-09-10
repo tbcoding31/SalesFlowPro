@@ -78,9 +78,13 @@ masterDataRoutes.post('/platform/:category', async (req: any, res: any) => {
     } else if (category === 'activity_types') {
       query = 'INSERT INTO activity_types (id, tenantId, sourceType, platformMasterId, code, name, icon, color, isActive, displayOrder) VALUES (?, NULL, \'PLATFORM\', NULL, ?, ?, ?, ?, ?, ?)';
       params = [data.id, data.code, data.name, data.icon || null, data.color || null, data.isActive !== undefined ? (data.isActive ? 1 : 0) : 1, data.displayOrder || 0];
-    } else if (category === 'customer_statuses' || category === 'task_priorities' || category === 'task_statuses') {
+    } else if (category === 'customer_statuses' || category === 'task_statuses') {
       query = `INSERT INTO ${category} (id, tenantId, sourceType, platformMasterId, code, name, color, isActive, displayOrder) VALUES (?, NULL, 'PLATFORM', NULL, ?, ?, ?, ?, ?)`;
       params = [data.id, data.code, data.name, data.color || null, data.isActive !== undefined ? (data.isActive ? 1 : 0) : 1, data.displayOrder || 0];
+    } else if (category === 'task_priorities') {
+      query = `INSERT INTO task_priorities (id, tenantId, sourceType, platformMasterId, code, name, color, isActive, displayOrder) VALUES (?, NULL, 'PLATFORM', NULL, ?, ?, ?, ?, ?)`;
+      const prioVal = data.icon !== undefined ? data.icon : (data.color !== undefined ? data.color : null);
+      params = [data.id, data.code, data.name, prioVal, data.isActive !== undefined ? (data.isActive ? 1 : 0) : 1, data.displayOrder || 0];
     } else if (category === 'customer_types' || category === 'visit_purposes') {
       query = `INSERT INTO ${category} (id, tenantId, sourceType, platformMasterId, code, name, isActive, displayOrder) VALUES (?, NULL, 'PLATFORM', NULL, ?, ?, ?, ?)`;
       params = [data.id, data.code, data.name, data.isActive !== undefined ? (data.isActive ? 1 : 0) : 1, data.displayOrder || 0];
@@ -160,7 +164,11 @@ masterDataRoutes.put('/platform/:category/:id', async (req: any, res: any) => {
     } else if (category === 'activity_types') {
       query = 'UPDATE activity_types SET name = ?, icon = ?, color = ?, isActive = ?, displayOrder = ? WHERE id = ? AND tenantId IS NULL';
       params = [data.name || current.name, data.icon !== undefined ? data.icon : current.icon, data.color !== undefined ? data.color : current.color, data.isActive !== undefined ? (data.isActive ? 1 : 0) : current.isActive, data.displayOrder !== undefined ? Number(data.displayOrder) : current.displayOrder, id];
-    } else if (category === 'customer_statuses' || category === 'task_priorities' || category === 'task_statuses') {
+    } else if (category === 'task_priorities') {
+      const prioVal = data.icon !== undefined ? data.icon : (data.color !== undefined ? data.color : current.color);
+      query = 'UPDATE task_priorities SET name = ?, color = ?, isActive = ?, displayOrder = ? WHERE id = ? AND tenantId IS NULL';
+      params = [data.name || current.name, prioVal, data.isActive !== undefined ? (data.isActive ? 1 : 0) : current.isActive, data.displayOrder !== undefined ? Number(data.displayOrder) : current.displayOrder, id];
+    } else if (category === 'customer_statuses' || category === 'task_statuses') {
       query = `UPDATE ${category} SET name = ?, color = ?, isActive = ?, displayOrder = ? WHERE id = ? AND tenantId IS NULL`;
       params = [data.name || current.name, data.color !== undefined ? data.color : current.color, data.isActive !== undefined ? (data.isActive ? 1 : 0) : current.isActive, data.displayOrder !== undefined ? Number(data.displayOrder) : current.displayOrder, id];
     } else if (category === 'customer_types' || category === 'visit_purposes') {
@@ -327,7 +335,8 @@ const handleTenantPostMasterData = async (req: any, res: any) => {
       params = [data.id, targetTenant, code, data.name || data.label, data.icon || data.indicator || null, data.color || data.indicator || null, data.displayOrder || 0];
     } else if (category === 'task_priorities') {
       query = 'INSERT INTO task_priorities (id, tenantId, sourceType, platformMasterId, code, name, color, isActive, displayOrder) VALUES (?, ?, \'TENANT\', NULL, ?, ?, ?, 1, ?)';
-      params = [data.id, targetTenant, code, data.name || data.label, data.color || data.indicator || null, data.displayOrder || 0];
+      const prioVal = data.icon !== undefined ? data.icon : (data.color !== undefined ? data.color : (data.indicator || null));
+      params = [data.id, targetTenant, code, data.name || data.label, prioVal, data.displayOrder || 0];
     } else if (category === 'customer_types') {
       query = 'INSERT INTO customer_types (id, tenantId, sourceType, platformMasterId, code, name, isActive, displayOrder) VALUES (?, ?, \'TENANT\', NULL, ?, ?, 1, ?)';
       params = [data.id, targetTenant, code, data.name || data.label, data.displayOrder || 0];
@@ -480,7 +489,7 @@ const handleTenantPutMasterData = async (req: any, res: any) => {
       );
     } else if (category === 'task_priorities') {
       const name = data.name || data.label || current.name;
-      const color = data.color !== undefined ? data.color : (data.indicator !== undefined ? data.indicator : current.color);
+      const color = data.icon !== undefined ? data.icon : (data.color !== undefined ? data.color : (data.indicator !== undefined ? data.indicator : current.color));
       const displayOrder = data.displayOrder !== undefined ? Number(data.displayOrder) : current.displayOrder;
       const isActive = data.isActive !== undefined ? (data.isActive ? 1 : 0) : current.isActive;
       await pool.query(

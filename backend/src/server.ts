@@ -29,6 +29,7 @@ import { onboardingRoutes } from './routes/onboarding.routes';
 import { navigationRoutes } from './routes/navigation.routes';
 import { platformMenusRoutes } from './routes/platformMenus.routes';
 import { reportsRoutes } from './routes/reports.routes';
+import { interventionPoliciesRoutes, tenantAnalyticsSettingsRoutes } from './routes/intervention_policies.routes';
 import { startVisitReminderScheduler } from './workers/visitReminder.worker';
 
 import { authMiddleware } from './middleware/auth';
@@ -64,6 +65,8 @@ app.use('/api/roles', authMiddleware, rolesRoutes);
 app.use('/api/permissions', authMiddleware, permissionsRoutes);
 app.use('/api/teams', authMiddleware, teamsRoutes);
 app.use('/api/tenant/users', authMiddleware, tenantUsersRoutes);
+app.use('/api/tenant/project-intervention-policies', authMiddleware, tenantMiddleware, interventionPoliciesRoutes);
+app.use('/api/tenant/analytics-settings', authMiddleware, tenantMiddleware, tenantAnalyticsSettingsRoutes);
 app.use('/api/tenants', authMiddleware, tenantsRoutes);
 app.use('/api', authMiddleware, genericRoutes);
 app.use('/api/master-data', authMiddleware, masterDataRoutes);

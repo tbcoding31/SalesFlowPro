@@ -299,20 +299,24 @@ export const SalesReportPage: React.FC = () => {
               </h2>
 
               <div className="space-y-3">
-                {stageDistribution.map(st => {
-                  const isClosed = st.stage === 'WON' || st.stage === 'LOST';
-                  const percentOfOpen = summary.pipelineValue > 0 && !isClosed ? Math.round((st.value / summary.pipelineValue) * 100) : 0;
+                {Array.isArray(stageDistribution) && stageDistribution.map((st, idx) => {
+                  const isClosed = st.stage === 'WON' || st.stage === 'LOST' || st.commercialOutcome === 'WON' || st.commercialOutcome === 'LOST';
+                  const stageVal = st.value ?? st.pipelineValue ?? 0;
+                  const stageCount = st.count ?? st.projectCount ?? 0;
+                  const stageLabel = st.label || st.stage;
+                  const stageUniqueKey = st.stageKey || st.stageId || st.stageCode || (st.stage ? `${st.stage}_${idx}` : `stage_${idx}`);
+                  const percentOfOpen = summary.pipelineValue > 0 && !isClosed ? Math.round((stageVal / summary.pipelineValue) * 100) : 0;
                   return (
-                    <div key={st.stage} className="p-3 rounded-xl border border-slate-100 bg-slate-50/50 flex flex-col gap-1.5">
+                    <div key={stageUniqueKey} className="p-3 rounded-xl border border-slate-100 bg-slate-50/50 flex flex-col gap-1.5">
                       <div className="flex justify-between items-center text-xs">
                         <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-800">{st.label}</span>
+                          <span className="font-bold text-slate-800">{stageLabel}</span>
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-slate-200 text-slate-700">
-                            {st.count} Deals
+                            {stageCount} Deals
                           </span>
                         </div>
                         <div className="text-right font-extrabold text-slate-900">
-                          {formatCurrency(st.value)}
+                          {formatCurrency(stageVal)}
                         </div>
                       </div>
                       {!isClosed && (
@@ -530,110 +534,138 @@ export const SalesReportPage: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {velocityData?.baselines.map((b) => (
-                    <tr key={b.stageId} className="hover:bg-slate-50">
-                      <td className="px-4 py-3 font-bold text-slate-900">{b.stageId}</td>
-                      <td className="px-4 py-3 text-center font-bold text-slate-700">{b.sampleSize}</td>
-                      <td className="px-4 py-3 text-center font-black text-indigo-600">{b.medianDays !== null ? `${b.medianDays}d` : '-'}</td>
-                      <td className="px-4 py-3 text-center text-slate-600">{b.averageDays !== null ? `${b.averageDays}d` : '-'}</td>
-                      <td className="px-4 py-3 text-center text-slate-500">{b.p25Days !== null ? `${b.p25Days}d` : '-'}</td>
-                      <td className="px-4 py-3 text-center text-slate-500">{b.p75Days !== null ? `${b.p75Days}d` : '-'}</td>
-                      <td className="px-4 py-3 text-center text-slate-500">{b.p90Days !== null ? `${b.p90Days}d` : '-'}</td>
-                      <td className="px-4 py-3 text-center">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          b.comparisonAvailable
-                            ? 'bg-emerald-100 text-emerald-700'
-                            : !b.comparisonPolicyConfigured
-                            ? 'bg-slate-100 text-slate-600'
-                            : 'bg-amber-100 text-amber-700'
-                        }`}>
-                          {b.comparisonAvailable
-                            ? 'Eligible'
-                            : !b.comparisonPolicyConfigured
-                            ? 'Policy Unconfigured'
-                            : 'Insufficient Sample'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                  {(() => {
+                    const baselinesList: any[] = Array.isArray(velocityData?.baselines)
+                      ? velocityData.baselines
+                      : (velocityData?.baselines && typeof velocityData.baselines === 'object'
+                        ? Object.values(velocityData.baselines)
+                        : (Array.isArray(velocityData?.baselinesList) ? velocityData.baselinesList : []));
+
+                    if (baselinesList.length === 0) {
+                      return (
+                        <tr>
+                          <td colSpan={8} className="py-8 text-center text-slate-400">
+                            No stage duration baselines available.
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return baselinesList.map((b: any, bIdx: number) => (
+                      <tr key={b.stageRawId || b.stageId || b.stageCode || `baseline_${bIdx}`} className="hover:bg-slate-50">
+                        <td className="px-4 py-3 font-bold text-slate-900">{b.stageName || b.stageId}</td>
+                        <td className="px-4 py-3 text-center font-bold text-slate-700">{b.sampleSize ?? b.sampleCount ?? 0}</td>
+                        <td className="px-4 py-3 text-center font-black text-indigo-600">{b.medianDays !== null && b.medianDays !== undefined ? `${b.medianDays}d` : '-'}</td>
+                        <td className="px-4 py-3 text-center text-slate-600">{b.averageDays !== null && b.averageDays !== undefined ? `${b.averageDays}d` : '-'}</td>
+                        <td className="px-4 py-3 text-center text-slate-500">{b.p25Days !== null && b.p25Days !== undefined ? `${b.p25Days}d` : '-'}</td>
+                        <td className="px-4 py-3 text-center text-slate-500">{b.p75Days !== null && b.p75Days !== undefined ? `${b.p75Days}d` : '-'}</td>
+                        <td className="px-4 py-3 text-center text-slate-500">{b.p90Days !== null && b.p90Days !== undefined ? `${b.p90Days}d` : '-'}</td>
+                        <td className="px-4 py-3 text-center">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            b.comparisonAvailable
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : !b.comparisonPolicyConfigured
+                              ? 'bg-slate-100 text-slate-600'
+                              : 'bg-amber-100 text-amber-700'
+                          }`}>
+                            {b.comparisonAvailable
+                              ? 'Eligible'
+                              : !b.comparisonPolicyConfigured
+                              ? 'Policy Unconfigured'
+                              : 'Insufficient Sample'}
+                          </span>
+                        </td>
+                      </tr>
+                    ));
+                  })()}
                 </tbody>
               </table>
             </div>
           </div>
 
           {/* Current Projects Stage Duration & Relative Position Table */}
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="p-4 border-b border-slate-200 font-extrabold text-xs text-slate-900 flex justify-between items-center">
-              <span>Current Open Projects Stage Velocity ({velocityData?.currentProjects.length ?? 0})</span>
-              <span className="text-[11px] font-normal text-slate-500">
-                Neutral duration comparison vs historical baseline
-              </span>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left whitespace-nowrap text-xs">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase text-[11px]">
-                    <th className="px-4 py-3">Project Title</th>
-                    <th className="px-4 py-3">Customer</th>
-                    <th className="px-4 py-3">PIC</th>
-                    <th className="px-4 py-3">Stage</th>
-                    <th className="px-4 py-3 text-center">Days in Stage</th>
-                    <th className="px-4 py-3 text-center">Stage Median</th>
-                    <th className="px-4 py-3 text-center">Stage P75</th>
-                    <th className="px-4 py-3 text-center">Relative Position</th>
-                    <th className="px-4 py-3">Next Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {velocityData?.currentProjects.length === 0 ? (
-                    <tr>
-                      <td colSpan={9} className="py-8 text-center text-slate-400">
-                        No open projects match current data scope.
-                      </td>
-                    </tr>
-                  ) : (
-                    velocityData?.currentProjects.map((p) => (
-                      <tr key={p.projectId} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 font-bold text-slate-900">{p.projectTitle}</td>
-                        <td className="px-4 py-3 text-slate-600">{p.customerName}</td>
-                        <td className="px-4 py-3 text-slate-700">{p.picName}</td>
-                        <td className="px-4 py-3">
-                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700">
-                            {p.stageId}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-center font-extrabold text-slate-900">
-                          {p.daysInCurrentStage !== null ? `${p.daysInCurrentStage}d` : '-'}
-                        </td>
-                        <td className="px-4 py-3 text-center text-slate-600">{p.baselineMedianDays !== null ? `${p.baselineMedianDays}d` : '-'}</td>
-                        <td className="px-4 py-3 text-center text-slate-500">{p.baselineP75Days !== null ? `${p.baselineP75Days}d` : '-'}</td>
-                        <td className="px-4 py-3 text-center">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            p.relativePosition === 'BELOW_MEDIAN' ? 'bg-emerald-100 text-emerald-700' :
-                            p.relativePosition === 'AT_MEDIAN' ? 'bg-blue-100 text-blue-700' :
-                            p.relativePosition === 'ABOVE_MEDIAN' ? 'bg-amber-100 text-amber-700' :
-                            p.relativePosition === 'ABOVE_P75' ? 'bg-rose-100 text-rose-700' :
-                            'bg-slate-100 text-slate-600'
-                          }`}>
-                            {p.relativePosition.replace(/_/g, ' ')}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          {p.nextAction ? (
-                            <span className="text-[11px] text-slate-700 font-medium truncate max-w-[200px] inline-block">
-                              [{p.nextAction.type}] {p.nextAction.title} ({p.nextAction.date || 'No Date'})
-                            </span>
-                          ) : (
-                            <span className="text-[11px] font-bold text-amber-600">Missing Next Action</span>
-                          )}
-                        </td>
+          {(() => {
+            const currentProjectsList: any[] = Array.isArray(velocityData?.currentProjects)
+              ? velocityData.currentProjects
+              : (Array.isArray(velocityData?.projectVelocities)
+                ? velocityData.projectVelocities
+                : []);
+
+            return (
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+                <div className="p-4 border-b border-slate-200 font-extrabold text-xs text-slate-900 flex justify-between items-center">
+                  <span>Current Open Projects Stage Velocity ({currentProjectsList.length})</span>
+                  <span className="text-[11px] font-normal text-slate-500">
+                    Neutral duration comparison vs historical baseline
+                  </span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left whitespace-nowrap text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase text-[11px]">
+                        <th className="px-4 py-3">Project Title</th>
+                        <th className="px-4 py-3">Customer</th>
+                        <th className="px-4 py-3">PIC</th>
+                        <th className="px-4 py-3">Stage</th>
+                        <th className="px-4 py-3 text-center">Days in Stage</th>
+                        <th className="px-4 py-3 text-center">Stage Median</th>
+                        <th className="px-4 py-3 text-center">Stage P75</th>
+                        <th className="px-4 py-3 text-center">Relative Position</th>
+                        <th className="px-4 py-3">Next Action</th>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {currentProjectsList.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="py-8 text-center text-slate-400">
+                            No open projects match current data scope.
+                          </td>
+                        </tr>
+                      ) : (
+                        currentProjectsList.map((p: any, pIdx: number) => (
+                          <tr key={p.projectId || p.id || `proj_vel_${pIdx}`} className="hover:bg-slate-50">
+                            <td className="px-4 py-3 font-bold text-slate-900">{p.projectTitle || p.title}</td>
+                            <td className="px-4 py-3 text-slate-600">{p.customerName}</td>
+                            <td className="px-4 py-3 text-slate-700">{p.picName}</td>
+                            <td className="px-4 py-3">
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700">
+                                {p.stageName || p.stageId}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-center font-extrabold text-slate-900">
+                              {(p.daysInCurrentStage ?? p.daysInStage) !== null ? `${p.daysInCurrentStage ?? p.daysInStage}d` : '-'}
+                            </td>
+                            <td className="px-4 py-3 text-center text-slate-600">{(p.baselineMedianDays ?? p.expectedDays) !== null ? `${p.baselineMedianDays ?? p.expectedDays}d` : '-'}</td>
+                            <td className="px-4 py-3 text-center text-slate-500">{(p.baselineP75Days ?? p.p75ThresholdDays) !== null ? `${p.baselineP75Days ?? p.p75ThresholdDays}d` : '-'}</td>
+                            <td className="px-4 py-3 text-center">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                p.relativePosition === 'BELOW_MEDIAN' ? 'bg-emerald-100 text-emerald-700' :
+                                p.relativePosition === 'AT_MEDIAN' ? 'bg-blue-100 text-blue-700' :
+                                p.relativePosition === 'ABOVE_MEDIAN' ? 'bg-amber-100 text-amber-700' :
+                                p.relativePosition === 'ABOVE_P75' ? 'bg-rose-100 text-rose-700' :
+                                'bg-slate-100 text-slate-600'
+                              }`}>
+                                {p.relativePosition ? p.relativePosition.replace(/_/g, ' ') : (p.velocityStatus || 'NORMAL')}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3">
+                              {p.nextAction ? (
+                                <span className="text-[11px] text-slate-700 font-medium truncate max-w-[200px] inline-block">
+                                  [{p.nextAction.type}] {p.nextAction.title} ({p.nextAction.date || 'No Date'})
+                                </span>
+                              ) : (
+                                <span className="text-[11px] font-bold text-amber-600">Missing Next Action</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       ) : activeTab === 'INTERVENTIONS' ? (
         /* R52 Project Interventions & Stalled Governance Tab */
@@ -706,32 +738,40 @@ export const SalesReportPage: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {!interventionData?.currentProjects || interventionData?.currentProjects.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="py-8 text-center text-slate-400">
-                        {!interventionData?.interventionPolicyConfigured
-                          ? 'No intervention policies configured.'
-                          : 'No projects match configured interventions.'}
-                      </td>
-                    </tr>
-                  ) : (
-                    interventionData?.currentProjects.map((p) => (
-                      <tr key={p.projectId} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 font-bold text-slate-900">{p.projectTitle}</td>
+                  {(() => {
+                    const interventionProjectsList: any[] = Array.isArray(interventionData?.currentProjects)
+                      ? interventionData.currentProjects
+                      : (Array.isArray(interventionData?.items) ? interventionData.items : []);
+
+                    if (interventionProjectsList.length === 0) {
+                      return (
+                        <tr>
+                          <td colSpan={8} className="py-8 text-center text-slate-400">
+                            {!interventionData?.interventionPolicyConfigured
+                              ? 'No intervention policies configured.'
+                              : 'No projects match configured interventions.'}
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return interventionProjectsList.map((p: any, pIdx: number) => (
+                      <tr key={p.projectId || p.id || `interv_proj_${pIdx}`} className="hover:bg-slate-50">
+                        <td className="px-4 py-3 font-bold text-slate-900">{p.projectTitle || p.title}</td>
                         <td className="px-4 py-3 text-slate-600">{p.customerName}</td>
                         <td className="px-4 py-3 text-slate-700">{p.picName}</td>
                         <td className="px-4 py-3">
                           <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700">
-                            {p.stageId}
+                            {p.stageName || p.stageId}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-center font-extrabold text-slate-900">
-                          {p.daysInCurrentStage !== null ? `${p.daysInCurrentStage}d` : '-'}
+                          {(p.daysInCurrentStage ?? p.daysInStage) !== null ? `${p.daysInCurrentStage ?? p.daysInStage}d` : '-'}
                         </td>
                         <td className="px-4 py-3 text-center">
                           <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                             p.interventionStatus === 'MATCHED'
-                              ? p.interventions.some(i => i.severity === 'CRITICAL')
+                              ? Array.isArray(p.interventions) && p.interventions.some((i: any) => i.severity === 'CRITICAL')
                                 ? 'bg-rose-100 text-rose-700'
                                 : 'bg-amber-100 text-amber-700'
                               : p.interventionStatus === 'UNKNOWN'
@@ -739,18 +779,18 @@ export const SalesReportPage: React.FC = () => {
                               : 'bg-emerald-100 text-emerald-700'
                           }`}>
                             {p.interventionStatus === 'MATCHED'
-                              ? (p.interventions[0]?.severity || 'MATCHED')
+                              ? (p.interventions?.[0]?.severity || 'MATCHED')
                               : p.interventionStatus}
                           </span>
                         </td>
                         <td className="px-4 py-3">
-                          {p.interventions.length > 0 ? (
+                          {Array.isArray(p.interventions) && p.interventions.length > 0 ? (
                             <div className="space-y-1">
-                              {p.interventions.map((i) => (
-                                <div key={i.policyId} className="font-bold text-slate-800 text-[11px]">
+                              {p.interventions.map((i: any, iIdx: number) => (
+                                <div key={i.policyId || i.id || `pol_${iIdx}`} className="font-bold text-slate-800 text-[11px]">
                                   {i.policyName}
                                   <span className="text-[10px] text-slate-400 font-normal ml-1">
-                                    ({i.matchedConditions.join(' + ')})
+                                    ({Array.isArray(i.matchedConditions) ? i.matchedConditions.join(' + ') : ''})
                                   </span>
                                 </div>
                               ))}
@@ -760,7 +800,7 @@ export const SalesReportPage: React.FC = () => {
                           )}
                         </td>
                         <td className="px-4 py-3">
-                          {p.interventions.length > 0 && p.interventions[0].recommendedActions.length > 0 ? (
+                          {Array.isArray(p.interventions) && p.interventions.length > 0 && Array.isArray(p.interventions[0]?.recommendedActions) && p.interventions[0].recommendedActions.length > 0 ? (
                             <span className="text-[11px] text-indigo-700 font-semibold">
                               {p.interventions[0].recommendedActions[0].description}
                             </span>
@@ -769,8 +809,8 @@ export const SalesReportPage: React.FC = () => {
                           )}
                         </td>
                       </tr>
-                    ))
-                  )}
+                    ));
+                  })()}
                 </tbody>
               </table>
             </div>
@@ -838,15 +878,23 @@ export const SalesReportPage: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium">
-                  {(!historyData?.episodes || historyData.episodes.length === 0) ? (
-                    <tr>
-                      <td colSpan={7} className="px-4 py-12 text-center text-slate-400">
-                        No intervention episodes recorded for this organization scope yet.
-                      </td>
-                    </tr>
-                  ) : (
-                    historyData.episodes.map((ep) => (
-                      <tr key={ep.id} className="hover:bg-slate-50 transition-colors">
+                  {(() => {
+                    const episodesList: any[] = Array.isArray(historyData?.episodes)
+                      ? historyData.episodes
+                      : (Array.isArray(historyData?.items) ? historyData.items : (Array.isArray(historyData?.timeline) ? historyData.timeline : []));
+
+                    if (episodesList.length === 0) {
+                      return (
+                        <tr>
+                          <td colSpan={7} className="px-4 py-12 text-center text-slate-400">
+                            No intervention episodes recorded for this organization scope yet.
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return episodesList.map((ep: any, epIdx: number) => (
+                      <tr key={ep.id || `episode_${epIdx}`} className="hover:bg-slate-50 transition-colors">
                         <td className="px-4 py-3 font-mono text-[11px] text-slate-500">{ep.id}</td>
                         <td className="px-4 py-3">
                           <div className="font-bold text-slate-900">{ep.projectTitle}</div>
@@ -855,11 +903,11 @@ export const SalesReportPage: React.FC = () => {
                         <td className="px-4 py-3">
                           <div className="font-bold text-slate-800">{ep.policyName}</div>
                           <div className="text-[10px] text-slate-400">
-                            {ep.severity} • {ep.conditions.join(', ')}
+                            {ep.severity} • {Array.isArray(ep.conditions) ? ep.conditions.join(', ') : ''}
                           </div>
                         </td>
                         <td className="px-4 py-3">
-                          <div className="text-slate-800 font-semibold">{ep.startedAt.slice(0, 16).replace('T', ' ')}</div>
+                          <div className="text-slate-800 font-semibold">{ep.startedAt ? ep.startedAt.slice(0, 16).replace('T', ' ') : '-'}</div>
                           <div className="text-[10px] text-slate-400 font-mono">{ep.startedByEventType}</div>
                         </td>
                         <td className="px-4 py-3">
@@ -891,8 +939,8 @@ export const SalesReportPage: React.FC = () => {
                           </span>
                         </td>
                       </tr>
-                    ))
-                  )}
+                    ));
+                  })()}
                 </tbody>
               </table>
             </div>
@@ -1018,15 +1066,23 @@ export const SalesReportPage: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium">
-                  {(!analyticsData?.policyBreakdown || analyticsData.policyBreakdown.length === 0) ? (
-                    <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
-                        No policy analytics available.
-                      </td>
-                    </tr>
-                  ) : (
-                    analyticsData.policyBreakdown.map((pol) => (
-                      <tr key={pol.policyId} className="hover:bg-slate-50">
+                  {(() => {
+                    const policyBreakdownList: any[] = Array.isArray(analyticsData?.policyBreakdown)
+                      ? analyticsData.policyBreakdown
+                      : (Array.isArray(analyticsData?.resolution) ? analyticsData.resolution : []);
+
+                    if (policyBreakdownList.length === 0) {
+                      return (
+                        <tr>
+                          <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                            No policy analytics available.
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return policyBreakdownList.map((pol: any, polIdx: number) => (
+                      <tr key={pol.policyId || pol.id || pol.policyCode || `pol_${polIdx}`} className="hover:bg-slate-50">
                         <td className="px-4 py-3">
                           <span className="font-bold text-slate-900">{pol.policyName}</span>
                           <span className="text-[10px] text-slate-400 ml-2 font-mono">{pol.policyCode}</span>
@@ -1045,11 +1101,11 @@ export const SalesReportPage: React.FC = () => {
                         <td className="px-4 py-3 text-center font-semibold text-emerald-600">{pol.businessResolvedEpisodes}</td>
                         <td className="px-4 py-3 text-center font-semibold text-slate-700">{pol.recurringProjectsCount}</td>
                         <td className="px-4 py-3 text-center font-bold text-indigo-700">
-                          {pol.medianBusinessResolutionHours !== null ? `${pol.medianBusinessResolutionHours}h` : '-'}
+                          {pol.medianBusinessResolutionHours !== null && pol.medianBusinessResolutionHours !== undefined ? `${pol.medianBusinessResolutionHours}h` : '-'}
                         </td>
                       </tr>
-                    ))
-                  )}
+                    ));
+                  })()}
                 </tbody>
               </table>
             </div>

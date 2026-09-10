@@ -52,20 +52,23 @@ export const MasterDataIndicator: React.FC<MasterDataIndicatorProps> = ({
     ? rawIcon.trim()
     : (rawIndicator && !isColorValue(rawIndicator) && isValidIconName(rawIndicator) ? rawIndicator.trim() : null);
 
-  // 1. Both Icon and Color Present (e.g., activity_types with icon and brand color)
+  // 1. Both Icon and Color Present (e.g., task_priorities, activity_types with icon and brand color)
   if (resolvedIcon && resolvedColor) {
     return (
-      <div className={`flex items-center gap-2 ${className}`} data-testid="indicator-icon-and-color">
+      <div className={`flex items-center gap-1.5 ${className}`} data-testid="indicator-icon-and-color">
         <span
-          className="material-symbols-outlined text-[18px] select-none"
+          className="material-symbols-outlined text-[18px] select-none shrink-0"
           style={{ color: resolvedColor }}
           title={`${resolvedIcon} (${resolvedColor})`}
           data-testid="material-symbol-icon"
         >
           {resolvedIcon}
         </span>
+        <span className="text-[11px] font-mono text-[#464555]" data-testid="icon-name-label">
+          {resolvedIcon}
+        </span>
         <span
-          className="w-2.5 h-2.5 rounded-full border border-black/10 shrink-0 inline-block"
+          className="w-2.5 h-2.5 rounded-full border border-black/10 shrink-0 inline-block ml-0.5"
           style={{ backgroundColor: resolvedColor }}
           title={resolvedColor}
           data-testid="color-swatch-dot"
@@ -74,7 +77,7 @@ export const MasterDataIndicator: React.FC<MasterDataIndicatorProps> = ({
     );
   }
 
-  // 2. Color Only (e.g., task_priorities, task_statuses, visit_statuses)
+  // 2. Color Only (e.g., task_statuses, visit_statuses)
   if (resolvedColor) {
     return (
       <div className={`flex items-center gap-1.5 ${className}`} data-testid="indicator-color-swatch">
@@ -91,15 +94,18 @@ export const MasterDataIndicator: React.FC<MasterDataIndicatorProps> = ({
     );
   }
 
-  // 3. Icon Only (e.g., activity_types without custom color)
+  // 3. Icon Only (e.g., task_types without custom color)
   if (resolvedIcon) {
     return (
-      <div className={`flex items-center ${className}`} data-testid="indicator-icon-only">
+      <div className={`flex items-center gap-1.5 ${className}`} data-testid="indicator-icon-only">
         <span
-          className="material-symbols-outlined text-[18px] text-[#4744e5] select-none"
+          className="material-symbols-outlined text-[18px] text-[#4744e5] select-none shrink-0"
           title={resolvedIcon}
           data-testid="material-symbol-icon"
         >
+          {resolvedIcon}
+        </span>
+        <span className="text-[11px] font-mono text-[#464555]" data-testid="icon-name-label">
           {resolvedIcon}
         </span>
       </div>

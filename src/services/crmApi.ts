@@ -1091,7 +1091,23 @@ export const crmApi = {
         const errorData = await res.json().catch(() => ({}));
         throw new Error(errorData.message || errorData.error || `HTTP ${res.status}: Failed to fetch pipeline velocity`);
       }
-      return await res.json();
+      const data = await res.json();
+      if (data) {
+        if (data.baselines && !Array.isArray(data.baselines) && typeof data.baselines === 'object') {
+          data.baselines = Object.values(data.baselines);
+        } else if (!Array.isArray(data.baselines) && Array.isArray(data.baselinesList)) {
+          data.baselines = data.baselinesList;
+        } else if (!Array.isArray(data.baselines)) {
+          data.baselines = [];
+        }
+
+        if (!Array.isArray(data.currentProjects) && Array.isArray(data.projectVelocities)) {
+          data.currentProjects = data.projectVelocities;
+        } else if (!Array.isArray(data.currentProjects)) {
+          data.currentProjects = [];
+        }
+      }
+      return data;
     } catch (err) {
       console.error('[crmApi.fetchPipelineVelocity error]', err);
       throw err;
