@@ -20,10 +20,12 @@ const mapFromDb = (category: MasterDataItem['category'], row: any): MasterDataIt
     probability: row.probability !== undefined ? Number(row.probability) : undefined,
     phase: row.phase || undefined,
     commercialOutcome: row.commercialOutcome || undefined,
-    isActive: row.isActive !== undefined ? Boolean(row.isActive) : undefined,
+    isActive: row.isActive !== undefined ? Boolean(row.isActive) : true,
     isTerminal: row.isTerminal !== undefined ? Boolean(row.isTerminal) : undefined,
     allowVisits: row.allowVisits !== undefined ? Boolean(row.allowVisits) : undefined,
     allowNewProject: row.allowNewProject !== undefined ? Boolean(row.allowNewProject) : undefined,
+    sourceType: row.sourceType || 'PLATFORM',
+    platformMasterId: row.platformMasterId || null,
   };
 };
 
@@ -32,15 +34,22 @@ const mapToDb = (category: MasterDataItem['category'], item: MasterDataItem, ten
     id: item.id,
     name: item.label,
     code: item.codeValue,
+    isActive: item.isActive !== undefined ? (item.isActive ? 1 : 0) : 1,
+    displayOrder: item.displayOrder || 1,
   };
 
   switch (category) {
     case 'task_types':
       return { ...base, icon: item.indicator, color: item.indicator };
     case 'task_priorities':
+      return { ...base, color: item.indicator, isDefault: item.isDefault ? 1 : 0 };
     case 'task_statuses':
     case 'customer_status':
+    case 'customer_statuses':
       return { ...base, color: item.indicator };
+    case 'customer_types':
+    case 'visit_purposes':
+      return { ...base };
     case 'project_stages':
       return {
         ...base,
@@ -61,6 +70,15 @@ const mapToDb = (category: MasterDataItem['category'], item: MasterDataItem, ten
       return base;
   }
 };
+
+export interface ApiResponse<T = any> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  code?: string;
+  usageCount?: number;
+  message?: string;
+}
 
 export const masterDataApi = {
   fetchMasterData: async (category: MasterDataItem['category'], tenantId?: string): Promise<MasterDataItem[]> => {
@@ -89,7 +107,7 @@ export const masterDataApi = {
     return masterDataApi.fetchMasterData(category, 'platform');
   },
 
-  saveMasterDataItem: async (item: MasterDataItem, tenantId?: string, isNew: boolean = false): Promise<boolean> => {
+  saveMasterDataItem: async (item: MasterDataItem, tenantId?: string, isNew: boolean = false): Promise<ApiResponse> => {
     const table = getTableName(item.category);
     const dbRow = mapToDb(item.category, item, tenantId || '');
     try {
@@ -104,14 +122,23 @@ export const masterDataApi = {
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('sfp_auth_token')}` },
         body: JSON.stringify(dbRow)
       });
-      return res.ok;
-    } catch (err) {
+
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return {
+          success: false,
+          error: body.error || body.message || `Failed to save item (${res.status})`,
+          code: body.code
+        };
+      }
+      return { success: true, data: body };
+    } catch (err: any) {
       console.error(err);
-      return false;
+      return { success: false, error: err.message || 'Network error' };
     }
   },
 
-  deleteMasterDataItem: async (category: MasterDataItem['category'], id: string, tenantId?: string): Promise<boolean> => {
+  deleteMasterDataItem: async (category: MasterDataItem['category'], id: string, tenantId?: string): Promise<ApiResponse> => {
     const table = getTableName(category);
     try {
       let url = `${API_BASE}/master-data/${table}/${id}`;
@@ -122,10 +149,49 @@ export const masterDataApi = {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${localStorage.getItem('sfp_auth_token')}` }
       });
-      return res.ok;
-    } catch (err) {
+
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return {
+          success: false,
+          error: body.error || body.message || `Failed to delete item (${res.status})`,
+          code: body.code,
+          usageCount: body.usageCount
+        };
+      }
+      return { success: true, data: body };
+    } catch (err: any) {
       console.error(err);
-      return false;
+      return { success: false, error: err.message || 'Network error' };
+    }
+  },
+
+  resetMasterDataCategory: async (category: MasterDataItem['category']): Promise<{ success: boolean; message?: string; restoredCount?: number; preservedCustomCount?: number; error?: string }> => {
+    const table = getTableName(category);
+    try {
+      const res = await fetch(`${API_BASE}/master-data/${table}/reset`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('sfp_auth_token')}`
+        }
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return {
+          success: false,
+          error: body.error || body.message || 'Reset failed'
+        };
+      }
+      return {
+        success: true,
+        message: body.message,
+        restoredCount: body.restoredCount,
+        preservedCustomCount: body.preservedCustomCount
+      };
+    } catch (err: any) {
+      console.error(err);
+      return { success: false, error: err.message || 'Network error' };
     }
   },
 

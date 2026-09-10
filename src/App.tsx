@@ -578,6 +578,14 @@ export default function App() {
             }
           />
           <Route
+            path="/settings/master-data"
+            element={
+              <ProtectedRoute requiredRoles={['TENANT_ADMIN', 'SUPER_ADMIN']}>
+                <MasterDataPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/notification-settings"
             element={
               <ProtectedRoute>

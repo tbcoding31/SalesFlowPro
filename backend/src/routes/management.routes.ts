@@ -130,7 +130,7 @@ managementRoutes.get('/control-tower', async (req, res) => {
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
       LEFT JOIN users u ON u.id = p.picId
-      LEFT JOIN project_stages ps ON ps.id = p.stageId
+      LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       ${projWhere.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
     `, projParams);
 

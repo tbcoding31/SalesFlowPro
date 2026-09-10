@@ -132,6 +132,10 @@ export const NotificationSettingsPage: React.FC = () => {
     });
   };
 
+  const handleSave = () => {
+    alert('Notification preferences saved successfully!');
+  };
+
   const location = useLocation();
   const isVisitReminderRoute = location.pathname === '/settings/visit-reminders';
 

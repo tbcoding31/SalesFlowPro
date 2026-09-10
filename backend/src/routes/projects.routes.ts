@@ -63,7 +63,7 @@ projectsRoutes.get('/', async (req: any, res: any) => {
     const countSql = `
       SELECT COUNT(*) as total
       FROM projects p
-      LEFT JOIN project_stages ps ON ps.id = p.stageId
+      LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       ${where.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
       ${extraWhere}
     `;
@@ -91,7 +91,7 @@ projectsRoutes.get('/', async (req: any, res: any) => {
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
       LEFT JOIN users u ON u.id = p.picId
-      LEFT JOIN project_stages ps ON ps.id = p.stageId
+      LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       ${where.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
       ${extraWhere}
       ORDER BY p.createdAt DESC
@@ -135,9 +135,9 @@ projectsRoutes.get('/pipeline', async (req: any, res: any) => {
     const [stageRows]: any = await pool.query(`
       SELECT id, code, name, displayOrder, probability, phase, commercialOutcome, isActive, isTerminal, allowVisits, allowNewProject
       FROM project_stages
-      WHERE isActive = 1 OR id IN (SELECT DISTINCT stageId FROM projects WHERE tenantId = ? AND stageId IS NOT NULL)
+      WHERE tenantId = ? AND (isActive = 1 OR id IN (SELECT DISTINCT stageId FROM projects WHERE tenantId = ? AND stageId IS NOT NULL))
       ORDER BY displayOrder ASC, id ASC
-    `, [targetTenant]);
+    `, [targetTenant, targetTenant]);
 
     const selectSql = `
       SELECT 
@@ -158,7 +158,7 @@ projectsRoutes.get('/pipeline', async (req: any, res: any) => {
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
       LEFT JOIN users u ON u.id = p.picId
-      LEFT JOIN project_stages ps ON ps.id = p.stageId
+      LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       ${where.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
       ORDER BY p.createdAt DESC
     `;
@@ -257,16 +257,17 @@ export function isStageTerminal(stage: { isTerminal?: number; phase?: string; co
   return stage.isTerminal === 1 || stage.phase === 'CLOSED' || ['LOST', 'CANCELLED'].includes(stage.commercialOutcome || '');
 }
 
-export async function resolveNextForwardStage(executor: any, currentDisplayOrder: number) {
+export async function resolveNextForwardStage(executor: any, currentDisplayOrder: number, tenantId?: string) {
   const [rows]: any = await executor.query(`
     SELECT id, code, name, phase, commercialOutcome, isActive, isTerminal, displayOrder
     FROM project_stages
     WHERE isActive = 1
       AND displayOrder > ?
       AND commercialOutcome NOT IN ('LOST', 'CANCELLED')
+      AND (tenantId = ? OR (? IS NULL AND tenantId IS NULL))
     ORDER BY displayOrder ASC
     LIMIT 1
-  `, [currentDisplayOrder]);
+  `, [currentDisplayOrder, tenantId || null, tenantId || null]);
 
   return rows.length > 0 ? rows[0] : null;
 }
@@ -309,7 +310,7 @@ export async function executeProjectStageTransition(params: ProjectStageTransiti
            ps.phase as fromPhase, ps.commercialOutcome as fromOutcome,
            ps.isTerminal as fromIsTerminal, ps.displayOrder as fromDisplayOrder
     FROM projects p
-    LEFT JOIN project_stages ps ON ps.id = p.stageId
+    LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
     WHERE p.id = ? AND p.tenantId = ? FOR UPDATE
   `, [projectId, targetTenant]);
 
@@ -320,8 +321,8 @@ export async function executeProjectStageTransition(params: ProjectStageTransiti
 
   // Strictly validate and resolve target stage against MySQL project_stages
   const [sRows]: any = await conn.query(
-    'SELECT id, code, name, phase, commercialOutcome, isActive, isTerminal, probability, displayOrder FROM project_stages WHERE id = ? OR code = ? LIMIT 1',
-    [targetStage, targetStage]
+    'SELECT id, code, name, phase, commercialOutcome, isActive, isTerminal, probability, displayOrder FROM project_stages WHERE (id = ? OR code = ?) AND (tenantId = ? OR ? IS NULL) LIMIT 1',
+    [targetStage, targetStage, targetTenant || null, targetTenant || null]
   );
 
   if (sRows.length === 0) {
@@ -460,7 +461,7 @@ export async function executeProjectStageTransition(params: ProjectStageTransiti
     FROM projects p
     LEFT JOIN customers c ON c.id = p.customerId
     LEFT JOIN users u ON u.id = p.picId
-    LEFT JOIN project_stages ps ON ps.id = p.stageId
+    LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
     WHERE p.id = ? AND p.tenantId = ?
   `, [projectId, targetTenant]);
 
@@ -584,7 +585,7 @@ projectsRoutes.post('/:id/advance-stage', async (req: any, res: any) => {
              ps.phase as fromPhase, ps.commercialOutcome as fromOutcome,
              ps.isTerminal as fromIsTerminal, ps.displayOrder as fromDisplayOrder
       FROM projects p
-      LEFT JOIN project_stages ps ON ps.id = p.stageId
+      LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       WHERE p.id = ? AND p.tenantId = ? FOR UPDATE
     `, [id, targetTenant]);
 
@@ -610,7 +611,7 @@ projectsRoutes.post('/:id/advance-stage', async (req: any, res: any) => {
     }
 
     // 2. Resolve candidate next stage dynamically via DB metadata
-    const candidateNextStage = await resolveNextForwardStage(conn, currentProject.fromDisplayOrder || 0);
+    const candidateNextStage = await resolveNextForwardStage(conn, currentProject.fromDisplayOrder || 0, targetTenant);
     if (!candidateNextStage) {
       await conn.rollback();
       return res.status(400).json({
@@ -644,7 +645,7 @@ projectsRoutes.post('/:id/advance-stage', async (req: any, res: any) => {
     });
 
     if (!postIsTerminal) {
-      postNextStage = await resolveNextForwardStage(conn, transitionResult.toStage.displayOrder);
+      postNextStage = await resolveNextForwardStage(conn, transitionResult.toStage.displayOrder, targetTenant);
       postCanAdvance = Boolean(postNextStage);
     }
 
@@ -717,7 +718,7 @@ projectsRoutes.get('/:id', async (req: any, res: any) => {
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
       LEFT JOIN users u ON u.id = p.picId
-      LEFT JOIN project_stages ps ON ps.id = p.stageId
+      LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       WHERE p.id = ? AND p.tenantId = ?
     `, [id, targetTenant]);
 
@@ -730,7 +731,7 @@ projectsRoutes.get('/:id', async (req: any, res: any) => {
     let nextStage: any = null;
 
     if (!isStageTerminal({ isTerminal: proj.stageIsTerminal, phase: proj.stagePhase, commercialOutcome: proj.stageCommercialOutcome })) {
-      nextStage = await resolveNextForwardStage(pool, proj.stageDisplayOrder || 0);
+      nextStage = await resolveNextForwardStage(pool, proj.stageDisplayOrder || 0, targetTenant);
       canAdvance = Boolean(nextStage);
     }
 
@@ -779,8 +780,9 @@ projectsRoutes.get('/:id/timeline', async (req: any, res: any) => {
         psTo.name as toStageName, psTo.code as toStageCode,
         u.name as userName, u.email as userEmail, u.avatar as userAvatar
       FROM project_stage_histories psh
-      LEFT JOIN project_stages psFrom ON (psFrom.id = psh.fromStageId OR psFrom.code = psh.fromStageId)
-      LEFT JOIN project_stages psTo ON (psTo.id = psh.toStageId OR psTo.code = psh.toStageId)
+      JOIN projects p ON p.id = psh.projectId
+      LEFT JOIN project_stages psFrom ON (psFrom.id = psh.fromStageId OR psFrom.code = psh.fromStageId) AND psFrom.tenantId = p.tenantId
+      LEFT JOIN project_stages psTo ON (psTo.id = psh.toStageId OR psTo.code = psh.toStageId) AND psTo.tenantId = p.tenantId
       LEFT JOIN users u ON u.id = psh.changedById
       WHERE psh.projectId = ?
     `, [id]);
@@ -1126,7 +1128,7 @@ projectsRoutes.get('/:id/next-action', async (req: any, res: any) => {
         v.startTime, 'VISIT' as type, u.name as picName, v.picId,
         COALESCE(vs.name, 'Planned') as statusName
       FROM visits v
-      LEFT JOIN visit_statuses vs ON (vs.id = v.statusId OR vs.code = v.statusId)
+      LEFT JOIN visit_statuses vs ON (vs.id = v.statusId OR vs.code = v.statusId) AND vs.tenantId = v.tenantId
       LEFT JOIN users u ON u.id = v.picId
       WHERE v.tenantId = ? 
         AND v.relatedProjectId = ? 
@@ -1234,7 +1236,7 @@ projectsRoutes.get('/:id/summary', async (req: any, res: any) => {
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
       LEFT JOIN users u ON u.id = p.picId
-      LEFT JOIN project_stages ps ON ps.id = p.stageId
+      LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       WHERE p.id = ? AND p.tenantId = ?
     `, [id, targetTenant]);
 
@@ -1247,7 +1249,7 @@ projectsRoutes.get('/:id/summary', async (req: any, res: any) => {
     let nextStage: any = null;
 
     if (!isStageTerminal({ isTerminal: project.stageIsTerminal, phase: project.stagePhase, commercialOutcome: project.stageCommercialOutcome })) {
-      nextStage = await resolveNextForwardStage(pool, project.stageDisplayOrder || 0);
+      nextStage = await resolveNextForwardStage(pool, project.stageDisplayOrder || 0, targetTenant);
       canAdvance = Boolean(nextStage);
     }
 
@@ -1293,26 +1295,8 @@ projectsRoutes.get('/:id/summary', async (req: any, res: any) => {
         t.updatedAt,
         t.completedAt
       FROM tasks t
-      LEFT JOIN task_statuses ts ON (
-        ts.id = t.statusId 
-        OR ts.code = t.statusId 
-        OR ts.code = CONCAT('TSK_', t.statusId)
-        OR (t.statusId = 'PENDING' AND ts.id = 'TS-1')
-        OR (t.statusId = 'TODO' AND ts.id = 'TS-1')
-        OR (t.statusId = 'IN_PROGRESS' AND ts.id = 'TS-2')
-        OR (t.statusId = 'COMPLETED' AND ts.id = 'TS-3')
-        OR (t.statusId = 'CANCELLED' AND ts.id = 'TS-4')
-      )
-      LEFT JOIN task_priorities tp ON (
-        tp.id = t.priorityId
-        OR tp.code = t.priorityId
-        OR tp.code = CONCAT('PRI_', t.priorityId)
-        OR (t.priorityId = 'URGENT' AND tp.id = 'TP-1')
-        OR (t.priorityId = 'HIGH' AND tp.id = 'TP-2')
-        OR (t.priorityId = 'NORMAL' AND tp.id = 'TP-3')
-        OR (t.priorityId = 'MEDIUM' AND tp.id = 'TP-3')
-        OR (t.priorityId = 'LOW' AND tp.id = 'TP-4')
-      )
+      LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
+      LEFT JOIN task_priorities tp ON tp.id = t.priorityId AND tp.tenantId = t.tenantId
       LEFT JOIN users u ON u.id = t.picId
       LEFT JOIN customers c ON c.id = t.customerId
       LEFT JOIN visits v ON v.id = t.relatedVisitId
@@ -1327,7 +1311,7 @@ projectsRoutes.get('/:id/summary', async (req: any, res: any) => {
         vs.code as statusCode, vs.name as statusName,
         u.name as picName, c.name as customerName
       FROM visits v
-      LEFT JOIN visit_statuses vs ON vs.id = v.statusId
+      LEFT JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
       LEFT JOIN users u ON u.id = v.picId
       LEFT JOIN customers c ON c.id = v.customerId
       WHERE v.tenantId = ? AND v.relatedProjectId = ?
@@ -1509,8 +1493,8 @@ projectsRoutes.post('/', async (req: any, res: any) => {
 
   if (stageId) {
     const [sRows]: any = await pool.query(
-      'SELECT id, code, name, isActive, isTerminal, allowNewProject, probability FROM project_stages WHERE id = ? OR code = ? LIMIT 1',
-      [stageId, stageId]
+      'SELECT id, code, name, isActive, isTerminal, allowNewProject, probability FROM project_stages WHERE (id = ? OR code = ?) AND tenantId = ? LIMIT 1',
+      [stageId, stageId, targetTenant]
     );
     if (sRows.length === 0) {
       return res.status(400).json({ error: `Invalid project stage: ${stageId}`, code: 'INVALID_STAGE' });
@@ -1528,7 +1512,8 @@ projectsRoutes.post('/', async (req: any, res: any) => {
   } else {
     // Default to first active non-terminal stage ordered by displayOrder
     const [sRows]: any = await pool.query(
-      'SELECT id, probability FROM project_stages WHERE isActive = 1 AND isTerminal = 0 AND allowNewProject = 1 ORDER BY displayOrder ASC, id ASC LIMIT 1'
+      'SELECT id, probability FROM project_stages WHERE isActive = 1 AND isTerminal = 0 AND allowNewProject = 1 AND tenantId = ? ORDER BY displayOrder ASC, id ASC LIMIT 1',
+      [targetTenant]
     );
     if (sRows.length > 0) {
       resolvedStage = sRows[0].id;
@@ -1625,7 +1610,7 @@ projectsRoutes.put('/:id', async (req: any, res: any) => {
     const [existing]: any = await conn.query(`
       SELECT p.*, ps.isTerminal, ps.name as stageName
       FROM projects p
-      LEFT JOIN project_stages ps ON ps.id = p.stageId
+      LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       WHERE p.id = ? AND p.tenantId = ?
       FOR UPDATE
     `, [id, targetTenant]);

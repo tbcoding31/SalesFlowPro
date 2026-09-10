@@ -7,26 +7,8 @@ import { logAudit } from '../utils/audit';
 export const tasksRoutes = Router();
 
 const TASK_JOIN_CLAUSES = `
-  LEFT JOIN task_statuses ts ON (
-    ts.id = t.statusId 
-    OR ts.code = t.statusId 
-    OR ts.code = CONCAT('TSK_', t.statusId)
-    OR (t.statusId = 'PENDING' AND ts.id = 'TS-1')
-    OR (t.statusId = 'TODO' AND ts.id = 'TS-1')
-    OR (t.statusId = 'IN_PROGRESS' AND ts.id = 'TS-2')
-    OR (t.statusId = 'COMPLETED' AND ts.id = 'TS-3')
-    OR (t.statusId = 'CANCELLED' AND ts.id = 'TS-4')
-  )
-  LEFT JOIN task_priorities tp ON (
-    tp.id = t.priorityId
-    OR tp.code = t.priorityId
-    OR tp.code = CONCAT('PRI_', t.priorityId)
-    OR (t.priorityId = 'URGENT' AND tp.id = 'TP-1')
-    OR (t.priorityId = 'HIGH' AND tp.id = 'TP-2')
-    OR (t.priorityId = 'NORMAL' AND tp.id = 'TP-3')
-    OR (t.priorityId = 'MEDIUM' AND tp.id = 'TP-3')
-    OR (t.priorityId = 'LOW' AND tp.id = 'TP-4')
-  )
+  LEFT JOIN task_statuses ts ON (ts.id = t.statusId OR ts.code = t.statusId) AND ts.tenantId = t.tenantId
+  LEFT JOIN task_priorities tp ON (tp.id = t.priorityId OR tp.code = t.priorityId) AND tp.tenantId = t.tenantId
   LEFT JOIN users u ON u.id = t.picId
   LEFT JOIN customers c ON c.id = t.customerId
   LEFT JOIN projects p ON p.id = t.relatedProjectId
@@ -320,25 +302,34 @@ tasksRoutes.post('/', async (req: any, res: any) => {
   }
 
   // Resolve statusId
-  let resolvedStatusId = 'TS-1';
+  // Resolve statusId
+  let resolvedStatusId: string | null = null;
   const statusCand = statusId || status;
   if (statusCand) {
     const [sRows]: any = await pool.query(
-      'SELECT id FROM task_statuses WHERE id = ? OR code = ? OR name = ? OR code = CONCAT("TSK_", ?) LIMIT 1',
-      [statusCand, statusCand, statusCand, statusCand]
+      'SELECT id FROM task_statuses WHERE tenantId = ? AND (id = ? OR code = ? OR name = ? OR code = CONCAT("TSK_", ?)) LIMIT 1',
+      [targetTenant, statusCand, statusCand, statusCand, statusCand]
     );
     if (sRows.length > 0) resolvedStatusId = sRows[0].id;
   }
+  if (!resolvedStatusId) {
+    const [defS]: any = await pool.query('SELECT id FROM task_statuses WHERE tenantId = ? ORDER BY displayOrder ASC, id ASC LIMIT 1', [targetTenant]);
+    resolvedStatusId = defS[0]?.id || null;
+  }
 
   // Resolve priorityId
-  let resolvedPriorityId = 'TP-3';
+  let resolvedPriorityId: string | null = null;
   const priCand = priorityId || priority;
   if (priCand) {
     const [pRows]: any = await pool.query(
-      'SELECT id FROM task_priorities WHERE id = ? OR code = ? OR name = ? OR code = CONCAT("PRI_", ?) LIMIT 1',
-      [priCand, priCand, priCand, priCand]
+      'SELECT id FROM task_priorities WHERE tenantId = ? AND (id = ? OR code = ? OR name = ? OR code = CONCAT("PRI_", ?)) LIMIT 1',
+      [targetTenant, priCand, priCand, priCand, priCand]
     );
     if (pRows.length > 0) resolvedPriorityId = pRows[0].id;
+  }
+  if (!resolvedPriorityId) {
+    const [defP]: any = await pool.query('SELECT id FROM task_priorities WHERE tenantId = ? ORDER BY displayOrder ASC, id ASC LIMIT 1', [targetTenant]);
+    resolvedPriorityId = defP[0]?.id || null;
   }
 
   const taskId = data.id && String(data.id).trim()
@@ -427,8 +418,8 @@ tasksRoutes.put('/:id', async (req: any, res: any) => {
     const statusCand = data.statusId || data.status;
     if (statusCand) {
       const [sRows]: any = await pool.query(
-        'SELECT id FROM task_statuses WHERE id = ? OR code = ? OR name = ? OR code = CONCAT("TSK_", ?) LIMIT 1',
-        [statusCand, statusCand, statusCand, statusCand]
+        'SELECT id FROM task_statuses WHERE tenantId = ? AND (id = ? OR code = ? OR name = ? OR code = CONCAT("TSK_", ?)) LIMIT 1',
+        [targetTenant, statusCand, statusCand, statusCand, statusCand]
       );
       if (sRows.length > 0) statusId = sRows[0].id;
     }
@@ -437,8 +428,8 @@ tasksRoutes.put('/:id', async (req: any, res: any) => {
     const priCand = data.priorityId || data.priority;
     if (priCand) {
       const [pRows]: any = await pool.query(
-        'SELECT id FROM task_priorities WHERE id = ? OR code = ? OR name = ? OR code = CONCAT("PRI_", ?) LIMIT 1',
-        [priCand, priCand, priCand, priCand]
+        'SELECT id FROM task_priorities WHERE tenantId = ? AND (id = ? OR code = ? OR name = ? OR code = CONCAT("PRI_", ?)) LIMIT 1',
+        [targetTenant, priCand, priCand, priCand, priCand]
       );
       if (pRows.length > 0) priorityId = pRows[0].id;
     }

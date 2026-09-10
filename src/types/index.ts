@@ -711,6 +711,8 @@ export interface MasterDataItem {
   isTerminal?: boolean;
   allowVisits?: boolean;
   allowNewProject?: boolean;
+  sourceType?: 'PLATFORM' | 'TENANT';
+  platformMasterId?: string | null;
 }
 
 export interface NotificationItem {

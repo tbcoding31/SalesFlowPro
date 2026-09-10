@@ -20,6 +20,24 @@ export const TASK_PRIORITY = {
   LOW: 'TP-4',
 } as const;
 
+async function resolveTenantTaskDefaults(conn: any, tenantId: string) {
+  const [statuses]: any = await conn.query(
+    'SELECT id, code, platformMasterId FROM task_statuses WHERE tenantId = ?',
+    [tenantId]
+  );
+  const [priorities]: any = await conn.query(
+    'SELECT id, code, platformMasterId FROM task_priorities WHERE tenantId = ?',
+    [tenantId]
+  );
+  
+  const todoStatus = statuses.find((s: any) => s.code === 'TODO' || s.code === 'TSK_TODO' || s.platformMasterId === 'TS-1')?.id || statuses[0]?.id || 'TS-1';
+  const cancelledStatus = statuses.find((s: any) => s.code === 'CANCELLED' || s.code === 'TSK_CANCELLED' || s.platformMasterId === 'TS-4')?.id || statuses[statuses.length - 1]?.id || 'TS-4';
+  const completedStatus = statuses.find((s: any) => s.code === 'COMPLETED' || s.code === 'TSK_COMPLETED' || s.platformMasterId === 'TS-3')?.id || statuses[0]?.id || 'TS-3';
+  const mediumPriority = priorities.find((p: any) => p.code === 'MEDIUM' || p.code === 'PRIO_MEDIUM' || p.platformMasterId === 'TP-3')?.id || priorities[0]?.id || 'TP-3';
+
+  return { todoStatus, cancelledStatus, completedStatus, mediumPriority };
+}
+
 /**
  * Synchronizes PROJECT_ASSIGNMENT tasks for a given project.
  * - Server-side, transactional, tenant-safe, and idempotent.
@@ -42,6 +60,8 @@ export async function syncProjectAssignmentTasks(
   const project = projRows[0];
   const activePicId = project.picId ? String(project.picId).trim() : null;
 
+  const tntDefaults = await resolveTenantTaskDefaults(conn, tenantId);
+
   // Query existing assignment tasks for this project
   const [existingTasks]: any = await conn.query(
     `SELECT * FROM tasks 
@@ -52,7 +72,7 @@ export async function syncProjectAssignmentTasks(
   let activeTaskFound = false;
 
   for (const task of existingTasks) {
-    const isCompleted = task.statusId === TASK_STATUS.COMPLETED || task.statusId === 'COMPLETED';
+    const isCompleted = task.statusId === tntDefaults.completedStatus || task.statusId === TASK_STATUS.COMPLETED || task.statusId === 'COMPLETED';
     if (isCompleted) {
       // Completed historical tasks are preserved untouched
       continue;
@@ -62,6 +82,7 @@ export async function syncProjectAssignmentTasks(
       if (!activeTaskFound) {
         // Active assignment for current PIC -> sync metadata and ensure active
         const expectedTitle = `Project Assignment — ${project.title || 'Project'}`;
+        const isCancelled = task.statusId === tntDefaults.cancelledStatus || task.statusId === TASK_STATUS.CANCELLED || task.statusId === 'CANCELLED';
         await conn.query(
           `UPDATE tasks 
            SET title = ?, customerId = ?, dueDate = ?, statusId = ?, updatedAt = NOW()
@@ -70,7 +91,7 @@ export async function syncProjectAssignmentTasks(
             expectedTitle,
             project.customerId || null,
             project.expectedCloseDate || null,
-            task.statusId === TASK_STATUS.CANCELLED || task.statusId === 'CANCELLED' ? TASK_STATUS.TODO : task.statusId,
+            isCancelled ? tntDefaults.todoStatus : task.statusId,
             task.id
           ]
         );
@@ -79,15 +100,16 @@ export async function syncProjectAssignmentTasks(
         // Redundant duplicate task for same PIC -> cancel it
         await conn.query(
           `UPDATE tasks SET statusId = ?, updatedAt = NOW() WHERE id = ?`,
-          [TASK_STATUS.CANCELLED, task.id]
+          [tntDefaults.cancelledStatus, task.id]
         );
       }
     } else {
       // Task belongs to previous PIC or PIC was removed -> cancel unfinished task
-      if (task.statusId !== TASK_STATUS.CANCELLED && task.statusId !== 'CANCELLED') {
+      const isCancelled = task.statusId === tntDefaults.cancelledStatus || task.statusId === TASK_STATUS.CANCELLED || task.statusId === 'CANCELLED';
+      if (!isCancelled) {
         await conn.query(
           `UPDATE tasks SET statusId = ?, updatedAt = NOW() WHERE id = ?`,
-          [TASK_STATUS.CANCELLED, task.id]
+          [tntDefaults.cancelledStatus, task.id]
         );
       }
     }
@@ -111,8 +133,8 @@ export async function syncProjectAssignmentTasks(
         taskDesc,
         project.customerId || null,
         projectId,
-        TASK_PRIORITY.MEDIUM,
-        TASK_STATUS.TODO,
+        tntDefaults.mediumPriority,
+        tntDefaults.todoStatus,
         project.expectedCloseDate || null,
         activePicId,
         TASK_SOURCE_TYPE.PROJECT_ASSIGNMENT
@@ -181,11 +203,12 @@ export async function syncVisitAssignmentTasks(
     [tenantId, visitId, TASK_SOURCE_TYPE.VISIT_ASSIGNMENT]
   );
 
+  const tntDefaults = await resolveTenantTaskDefaults(conn, tenantId);
   const activeAssigneeSet = new Set<string>();
   const taskTitle = `Visit Assignment — ${visit.title || 'Client Visit'}`;
 
   for (const task of existingTasks) {
-    const isCompleted = task.statusId === TASK_STATUS.COMPLETED || task.statusId === 'COMPLETED';
+    const isCompleted = task.statusId === tntDefaults.completedStatus || task.statusId === TASK_STATUS.COMPLETED || task.statusId === 'COMPLETED';
     if (isCompleted) {
       continue;
     }
@@ -193,9 +216,8 @@ export async function syncVisitAssignmentTasks(
     if (desiredAssigneeIds.has(task.picId)) {
       if (!activeAssigneeSet.has(task.picId)) {
         // Active assignment task for this assignee -> sync metadata
-        const nextStatus = task.statusId === TASK_STATUS.CANCELLED || task.statusId === 'CANCELLED'
-          ? TASK_STATUS.TODO
-          : task.statusId;
+        const isCancelled = task.statusId === tntDefaults.cancelledStatus || task.statusId === TASK_STATUS.CANCELLED || task.statusId === 'CANCELLED';
+        const nextStatus = isCancelled ? tntDefaults.todoStatus : task.statusId;
 
         await conn.query(
           `UPDATE tasks 
@@ -215,15 +237,16 @@ export async function syncVisitAssignmentTasks(
         // Duplicate active task for same user on this visit -> cancel redundant one
         await conn.query(
           `UPDATE tasks SET statusId = ?, updatedAt = NOW() WHERE id = ?`,
-          [TASK_STATUS.CANCELLED, task.id]
+          [tntDefaults.cancelledStatus, task.id]
         );
       }
     } else {
       // User was unassigned from this visit -> cancel unfinished task
-      if (task.statusId !== TASK_STATUS.CANCELLED && task.statusId !== 'CANCELLED') {
+      const isCancelled = task.statusId === tntDefaults.cancelledStatus || task.statusId === TASK_STATUS.CANCELLED || task.statusId === 'CANCELLED';
+      if (!isCancelled) {
         await conn.query(
           `UPDATE tasks SET statusId = ?, updatedAt = NOW() WHERE id = ?`,
-          [TASK_STATUS.CANCELLED, task.id]
+          [tntDefaults.cancelledStatus, task.id]
         );
       }
     }
@@ -248,8 +271,8 @@ export async function syncVisitAssignmentTasks(
           visit.customerId || null,
           visit.relatedProjectId || null,
           visit.id,
-          TASK_PRIORITY.MEDIUM,
-          TASK_STATUS.TODO,
+          tntDefaults.mediumPriority,
+          tntDefaults.todoStatus,
           visit.visitDate,
           assigneeId,
           TASK_SOURCE_TYPE.VISIT_ASSIGNMENT

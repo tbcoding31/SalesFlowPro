@@ -148,17 +148,116 @@ onboardingRoutes.post('/tenant', async (req, res) => {
     );
 
     
-      // 6. Clone Master Data Blueprints (Departments and Positions)
+      // 6. Clone Master Data Blueprints for All 10 Categories (Two-Tier Snapshot)
+      const cleanT = tenantId.replace(/[^a-zA-Z0-9]/g, '');
+      const tPart = cleanT.length > 20 ? cleanT.substring(0, 20) : cleanT;
+
+      // 6.1 Departments
       const [blueprintDepts]: any = await connection.query("SELECT * FROM departments WHERE tenantId IS NULL");
       for (const dept of blueprintDepts) {
-        const newDeptId = `DEPT-${Date.now()}-${Math.random().toString(36).substring(2,8)}`;
-        await connection.query("INSERT INTO departments (id, tenantId, name, description) VALUES (?, ?, ?, ?)", [newDeptId, tenantId, dept.name, dept.description]);
+        const newDeptId = `DEPT-${tPart}-${dept.id}`;
+        await connection.query(
+          "INSERT INTO departments (id, tenantId, sourceType, platformMasterId, name, description, isActive, displayOrder) VALUES (?, ?, 'PLATFORM', ?, ?, ?, 1, ?)",
+          [newDeptId, tenantId, dept.id, dept.name, dept.description, dept.displayOrder || 0]
+        );
       }
 
+      // 6.2 Positions
       const [blueprintPos]: any = await connection.query("SELECT * FROM positions WHERE tenantId IS NULL");
       for (const pos of blueprintPos) {
-        const newPosId = `POS-${Date.now()}-${Math.random().toString(36).substring(2,8)}`;
-        await connection.query("INSERT INTO positions (id, tenantId, name, level) VALUES (?, ?, ?, ?)", [newPosId, tenantId, pos.name, pos.level]);
+        const newPosId = `POS-${tPart}-${pos.id}`;
+        await connection.query(
+          "INSERT INTO positions (id, tenantId, sourceType, platformMasterId, name, level, isActive) VALUES (?, ?, 'PLATFORM', ?, ?, ?, 1)",
+          [newPosId, tenantId, pos.id, pos.name, pos.level || 1]
+        );
+      }
+
+      // 6.3 Project Stages
+      const [blueprintStages]: any = await connection.query("SELECT * FROM project_stages WHERE tenantId IS NULL");
+      for (const ps of blueprintStages) {
+        const newId = `PS-${tPart}-${ps.id}`;
+        await connection.query(
+          `INSERT INTO project_stages (id, tenantId, sourceType, platformMasterId, code, name, phase, commercialOutcome, displayOrder, probability, isTerminal, allowVisits, allowNewProject, isActive)
+           VALUES (?, ?, 'PLATFORM', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [newId, tenantId, ps.id, ps.code, ps.name, ps.phase, ps.commercialOutcome, ps.displayOrder, ps.probability, ps.isTerminal, ps.allowVisits, ps.allowNewProject, ps.isActive]
+        );
+      }
+
+      // 6.4 Task Priorities
+      const [blueprintPrios]: any = await connection.query("SELECT * FROM task_priorities WHERE tenantId IS NULL");
+      for (const tp of blueprintPrios) {
+        const newId = `TP-${tPart}-${tp.id}`;
+        await connection.query(
+          `INSERT INTO task_priorities (id, tenantId, sourceType, platformMasterId, code, name, color, isActive, displayOrder)
+           VALUES (?, ?, 'PLATFORM', ?, ?, ?, ?, ?, ?)`,
+          [newId, tenantId, tp.id, tp.code, tp.name, tp.color, tp.isActive || 1, tp.displayOrder || 0]
+        );
+      }
+
+      // 6.5 Task Statuses
+      const [blueprintTaskStatuses]: any = await connection.query("SELECT * FROM task_statuses WHERE tenantId IS NULL");
+      for (const ts of blueprintTaskStatuses) {
+        const newId = `TS-${tPart}-${ts.id}`;
+        await connection.query(
+          `INSERT INTO task_statuses (id, tenantId, sourceType, platformMasterId, code, name, color, isActive, displayOrder)
+           VALUES (?, ?, 'PLATFORM', ?, ?, ?, ?, ?, ?)`,
+          [newId, tenantId, ts.id, ts.code, ts.name, ts.color, ts.isActive || 1, ts.displayOrder || 0]
+        );
+      }
+
+      // 6.6 Customer Types
+      const [blueprintCustTypes]: any = await connection.query("SELECT * FROM customer_types WHERE tenantId IS NULL");
+      for (const ct of blueprintCustTypes) {
+        const newId = `CT-${tPart}-${ct.id}`;
+        await connection.query(
+          `INSERT INTO customer_types (id, tenantId, sourceType, platformMasterId, code, name, isActive, displayOrder)
+           VALUES (?, ?, 'PLATFORM', ?, ?, ?, ?, ?)`,
+          [newId, tenantId, ct.id, ct.code, ct.name, ct.isActive || 1, ct.displayOrder || 0]
+        );
+      }
+
+      // 6.7 Customer Statuses
+      const [blueprintCustStatuses]: any = await connection.query("SELECT * FROM customer_statuses WHERE tenantId IS NULL");
+      for (const cs of blueprintCustStatuses) {
+        const newId = `CS-${tPart}-${cs.id}`;
+        await connection.query(
+          `INSERT INTO customer_statuses (id, tenantId, sourceType, platformMasterId, code, name, color, isActive, displayOrder)
+           VALUES (?, ?, 'PLATFORM', ?, ?, ?, ?, ?, ?)`,
+          [newId, tenantId, cs.id, cs.code, cs.name, cs.color, cs.isActive || 1, cs.displayOrder || 0]
+        );
+      }
+
+      // 6.8 Visit Purposes
+      const [blueprintVisitPurposes]: any = await connection.query("SELECT * FROM visit_purposes WHERE tenantId IS NULL");
+      for (const vp of blueprintVisitPurposes) {
+        const newId = `VP-${tPart}-${vp.id}`;
+        await connection.query(
+          `INSERT INTO visit_purposes (id, tenantId, sourceType, platformMasterId, code, name, isActive, displayOrder)
+           VALUES (?, ?, 'PLATFORM', ?, ?, ?, ?, ?)`,
+          [newId, tenantId, vp.id, vp.code, vp.name, vp.isActive || 1, vp.displayOrder || 0]
+        );
+      }
+
+      // 6.9 Visit Statuses
+      const [blueprintVisitStatuses]: any = await connection.query("SELECT * FROM visit_statuses WHERE tenantId IS NULL");
+      for (const vs of blueprintVisitStatuses) {
+        const newId = `VS-${tPart}-${vs.id}`;
+        await connection.query(
+          `INSERT INTO visit_statuses (id, tenantId, sourceType, platformMasterId, code, name, isTerminal, isActive, displayOrder)
+           VALUES (?, ?, 'PLATFORM', ?, ?, ?, ?, ?, ?)`,
+          [newId, tenantId, vs.id, vs.code, vs.name, vs.isTerminal, vs.isActive || 1, vs.displayOrder || 0]
+        );
+      }
+
+      // 6.10 Activity Types
+      const [blueprintActTypes]: any = await connection.query("SELECT * FROM activity_types WHERE tenantId IS NULL");
+      for (const at of blueprintActTypes) {
+        const newId = `AT-${tPart}-${at.id}`;
+        await connection.query(
+          `INSERT INTO activity_types (id, tenantId, sourceType, platformMasterId, code, name, icon, color, isActive, displayOrder)
+           VALUES (?, ?, 'PLATFORM', ?, ?, ?, ?, ?, ?, ?)`,
+          [newId, tenantId, at.id, at.code, at.name, at.icon, at.color, at.isActive || 1, at.displayOrder || 0]
+        );
       }
 
       // 7. Atomic Visit Reminder Settings Initialization (Snapshot Copy from Active Platform Default)

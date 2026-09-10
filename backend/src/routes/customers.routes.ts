@@ -90,8 +90,8 @@ customersRoutes.get('/', async (req: any, res: any) => {
           AND (ts.code NOT IN ('TSK_COMPLETED', 'TSK_CANCELLED') OR ts.code IS NULL)
         ) as tasksCount
       FROM customers c
-      LEFT JOIN customer_statuses cs ON cs.id = c.statusId
-      LEFT JOIN customer_types ct ON ct.id = c.typeId
+      LEFT JOIN customer_statuses cs ON cs.id = c.statusId AND cs.tenantId = c.tenantId
+      LEFT JOIN customer_types ct ON ct.id = c.typeId AND ct.tenantId = c.tenantId
       LEFT JOIN users u ON u.id = c.picId
       ${where.replace(/WHERE tenantId/g, 'WHERE c.tenantId')}
       ${extraWhere}
@@ -290,7 +290,7 @@ customersRoutes.get('/:id/timeline', async (req: any, res: any) => {
     const [visitRows]: any = await pool.query(`
       SELECT v.id, v.title, v.visitDate, v.result, v.nextAction, v.statusId, vp.name as purposeName
       FROM visits v
-      LEFT JOIN visit_purposes vp ON vp.id = v.purposeId
+      LEFT JOIN visit_purposes vp ON vp.id = v.purposeId AND vp.tenantId = v.tenantId
       WHERE v.customerId = ? AND v.tenantId = ?
     `, [id, targetTenant]);
 
@@ -298,7 +298,7 @@ customersRoutes.get('/:id/timeline', async (req: any, res: any) => {
     const [taskRows]: any = await pool.query(`
       SELECT t.id, t.title, t.description, t.dueDate, t.createdAt, t.taskType, ts.name as statusName
       FROM tasks t
-      LEFT JOIN task_statuses ts ON ts.id = t.statusId
+      LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
       WHERE t.customerId = ? AND t.tenantId = ?
     `, [id, targetTenant]);
 
@@ -306,7 +306,7 @@ customersRoutes.get('/:id/timeline', async (req: any, res: any) => {
     const [followUpRows]: any = await pool.query(`
       SELECT f.id, f.title, f.notes, f.outcome, f.followUpDate, f.createdAt, ft.name as typeName
       FROM follow_ups f
-      LEFT JOIN follow_up_types ft ON ft.id = f.typeId
+      LEFT JOIN follow_up_types ft ON ft.id = f.typeId AND ft.tenantId = f.tenantId
       WHERE f.customerId = ? AND f.tenantId = ?
     `, [id, targetTenant]);
 
@@ -314,7 +314,7 @@ customersRoutes.get('/:id/timeline', async (req: any, res: any) => {
     const [projectRows]: any = await pool.query(`
       SELECT p.id, p.title, p.value, p.createdAt, ps.name as stageName
       FROM projects p
-      LEFT JOIN project_stages ps ON ps.id = p.stageId
+      LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       WHERE p.customerId = ? AND p.tenantId = ?
     `, [id, targetTenant]);
 
@@ -322,7 +322,7 @@ customersRoutes.get('/:id/timeline', async (req: any, res: any) => {
     const [activityRows]: any = await pool.query(`
       SELECT a.id, a.subject, a.description, a.occurredAt, at.name as typeName
       FROM activities a
-      LEFT JOIN activity_types at ON at.id = a.typeId
+      LEFT JOIN activity_types at ON at.id = a.typeId AND at.tenantId = a.tenantId
       WHERE (a.customerId = ? OR (a.entityType = 'CUSTOMER' AND a.entityId = ?)) AND a.tenantId = ?
     `, [id, id, targetTenant]);
 
@@ -555,8 +555,8 @@ customersRoutes.get('/:id/visits', async (req: any, res: any) => {
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
         c.name as customerName, c.code as customerCode
       FROM visits v
-      LEFT JOIN visit_statuses vs ON vs.id = v.statusId
-      LEFT JOIN visit_purposes vp ON vp.id = v.purposeId
+      LEFT JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
+      LEFT JOIN visit_purposes vp ON vp.id = v.purposeId AND vp.tenantId = v.tenantId
       LEFT JOIN users u ON u.id = v.picId
       LEFT JOIN customers c ON c.id = v.customerId
       WHERE v.customerId = ? AND v.tenantId = ?
@@ -634,8 +634,8 @@ customersRoutes.post('/', async (req: any, res: any) => {
   if (typeCandidate) {
     const tVal = String(typeCandidate).trim();
     const [tRows]: any = await pool.query(
-      'SELECT id FROM customer_types WHERE id = ? OR code = ? OR name = ? LIMIT 1',
-      [tVal, tVal, tVal]
+      'SELECT id FROM customer_types WHERE tenantId = ? AND (id = ? OR code = ? OR name = ?) LIMIT 1',
+      [targetTenant, tVal, tVal, tVal]
     );
     if (tRows.length > 0) {
       resolvedTypeId = tRows[0].id;
@@ -650,8 +650,8 @@ customersRoutes.post('/', async (req: any, res: any) => {
   if (statusCandidate) {
     const sVal = String(statusCandidate).trim();
     const [sRows]: any = await pool.query(
-      'SELECT id FROM customer_statuses WHERE id = ? OR code = ? OR name = ? LIMIT 1',
-      [sVal, sVal, sVal]
+      'SELECT id FROM customer_statuses WHERE tenantId = ? AND (id = ? OR code = ? OR name = ?) LIMIT 1',
+      [targetTenant, sVal, sVal, sVal]
     );
     if (sRows.length > 0) {
       resolvedStatusId = sRows[0].id;
@@ -868,8 +868,8 @@ customersRoutes.put('/:id', async (req: any, res: any) => {
   if (data.typeId || data.type) {
     const tVal = String(data.typeId || data.type).trim();
     const [tRows]: any = await pool.query(
-      'SELECT id FROM customer_types WHERE id = ? OR code = ? OR name = ? LIMIT 1',
-      [tVal, tVal, tVal]
+      'SELECT id FROM customer_types WHERE tenantId = ? AND (id = ? OR code = ? OR name = ?) LIMIT 1',
+      [targetTenant, tVal, tVal, tVal]
     );
     if (tRows.length > 0) resolvedTypeId = tRows[0].id;
   }
@@ -878,8 +878,8 @@ customersRoutes.put('/:id', async (req: any, res: any) => {
   if (data.statusId || data.status) {
     const sVal = String(data.statusId || data.status).trim();
     const [sRows]: any = await pool.query(
-      'SELECT id FROM customer_statuses WHERE id = ? OR code = ? OR name = ? LIMIT 1',
-      [sVal, sVal, sVal]
+      'SELECT id FROM customer_statuses WHERE tenantId = ? AND (id = ? OR code = ? OR name = ?) LIMIT 1',
+      [targetTenant, sVal, sVal, sVal]
     );
     if (sRows.length > 0) resolvedStatusId = sRows[0].id;
   }

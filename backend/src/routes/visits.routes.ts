@@ -103,8 +103,8 @@ visitsRoutes.get('/', async (req: any, res: any) => {
     const countSql = `
       SELECT COUNT(v.id) as total
       FROM visits v
-      LEFT JOIN visit_statuses vs ON vs.id = v.statusId
-      LEFT JOIN visit_purposes vp ON vp.id = v.purposeId
+      LEFT JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
+      LEFT JOIN visit_purposes vp ON vp.id = v.purposeId AND vp.tenantId = v.tenantId
       LEFT JOIN projects p ON p.id = v.relatedProjectId AND p.tenantId = v.tenantId
       ${where.replace(/WHERE tenantId/g, 'WHERE v.tenantId')}
       ${extraWhere}
@@ -139,12 +139,12 @@ visitsRoutes.get('/', async (req: any, res: any) => {
         COALESCE(ps.code, p.stageId) as projectStatusCode,
         COALESCE(ps.name, p.stageId) as projectStatusName
       FROM visits v
-      LEFT JOIN visit_statuses vs ON vs.id = v.statusId
-      LEFT JOIN visit_purposes vp ON vp.id = v.purposeId
+      LEFT JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
+      LEFT JOIN visit_purposes vp ON vp.id = v.purposeId AND vp.tenantId = v.tenantId
       LEFT JOIN users u ON u.id = v.picId
       LEFT JOIN customers c ON c.id = v.customerId
       LEFT JOIN projects p ON p.id = v.relatedProjectId AND p.tenantId = v.tenantId
-      LEFT JOIN project_stages ps ON ps.id = p.stageId
+      LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       ${where.replace(/WHERE tenantId/g, 'WHERE v.tenantId')}
       ${extraWhere}
       ORDER BY v.visitDate DESC, v.createdAt DESC
@@ -234,7 +234,7 @@ visitsRoutes.get('/reminders', async (req: any, res: any) => {
         p.title as projectName, p.id as projectCode,
         DATEDIFF(v.visitDate, CURDATE()) as daysUntilVisit
       FROM visits v
-      JOIN visit_statuses vs ON vs.id = v.statusId
+      JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
       LEFT JOIN users u ON u.id = v.picId
       LEFT JOIN customers c ON c.id = v.customerId
       LEFT JOIN projects p ON p.id = v.relatedProjectId AND p.tenantId = v.tenantId
@@ -325,12 +325,12 @@ visitsRoutes.get('/:id', async (req: any, res: any) => {
         COALESCE(ps.code, p.stageId) as projectStatusCode,
         COALESCE(ps.name, p.stageId) as projectStatusName
       FROM visits v
-      LEFT JOIN visit_statuses vs ON vs.id = v.statusId
-      LEFT JOIN visit_purposes vp ON vp.id = v.purposeId
+      LEFT JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
+      LEFT JOIN visit_purposes vp ON vp.id = v.purposeId AND vp.tenantId = v.tenantId
       LEFT JOIN users u ON u.id = v.picId
       LEFT JOIN customers c ON c.id = v.customerId
       LEFT JOIN projects p ON p.id = v.relatedProjectId AND p.tenantId = v.tenantId
-      LEFT JOIN project_stages ps ON ps.id = p.stageId
+      LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       WHERE v.id = ? AND v.tenantId = ?
     `, [id, targetTenant]);
 
@@ -434,9 +434,9 @@ visitsRoutes.post('/', async (req: any, res: any) => {
     const [pAllRows]: any = await pool.query(
       `SELECT p.id, p.tenantId, p.customerId, p.stageId, ps.isActive, ps.isTerminal, ps.allowVisits
        FROM projects p
-       LEFT JOIN project_stages ps ON ps.id = p.stageId
-       WHERE p.id = ?`,
-      [pId]
+       LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
+       WHERE p.id = ? AND p.tenantId = ?`,
+      [pId, targetTenant]
     );
     if (pAllRows.length === 0) {
       return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
@@ -456,15 +456,22 @@ visitsRoutes.post('/', async (req: any, res: any) => {
   }
 
   // Resolve statusId
-  let resolvedStatusId = 'VS-1';
+  let resolvedStatusId: string | null = null;
   const statusCandidate = data.statusId || data.status;
   if (statusCandidate) {
     const sVal = String(statusCandidate).trim();
     const [sRows]: any = await pool.query(
-      'SELECT id FROM visit_statuses WHERE id = ? OR code = ? OR name = ? LIMIT 1',
-      [sVal, sVal, sVal]
+      'SELECT id FROM visit_statuses WHERE (id = ? OR code = ? OR name = ?) AND tenantId = ? LIMIT 1',
+      [sVal, sVal, sVal, targetTenant]
     );
     if (sRows.length > 0) resolvedStatusId = sRows[0].id;
+  }
+  if (!resolvedStatusId) {
+    const [dRows]: any = await pool.query(
+      'SELECT id FROM visit_statuses WHERE tenantId = ? AND isActive = 1 ORDER BY displayOrder ASC, id ASC LIMIT 1',
+      [targetTenant]
+    );
+    resolvedStatusId = dRows[0]?.id || 'VS-1';
   }
 
   // Resolve purposeId
@@ -473,13 +480,17 @@ visitsRoutes.post('/', async (req: any, res: any) => {
   if (purposeCandidate) {
     const pVal = String(purposeCandidate).trim();
     const [pRows]: any = await pool.query(
-      'SELECT id FROM visit_purposes WHERE id = ? OR code = ? OR name = ? LIMIT 1',
-      [pVal, pVal, pVal]
+      'SELECT id FROM visit_purposes WHERE (id = ? OR code = ? OR name = ?) AND tenantId = ? LIMIT 1',
+      [pVal, pVal, pVal, targetTenant]
     );
     if (pRows.length > 0) resolvedPurposeId = pRows[0].id;
   }
   if (!resolvedPurposeId) {
-    resolvedPurposeId = 'VP-1';
+    const [dpRows]: any = await pool.query(
+      'SELECT id FROM visit_purposes WHERE tenantId = ? AND isActive = 1 ORDER BY displayOrder ASC, id ASC LIMIT 1',
+      [targetTenant]
+    );
+    resolvedPurposeId = dpRows[0]?.id || 'VP-1';
   }
 
   const visitId = 'VIS-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
@@ -632,9 +643,9 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
         const [pAllRows]: any = await pool.query(
           `SELECT p.id, p.tenantId, p.customerId, p.stageId, ps.isActive, ps.isTerminal, ps.allowVisits
            FROM projects p
-           LEFT JOIN project_stages ps ON ps.id = p.stageId
-           WHERE p.id = ?`,
-          [pId]
+           LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
+           WHERE p.id = ? AND p.tenantId = ?`,
+          [pId, targetTenant]
         );
         if (pAllRows.length === 0) {
           return res.status(404).json({ error: 'Project not found', code: 'PROJECT_NOT_FOUND' });
@@ -662,11 +673,11 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
     let statusId = current.statusId;
     if (data.statusId || data.status) {
       const sVal = String(data.statusId || data.status).trim();
-      const [sRows]: any = await pool.query('SELECT id FROM visit_statuses WHERE id = ? OR code = ? OR name = ? LIMIT 1', [sVal, sVal, sVal]);
+      const [sRows]: any = await pool.query('SELECT id, code FROM visit_statuses WHERE (id = ? OR code = ? OR name = ?) AND tenantId = ? LIMIT 1', [sVal, sVal, sVal, targetTenant]);
       if (sRows.length > 0) {
         const candidateStatusId = sRows[0].id;
         // Do not allow setting CANCELLED via PUT (must use /cancel)
-        if (candidateStatusId === 'VS-3' && current.statusId !== 'VS-3') {
+        if (sRows[0].code === 'CANCELLED' && current.statusId !== candidateStatusId) {
           return res.status(400).json({ error: 'To cancel a visit, please use POST /api/visits/:id/cancel' });
         }
         statusId = candidateStatusId;
@@ -676,7 +687,7 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
     let purposeId = current.purposeId;
     if (data.purposeId || data.purpose) {
       const pVal = String(data.purposeId || data.purpose).trim();
-      const [pRows]: any = await pool.query('SELECT id FROM visit_purposes WHERE id = ? OR code = ? OR name = ? LIMIT 1', [pVal, pVal, pVal]);
+      const [pRows]: any = await pool.query('SELECT id FROM visit_purposes WHERE (id = ? OR code = ? OR name = ?) AND tenantId = ? LIMIT 1', [pVal, pVal, pVal, targetTenant]);
       if (pRows.length > 0) purposeId = pRows[0].id;
     }
 
@@ -706,7 +717,7 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
     const newVTime = String(startTime).substring(0, 5);
     const scheduleChanged = oldVDate !== newVDate || oldVTime !== newVTime;
 
-    const [termCheck]: any = await pool.query('SELECT isTerminal FROM visit_statuses WHERE id = ?', [statusId]);
+    const [termCheck]: any = await pool.query('SELECT isTerminal FROM visit_statuses WHERE id = ? AND tenantId = ?', [statusId, targetTenant]);
     const isNowTerminal = termCheck.length > 0 && Boolean(termCheck[0].isTerminal);
 
     if (isNowTerminal) {
@@ -803,25 +814,32 @@ visitsRoutes.post('/:id/cancel', async (req: any, res: any) => {
     const current = rows[0];
 
     // Transition invariants:
+    const [currStatusRows]: any = await conn.query('SELECT id, code FROM visit_statuses WHERE id = ? AND tenantId = ?', [current.statusId, targetTenant]);
+    const currCode = currStatusRows[0]?.code;
+
     // 1. Cannot cancel already cancelled visit -> 409 Conflict
-    if (current.statusId === 'VS-3') {
+    if (currCode === 'CANCELLED' || current.statusId === 'VS-3') {
       await conn.rollback();
       return res.status(409).json({ error: 'Visit is already cancelled' });
     }
 
     // 2. Cannot cancel completed visit -> 400 Bad Request
-    if (current.statusId === 'VS-2') {
+    if (currCode === 'COMPLETED' || current.statusId === 'VS-2') {
       await conn.rollback();
       return res.status(400).json({ error: 'Completed visits cannot be cancelled' });
     }
 
     const cancelReasonText = reasonText ? String(reasonText).trim() : null;
 
+    // Resolve tenant's CANCELLED statusId
+    const [cStatusRows]: any = await conn.query("SELECT id FROM visit_statuses WHERE code = 'CANCELLED' AND tenantId = ? LIMIT 1", [targetTenant]);
+    const cancelStatusId = cStatusRows[0]?.id || 'VS-3';
+
     await conn.query(`
       UPDATE visits
-      SET statusId = 'VS-3', cancellationReason = ?, updatedAt = NOW()
+      SET statusId = ?, cancellationReason = ?, updatedAt = NOW()
       WHERE id = ? AND tenantId = ?
-    `, [cancelReasonText, id, targetTenant]);
+    `, [cancelStatusId, cancelReasonText, id, targetTenant]);
 
     // Gate 7: Mark unsent reminder occurrences OBSOLETE on cancellation
     await conn.query(`
@@ -852,7 +870,7 @@ visitsRoutes.post('/:id/cancel', async (req: any, res: any) => {
       success: true,
       id,
       message: 'Visit cancelled successfully',
-      statusId: 'VS-3',
+      statusId: cancelStatusId,
       statusCode: 'CANCELLED',
       statusName: 'Cancelled',
       cancellationReason: cancelReasonText
@@ -905,7 +923,9 @@ visitsRoutes.post('/:id/reschedule', async (req: any, res: any) => {
     const current = rows[0];
 
     // Transition invariant: Completed visits cannot be rescheduled
-    if (current.statusId === 'VS-2') {
+    const [currStatusRows]: any = await conn.query('SELECT id, code FROM visit_statuses WHERE id = ? AND tenantId = ?', [current.statusId, targetTenant]);
+    const currCode = currStatusRows[0]?.code;
+    if (currCode === 'COMPLETED' || current.statusId === 'VS-2') {
       await conn.rollback();
       return res.status(400).json({ error: 'Completed visits cannot be rescheduled' });
     }
@@ -918,12 +938,15 @@ visitsRoutes.post('/:id/reschedule', async (req: any, res: any) => {
     const newEnd = endTime ? String(endTime).trim() : current.endTime;
     const rescheduleReasonText = reason ? String(reason).trim() : null;
 
-    // Rescheduling sets statusId = 'VS-1' (PLANNED) and clears cancellationReason
+    // Rescheduling sets status to PLANNED for this tenant and clears cancellationReason
+    const [planStatusRows]: any = await conn.query("SELECT id FROM visit_statuses WHERE code = 'PLANNED' AND tenantId = ? LIMIT 1", [targetTenant]);
+    const planStatusId = planStatusRows[0]?.id || 'VS-1';
+
     await conn.query(`
       UPDATE visits
-      SET visitDate = ?, startTime = ?, endTime = ?, statusId = 'VS-1', cancellationReason = NULL, updatedAt = NOW()
+      SET visitDate = ?, startTime = ?, endTime = ?, statusId = ?, cancellationReason = NULL, updatedAt = NOW()
       WHERE id = ? AND tenantId = ?
-    `, [visitDate, newStart, newEnd, id, targetTenant]);
+    `, [visitDate, newStart, newEnd, planStatusId, id, targetTenant]);
 
     // Gate 7: Reschedule Obsolescence (Date or Time change)
     await conn.query(`
@@ -956,7 +979,7 @@ visitsRoutes.post('/:id/reschedule', async (req: any, res: any) => {
       success: true,
       id,
       message: 'Visit rescheduled successfully',
-      statusId: 'VS-1',
+      statusId: planStatusId,
       statusCode: 'PLANNED',
       statusName: 'Planned',
       visitDate,
@@ -1056,26 +1079,8 @@ visitsRoutes.get('/:id/tasks', async (req: any, res: any) => {
         t.updatedAt,
         t.completedAt
       FROM tasks t
-      LEFT JOIN task_statuses ts ON (
-        ts.id = t.statusId 
-        OR ts.code = t.statusId 
-        OR ts.code = CONCAT('TSK_', t.statusId)
-        OR (t.statusId = 'PENDING' AND ts.id = 'TS-1')
-        OR (t.statusId = 'TODO' AND ts.id = 'TS-1')
-        OR (t.statusId = 'IN_PROGRESS' AND ts.id = 'TS-2')
-        OR (t.statusId = 'COMPLETED' AND ts.id = 'TS-3')
-        OR (t.statusId = 'CANCELLED' AND ts.id = 'TS-4')
-      )
-      LEFT JOIN task_priorities tp ON (
-        tp.id = t.priorityId
-        OR tp.code = t.priorityId
-        OR tp.code = CONCAT('PRI_', t.priorityId)
-        OR (t.priorityId = 'URGENT' AND tp.id = 'TP-1')
-        OR (t.priorityId = 'HIGH' AND tp.id = 'TP-2')
-        OR (t.priorityId = 'NORMAL' AND tp.id = 'TP-3')
-        OR (t.priorityId = 'MEDIUM' AND tp.id = 'TP-3')
-        OR (t.priorityId = 'LOW' AND tp.id = 'TP-4')
-      )
+      LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
+      LEFT JOIN task_priorities tp ON tp.id = t.priorityId AND tp.tenantId = t.tenantId
       LEFT JOIN users u ON u.id = t.picId
       LEFT JOIN customers c ON c.id = t.customerId
       WHERE t.tenantId = ? AND t.relatedVisitId = ?
@@ -1108,7 +1113,7 @@ visitsRoutes.get('/:id/followups', async (req: any, res: any) => {
         f.*,
         ft.name as typeName
       FROM follow_ups f
-      LEFT JOIN follow_up_types ft ON ft.id = f.typeId
+      LEFT JOIN follow_up_types ft ON ft.id = f.typeId AND ft.tenantId = f.tenantId
       WHERE f.tenantId = ? AND f.relatedVisitId = ?
       ORDER BY f.followUpDate ASC, f.createdAt DESC
     `, [targetTenant, id]);
