@@ -250,8 +250,9 @@ salesRoutes.get('/agenda', async (req, res) => {
       FROM projects p
       LEFT JOIN customers c ON c.id = p.customerId
       LEFT JOIN users u ON u.id = p.picId
+      LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       ${projWhere.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
-      AND p.stageId NOT IN ('WON', 'LOST')
+      AND (ps.commercialOutcome = 'OPEN' OR (ps.commercialOutcome IS NULL AND p.stageId NOT IN ('WON', 'LOST', 'PS-6', 'PS-7')))
     `, projParams);
 
     const pendingProjectIds = new Set([
@@ -311,8 +312,10 @@ salesRoutes.get('/attention', async (req, res) => {
     // 1. Scoped query for authorized Projects
     const { where: projWhere, params: projParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'p.picId');
     const [projRows]: any = await pool.query(`
-      SELECT p.*, c.name as customerName, c.code as customerCode, u.name as picName
+      SELECT p.*, c.name as customerName, c.code as customerCode, u.name as picName,
+             ps.code as stageCode, ps.commercialOutcome as stageCommercialOutcome, ps.isTerminal as stageIsTerminal
       FROM projects p
+      LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       LEFT JOIN customers c ON c.id = p.customerId
       LEFT JOIN users u ON u.id = p.picId
       ${projWhere.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
@@ -414,9 +417,8 @@ salesRoutes.get('/attention', async (req, res) => {
 
     for (const proj of projRows) {
       const pSignals: any[] = [];
-      const stage = proj.stageId;
-      const isWon = stage === 'WON';
-      const isLost = stage === 'LOST';
+      const isWon = proj.stageCommercialOutcome === 'WON' || proj.stageId === 'WON';
+      const isLost = proj.stageCommercialOutcome === 'LOST' || proj.stageCommercialOutcome === 'CANCELLED' || proj.stageId === 'LOST';
       const isOpen = !isWon && !isLost;
 
       if (isOpen || isWon) {

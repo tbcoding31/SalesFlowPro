@@ -11,6 +11,7 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
 FRONTEND_URL="http://localhost:3100"
+BACKEND_URL="http://localhost:5000/api/health"
 HEALTH_CHECK_RETRIES=5
 HEALTH_CHECK_INTERVAL=5
 
@@ -46,11 +47,23 @@ echo ""
 echo "[4/4] Running health check..."
 
 for i in $(seq 1 ${HEALTH_CHECK_RETRIES}); do
+  backend_ok=false
+  frontend_ok=false
+
+  if wget --no-verbose --tries=1 --spider "${BACKEND_URL}" 2>/dev/null; then
+    backend_ok=true
+  fi
+
   if wget --no-verbose --tries=1 --spider "${FRONTEND_URL}" 2>/dev/null; then
+    frontend_ok=true
+  fi
+
+  if [ "$backend_ok" = true ] && [ "$frontend_ok" = true ]; then
     echo ""
     echo "══════════════════════════════════════════════"
     echo "  ✅ Deployment successful!"
-    echo "  Frontend: ${FRONTEND_URL}"
+    echo "  Backend:  ${BACKEND_URL} (OK)"
+    echo "  Frontend: ${FRONTEND_URL} (OK)"
     echo "  Image:    ${IMAGE_TAG}"
     echo "══════════════════════════════════════════════"
 
@@ -61,7 +74,7 @@ for i in $(seq 1 ${HEALTH_CHECK_RETRIES}); do
     exit 0
   fi
 
-  echo "  Attempt ${i}/${HEALTH_CHECK_RETRIES} — waiting ${HEALTH_CHECK_INTERVAL}s..."
+  echo "  Attempt ${i}/${HEALTH_CHECK_RETRIES} — backend: ${backend_ok}, frontend: ${frontend_ok} — waiting ${HEALTH_CHECK_INTERVAL}s..."
   sleep ${HEALTH_CHECK_INTERVAL}
 done
 

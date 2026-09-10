@@ -67,6 +67,7 @@ jobs:
     name: Deploy to Production
     needs: build-and-push
     runs-on: ubuntu-latest
+    environment: production
     if: github.ref == 'refs/heads/main'
 
     steps:
@@ -105,11 +106,22 @@ jobs:
             # Wait for containers to start
             sleep 10
 
-            # Health check
+            # Health check — both Backend and Frontend must respond
+            backend_ok=false
+            frontend_ok=false
+
+            if wget --no-verbose --tries=3 --spider http://localhost:5000/api/health 2>/dev/null; then
+              backend_ok=true
+            fi
+
             if wget --no-verbose --tries=3 --spider http://localhost:3100/ 2>/dev/null; then
-              echo "✅ Deployment successful — frontend is responding on port 3100"
+              frontend_ok=true
+            fi
+
+            if [ "$backend_ok" = true ] && [ "$frontend_ok" = true ]; then
+              echo "✅ Deployment successful — backend (5000/api/health) and frontend (3100) responding"
             else
-              echo "❌ Health check failed — frontend not responding"
+              echo "❌ Health check failed — backend_ok=${backend_ok}, frontend_ok=${frontend_ok}"
               docker compose -f docker-compose.yml -f docker-compose.prod.yml logs --tail=50
               exit 1
             fi

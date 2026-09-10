@@ -457,40 +457,61 @@ visitsRoutes.post('/', async (req: any, res: any) => {
 
   // Resolve statusId
   let resolvedStatusId: string | null = null;
+  // Resolve statusId (Must be active for new visit)
   const statusCandidate = data.statusId || data.status;
   if (statusCandidate) {
     const sVal = String(statusCandidate).trim();
     const [sRows]: any = await pool.query(
-      'SELECT id FROM visit_statuses WHERE (id = ? OR code = ? OR name = ?) AND tenantId = ? LIMIT 1',
+      'SELECT id FROM visit_statuses WHERE (id = ? OR code = ? OR name = ?) AND tenantId = ? AND isActive = 1 LIMIT 1',
       [sVal, sVal, sVal, targetTenant]
     );
-    if (sRows.length > 0) resolvedStatusId = sRows[0].id;
-  }
-  if (!resolvedStatusId) {
+    if (sRows.length > 0) {
+      resolvedStatusId = sRows[0].id;
+    } else {
+      return res.status(400).json({ error: 'Invalid or inactive visit status', code: 'INVALID_VISIT_STATUS' });
+    }
+  } else {
     const [dRows]: any = await pool.query(
-      'SELECT id FROM visit_statuses WHERE tenantId = ? AND isActive = 1 ORDER BY displayOrder ASC, id ASC LIMIT 1',
+      'SELECT id FROM visit_statuses WHERE tenantId = ? AND isActive = 1 AND isTerminal = 0 ORDER BY displayOrder ASC, id ASC LIMIT 1',
       [targetTenant]
     );
-    resolvedStatusId = dRows[0]?.id || 'VS-1';
+    if (dRows.length === 0) {
+      return res.status(500).json({
+        error: 'CONFIG_INTEGRITY_ERROR',
+        code: 'MISSING_ACTIVE_MASTER_DATA',
+        message: `Tenant ${targetTenant} has no active non-terminal visit statuses configured.`
+      });
+    }
+    resolvedStatusId = dRows[0].id;
   }
 
-  // Resolve purposeId
+  // Resolve purposeId (Must be active for new visit)
   let resolvedPurposeId: string | null = null;
   const purposeCandidate = data.purposeId || data.purpose;
   if (purposeCandidate) {
     const pVal = String(purposeCandidate).trim();
     const [pRows]: any = await pool.query(
-      'SELECT id FROM visit_purposes WHERE (id = ? OR code = ? OR name = ?) AND tenantId = ? LIMIT 1',
+      'SELECT id FROM visit_purposes WHERE (id = ? OR code = ? OR name = ?) AND tenantId = ? AND isActive = 1 LIMIT 1',
       [pVal, pVal, pVal, targetTenant]
     );
-    if (pRows.length > 0) resolvedPurposeId = pRows[0].id;
-  }
-  if (!resolvedPurposeId) {
+    if (pRows.length > 0) {
+      resolvedPurposeId = pRows[0].id;
+    } else {
+      return res.status(400).json({ error: 'Invalid or inactive visit purpose', code: 'INVALID_VISIT_PURPOSE' });
+    }
+  } else {
     const [dpRows]: any = await pool.query(
       'SELECT id FROM visit_purposes WHERE tenantId = ? AND isActive = 1 ORDER BY displayOrder ASC, id ASC LIMIT 1',
       [targetTenant]
     );
-    resolvedPurposeId = dpRows[0]?.id || 'VP-1';
+    if (dpRows.length === 0) {
+      return res.status(500).json({
+        error: 'CONFIG_INTEGRITY_ERROR',
+        code: 'MISSING_ACTIVE_MASTER_DATA',
+        message: `Tenant ${targetTenant} has no active visit purposes configured.`
+      });
+    }
+    resolvedPurposeId = dpRows[0].id;
   }
 
   const visitId = 'VIS-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
@@ -596,7 +617,12 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
   const data = req.body || {};
 
   try {
-    const [existing]: any = await pool.query('SELECT * FROM visits WHERE id = ? AND tenantId = ?', [id, targetTenant]);
+    const [existing]: any = await pool.query(`
+      SELECT v.*, vs.code as statusCode, vs.isTerminal as statusIsTerminal
+      FROM visits v
+      LEFT JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
+      WHERE v.id = ? AND v.tenantId = ?
+    `, [id, targetTenant]);
     if (existing.length === 0) {
       return res.status(404).json({ error: 'Visit not found' });
     }
@@ -604,13 +630,13 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
 
     // Status transition enforcement:
     // 1. COMPLETED visits cannot be mutated
-    if (current.statusId === 'VS-2') {
-      return res.status(400).json({ error: 'Completed visits cannot be modified' });
+    if (current.statusCode === 'COMPLETED' || current.statusIsTerminal === 1 || current.statusId === 'VS-2') {
+      return res.status(400).json({ error: 'Completed visits cannot be modified', code: 'VISIT_ALREADY_COMPLETED' });
     }
 
     // 2. CANCELLED visits cannot be modified via standard PUT (must use /reschedule)
-    if (current.statusId === 'VS-3') {
-      return res.status(400).json({ error: 'Cancelled visits cannot be edited. Use /reschedule to reactivate this visit.' });
+    if (current.statusCode === 'CANCELLED' || current.statusId === 'VS-3') {
+      return res.status(400).json({ error: 'Cancelled visits cannot be edited. Use /reschedule to reactivate this visit.', code: 'VISIT_ALREADY_CANCELLED' });
     }
 
     const title = data.title !== undefined ? String(data.title).trim() : current.title;
@@ -628,15 +654,17 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
         'SELECT id, name FROM customers WHERE id = ? AND tenantId = ?',
         [String(data.customerId).trim(), targetTenant]
       );
-      if (cRows.length > 0) {
-        customerId = cRows[0].id;
+      if (cRows.length === 0) {
+        return res.status(400).json({ error: 'Customer not found or access denied', code: 'CUSTOMER_NOT_FOUND' });
       }
+      customerId = cRows[0].id;
     }
 
-    let resolvedProjectId = current.relatedProjectId;
-    if ('relatedProjectId' in data || 'projectId' in data) {
-      const projCandidate = data.relatedProjectId !== undefined ? data.relatedProjectId : data.projectId;
-      if (projCandidate === null || projCandidate === '' || String(projCandidate).trim().toLowerCase() === 'null') {
+    // Validate optional project
+    let resolvedProjectId: string | null = current.relatedProjectId;
+    const projCandidate = data.relatedProjectId !== undefined ? data.relatedProjectId : data.projectId;
+    if (projCandidate !== undefined) {
+      if (projCandidate === null || String(projCandidate).trim() === '' || String(projCandidate).trim().toLowerCase() === 'null') {
         resolvedProjectId = null;
       } else {
         const pId = String(projCandidate).trim();
@@ -702,7 +730,9 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
       if (uRows.length > 0) picId = uRows[0].userId;
     }
 
-    const completedAtVal = (statusId === 'VS-2' && !current.completedAt) ? new Date() : current.completedAt;
+    const [currStatusRows]: any = await pool.query('SELECT id, code, isTerminal FROM visit_statuses WHERE id = ? AND tenantId = ?', [statusId, targetTenant]);
+    const isCompletedStatus = currStatusRows.length > 0 && (currStatusRows[0].code === 'COMPLETED' || currStatusRows[0].isTerminal === 1 || statusId === 'VS-2');
+    const completedAtVal = (isCompletedStatus && !current.completedAt) ? new Date() : current.completedAt;
 
     await pool.query(`
       UPDATE visits
@@ -826,14 +856,22 @@ visitsRoutes.post('/:id/cancel', async (req: any, res: any) => {
     // 2. Cannot cancel completed visit -> 400 Bad Request
     if (currCode === 'COMPLETED' || current.statusId === 'VS-2') {
       await conn.rollback();
-      return res.status(400).json({ error: 'Completed visits cannot be cancelled' });
+      return res.status(400).json({ error: 'Completed visits cannot be cancelled', code: 'CANNOT_CANCEL_COMPLETED_VISIT' });
     }
 
     const cancelReasonText = reasonText ? String(reasonText).trim() : null;
 
     // Resolve tenant's CANCELLED statusId
-    const [cStatusRows]: any = await conn.query("SELECT id FROM visit_statuses WHERE code = 'CANCELLED' AND tenantId = ? LIMIT 1", [targetTenant]);
-    const cancelStatusId = cStatusRows[0]?.id || 'VS-3';
+    const [cStatusRows]: any = await conn.query("SELECT id FROM visit_statuses WHERE code = 'CANCELLED' AND tenantId = ? AND isActive = 1 LIMIT 1", [targetTenant]);
+    if (cStatusRows.length === 0) {
+      await conn.rollback();
+      return res.status(500).json({
+        error: 'CONFIG_INTEGRITY_ERROR',
+        code: 'MISSING_ACTIVE_MASTER_DATA',
+        message: `Tenant ${targetTenant} has no active CANCELLED visit status configured.`
+      });
+    }
+    const cancelStatusId = cStatusRows[0].id;
 
     await conn.query(`
       UPDATE visits
@@ -938,9 +976,17 @@ visitsRoutes.post('/:id/reschedule', async (req: any, res: any) => {
     const newEnd = endTime ? String(endTime).trim() : current.endTime;
     const rescheduleReasonText = reason ? String(reason).trim() : null;
 
-    // Rescheduling sets status to PLANNED for this tenant and clears cancellationReason
-    const [planStatusRows]: any = await conn.query("SELECT id FROM visit_statuses WHERE code = 'PLANNED' AND tenantId = ? LIMIT 1", [targetTenant]);
-    const planStatusId = planStatusRows[0]?.id || 'VS-1';
+    // Rescheduling sets status to SCHEDULED or PLANNED for this tenant and clears cancellationReason
+    const [planStatusRows]: any = await conn.query("SELECT id FROM visit_statuses WHERE code IN ('SCHEDULED', 'PLANNED') AND tenantId = ? AND isActive = 1 ORDER BY displayOrder ASC LIMIT 1", [targetTenant]);
+    if (planStatusRows.length === 0) {
+      await conn.rollback();
+      return res.status(500).json({
+        error: 'CONFIG_INTEGRITY_ERROR',
+        code: 'MISSING_ACTIVE_MASTER_DATA',
+        message: `Tenant ${targetTenant} has no active SCHEDULED or PLANNED visit status configured.`
+      });
+    }
+    const planStatusId = planStatusRows[0].id;
 
     await conn.query(`
       UPDATE visits

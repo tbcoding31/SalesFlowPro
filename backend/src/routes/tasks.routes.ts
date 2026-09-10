@@ -26,9 +26,9 @@ const TASK_SELECT_FIELDS = `
   COALESCE(ts.name, t.statusId) as statusName,
   ts.color as statusColor,
   CASE 
-    WHEN ts.id = 'TS-3' OR t.statusId IN ('COMPLETED', 'TSK_COMPLETED') THEN 'COMPLETED'
-    WHEN ts.id = 'TS-2' OR t.statusId IN ('IN_PROGRESS', 'TSK_INPROGRESS') THEN 'IN_PROGRESS'
-    WHEN ts.id = 'TS-4' OR t.statusId IN ('CANCELLED', 'TSK_CANCELLED') THEN 'CANCELLED'
+    WHEN ts.code = 'COMPLETED' OR ts.isTerminal = 1 OR t.statusId IN ('COMPLETED', 'TSK_COMPLETED') THEN 'COMPLETED'
+    WHEN ts.code = 'IN_PROGRESS' OR t.statusId IN ('IN_PROGRESS', 'TSK_INPROGRESS') THEN 'IN_PROGRESS'
+    WHEN ts.code = 'CANCELLED' OR t.statusId IN ('CANCELLED', 'TSK_CANCELLED') THEN 'CANCELLED'
     ELSE 'TODO'
   END as status,
   COALESCE(tp.id, t.priorityId) as priorityId,
@@ -36,11 +36,11 @@ const TASK_SELECT_FIELDS = `
   COALESCE(tp.name, t.priorityId) as priorityName,
   tp.color as priorityColor,
   CASE
-    WHEN tp.id = 'TP-1' OR t.priorityId IN ('URGENT', 'PRI_URGENT') THEN 'URGENT'
-    WHEN tp.id = 'TP-2' OR t.priorityId IN ('HIGH', 'PRI_HIGH') THEN 'HIGH'
-    WHEN tp.id = 'TP-4' OR t.priorityId IN ('LOW', 'PRI_LOW') THEN 'LOW'
-    WHEN tp.id = 'TP-3' OR t.priorityId IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') THEN 'MEDIUM'
-    ELSE COALESCE(t.priorityId, 'MEDIUM')
+    WHEN tp.code = 'URGENT' OR t.priorityId IN ('URGENT', 'PRI_URGENT') THEN 'URGENT'
+    WHEN tp.code = 'HIGH' OR t.priorityId IN ('HIGH', 'PRI_HIGH') THEN 'HIGH'
+    WHEN tp.code = 'LOW' OR t.priorityId IN ('LOW', 'PRI_LOW') THEN 'LOW'
+    WHEN tp.code = 'MEDIUM' OR t.priorityId IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') THEN 'MEDIUM'
+    ELSE COALESCE(tp.code, t.priorityId, 'MEDIUM')
   END as priority,
   t.picId,
   COALESCE(u.name, 'Unassigned') as picName,
@@ -124,10 +124,10 @@ tasksRoutes.get('/', async (req: any, res: any) => {
     if (status && status !== 'ALL') {
       extraWhere += ` AND (
         t.statusId = ? OR ts.code = ? OR ts.name = ? OR ts.id = ?
-        OR ( ? = 'COMPLETED' AND (ts.id = 'TS-3' OR t.statusId IN ('COMPLETED', 'TSK_COMPLETED')) )
-        OR ( ? = 'IN_PROGRESS' AND (ts.id = 'TS-2' OR t.statusId IN ('IN_PROGRESS', 'TSK_INPROGRESS')) )
-        OR ( ? = 'CANCELLED' AND (ts.id = 'TS-4' OR t.statusId IN ('CANCELLED', 'TSK_CANCELLED')) )
-        OR ( ? IN ('TODO', 'OPEN', 'PENDING') AND (ts.id = 'TS-1' OR t.statusId IN ('TODO', 'OPEN', 'PENDING', 'TSK_TODO')) )
+        OR ( ? = 'COMPLETED' AND (ts.code = 'COMPLETED' OR ts.isTerminal = 1 OR t.statusId IN ('COMPLETED', 'TSK_COMPLETED')) )
+        OR ( ? = 'IN_PROGRESS' AND (ts.code = 'IN_PROGRESS' OR t.statusId IN ('IN_PROGRESS', 'TSK_INPROGRESS')) )
+        OR ( ? = 'CANCELLED' AND (ts.code = 'CANCELLED' OR t.statusId IN ('CANCELLED', 'TSK_CANCELLED')) )
+        OR ( ? IN ('TODO', 'OPEN', 'PENDING') AND (ts.code = 'TODO' OR t.statusId IN ('TODO', 'OPEN', 'PENDING', 'TSK_TODO')) )
       )`;
       extraParams.push(status, status, status, status, status, status, status, status);
     }
@@ -135,10 +135,10 @@ tasksRoutes.get('/', async (req: any, res: any) => {
     if (priority && priority !== 'ALL') {
       extraWhere += ` AND (
         t.priorityId = ? OR tp.code = ? OR tp.name = ? OR tp.id = ?
-        OR ( ? = 'URGENT' AND (tp.id = 'TP-1' OR t.priorityId IN ('URGENT', 'PRI_URGENT')) )
-        OR ( ? = 'HIGH' AND (tp.id = 'TP-2' OR t.priorityId IN ('HIGH', 'PRI_HIGH')) )
-        OR ( ? = 'LOW' AND (tp.id = 'TP-4' OR t.priorityId IN ('LOW', 'PRI_LOW')) )
-        OR ( ? IN ('MEDIUM', 'NORMAL') AND (tp.id = 'TP-3' OR t.priorityId IN ('MEDIUM', 'NORMAL', 'PRI_MEDIUM')) )
+        OR ( ? = 'URGENT' AND (tp.code = 'URGENT' OR t.priorityId IN ('URGENT', 'PRI_URGENT')) )
+        OR ( ? = 'HIGH' AND (tp.code = 'HIGH' OR t.priorityId IN ('HIGH', 'PRI_HIGH')) )
+        OR ( ? = 'LOW' AND (tp.code = 'LOW' OR t.priorityId IN ('LOW', 'PRI_LOW')) )
+        OR ( ? = 'MEDIUM' AND (tp.code = 'MEDIUM' OR t.priorityId IN ('MEDIUM', 'PRI_MEDIUM')) )
       )`;
       extraParams.push(priority, priority, priority, priority, priority, priority, priority, priority);
     }
@@ -301,35 +301,92 @@ tasksRoutes.post('/', async (req: any, res: any) => {
     if (uRows.length > 0) resolvedPicId = uRows[0].userId;
   }
 
-  // Resolve statusId
-  // Resolve statusId
+  // Validate relatedProjectId belongs to targetTenant
+  let resolvedProjectId: string | null = null;
+  if (relatedProjectId) {
+    const [pRows]: any = await pool.query(
+      'SELECT id FROM projects WHERE id = ? AND tenantId = ?',
+      [String(relatedProjectId).trim(), targetTenant]
+    );
+    if (pRows.length === 0) {
+      return res.status(400).json({
+        error: 'Related project not found or does not belong to this tenant',
+        code: 'PROJECT_TENANT_MISMATCH'
+      });
+    }
+    resolvedProjectId = pRows[0].id;
+  }
+
+  // Validate relatedVisitId belongs to targetTenant
+  let resolvedVisitId: string | null = null;
+  if (relatedVisitId) {
+    const [vRows]: any = await pool.query(
+      'SELECT id FROM visits WHERE id = ? AND tenantId = ?',
+      [String(relatedVisitId).trim(), targetTenant]
+    );
+    if (vRows.length === 0) {
+      return res.status(400).json({
+        error: 'Related visit not found or does not belong to this tenant',
+        code: 'VISIT_TENANT_MISMATCH'
+      });
+    }
+    resolvedVisitId = vRows[0].id;
+  }
+
+  // Resolve statusId (Only isActive = 1 allowed for new tasks)
   let resolvedStatusId: string | null = null;
+  let resolvedStatusCode = 'TODO';
   const statusCand = statusId || status;
   if (statusCand) {
     const [sRows]: any = await pool.query(
-      'SELECT id FROM task_statuses WHERE tenantId = ? AND (id = ? OR code = ? OR name = ? OR code = CONCAT("TSK_", ?)) LIMIT 1',
+      'SELECT id, code, isTerminal FROM task_statuses WHERE tenantId = ? AND isActive = 1 AND (id = ? OR code = ? OR name = ? OR code = CONCAT("TSK_", ?)) LIMIT 1',
       [targetTenant, statusCand, statusCand, statusCand, statusCand]
     );
-    if (sRows.length > 0) resolvedStatusId = sRows[0].id;
-  }
-  if (!resolvedStatusId) {
-    const [defS]: any = await pool.query('SELECT id FROM task_statuses WHERE tenantId = ? ORDER BY displayOrder ASC, id ASC LIMIT 1', [targetTenant]);
-    resolvedStatusId = defS[0]?.id || null;
+    if (sRows.length > 0) {
+      resolvedStatusId = sRows[0].id;
+      resolvedStatusCode = sRows[0].code;
+    } else {
+      return res.status(400).json({ error: 'Invalid or inactive task status', code: 'INVALID_TASK_STATUS' });
+    }
+  } else {
+    const [defS]: any = await pool.query('SELECT id, code FROM task_statuses WHERE tenantId = ? AND isActive = 1 ORDER BY displayOrder ASC, id ASC LIMIT 1', [targetTenant]);
+    if (defS.length === 0) {
+      return res.status(500).json({
+        error: 'CONFIG_INTEGRITY_ERROR',
+        code: 'MISSING_ACTIVE_MASTER_DATA',
+        message: `Tenant ${targetTenant} has no active task statuses configured.`
+      });
+    }
+    resolvedStatusId = defS[0].id;
+    resolvedStatusCode = defS[0].code;
   }
 
-  // Resolve priorityId
+  // Resolve priorityId (Only isActive = 1 allowed for new tasks)
   let resolvedPriorityId: string | null = null;
+  let resolvedPriorityCode = 'MEDIUM';
   const priCand = priorityId || priority;
   if (priCand) {
     const [pRows]: any = await pool.query(
-      'SELECT id FROM task_priorities WHERE tenantId = ? AND (id = ? OR code = ? OR name = ? OR code = CONCAT("PRI_", ?)) LIMIT 1',
+      'SELECT id, code FROM task_priorities WHERE tenantId = ? AND isActive = 1 AND (id = ? OR code = ? OR name = ? OR code = CONCAT("PRI_", ?)) LIMIT 1',
       [targetTenant, priCand, priCand, priCand, priCand]
     );
-    if (pRows.length > 0) resolvedPriorityId = pRows[0].id;
-  }
-  if (!resolvedPriorityId) {
-    const [defP]: any = await pool.query('SELECT id FROM task_priorities WHERE tenantId = ? ORDER BY displayOrder ASC, id ASC LIMIT 1', [targetTenant]);
-    resolvedPriorityId = defP[0]?.id || null;
+    if (pRows.length > 0) {
+      resolvedPriorityId = pRows[0].id;
+      resolvedPriorityCode = pRows[0].code;
+    } else {
+      return res.status(400).json({ error: 'Invalid or inactive task priority', code: 'INVALID_TASK_PRIORITY' });
+    }
+  } else {
+    const [defP]: any = await pool.query('SELECT id, code FROM task_priorities WHERE tenantId = ? AND isActive = 1 ORDER BY displayOrder ASC, id ASC LIMIT 1', [targetTenant]);
+    if (defP.length === 0) {
+      return res.status(500).json({
+        error: 'CONFIG_INTEGRITY_ERROR',
+        code: 'MISSING_ACTIVE_MASTER_DATA',
+        message: `Tenant ${targetTenant} has no active task priorities configured.`
+      });
+    }
+    resolvedPriorityId = defP[0].id;
+    resolvedPriorityCode = defP[0].code;
   }
 
   const taskId = data.id && String(data.id).trim()
@@ -347,7 +404,7 @@ tasksRoutes.post('/', async (req: any, res: any) => {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
     `, [
       taskId, targetTenant, String(title).trim(), taskDesc, resolvedCustomerId,
-      relatedProjectId || null, relatedVisitId || null,
+      resolvedProjectId, resolvedVisitId,
       resolvedPriorityId, resolvedStatusId, taskType || 'GENERAL',
       dueDate || null, resolvedPicId, sourceType
     ]);
@@ -364,9 +421,6 @@ tasksRoutes.post('/', async (req: any, res: any) => {
       'CRM'
     );
 
-    const canonicalStatus = resolvedStatusId === 'TS-3' ? 'COMPLETED' : resolvedStatusId === 'TS-2' ? 'IN_PROGRESS' : resolvedStatusId === 'TS-4' ? 'CANCELLED' : 'TODO';
-    const canonicalPriority = resolvedPriorityId === 'TP-1' ? 'URGENT' : resolvedPriorityId === 'TP-2' ? 'HIGH' : resolvedPriorityId === 'TP-4' ? 'LOW' : 'MEDIUM';
-
     res.status(201).json({
       success: true,
       id: taskId,
@@ -375,9 +429,9 @@ tasksRoutes.post('/', async (req: any, res: any) => {
         tenantId: targetTenant,
         title,
         statusId: resolvedStatusId,
-        status: canonicalStatus,
+        status: resolvedStatusCode,
         priorityId: resolvedPriorityId,
-        priority: canonicalPriority,
+        priority: resolvedPriorityCode,
         sourceType
       }
     });
@@ -415,23 +469,33 @@ tasksRoutes.put('/:id', async (req: any, res: any) => {
     const taskType = data.taskType !== undefined ? data.taskType : current.taskType;
 
     let statusId = current.statusId;
+    let isCompleted = current.completedAt !== null;
     const statusCand = data.statusId || data.status;
     if (statusCand) {
       const [sRows]: any = await pool.query(
-        'SELECT id FROM task_statuses WHERE tenantId = ? AND (id = ? OR code = ? OR name = ? OR code = CONCAT("TSK_", ?)) LIMIT 1',
+        'SELECT id, code, isTerminal FROM task_statuses WHERE tenantId = ? AND isActive = 1 AND (id = ? OR code = ? OR name = ? OR code = CONCAT("TSK_", ?)) LIMIT 1',
         [targetTenant, statusCand, statusCand, statusCand, statusCand]
       );
-      if (sRows.length > 0) statusId = sRows[0].id;
+      if (sRows.length > 0) {
+        statusId = sRows[0].id;
+        isCompleted = sRows[0].code === 'COMPLETED' || sRows[0].isTerminal === 1;
+      } else {
+        return res.status(400).json({ error: 'Invalid or inactive task status', code: 'INVALID_TASK_STATUS' });
+      }
     }
 
     let priorityId = current.priorityId;
     const priCand = data.priorityId || data.priority;
     if (priCand) {
       const [pRows]: any = await pool.query(
-        'SELECT id FROM task_priorities WHERE tenantId = ? AND (id = ? OR code = ? OR name = ? OR code = CONCAT("PRI_", ?)) LIMIT 1',
+        'SELECT id, code FROM task_priorities WHERE tenantId = ? AND isActive = 1 AND (id = ? OR code = ? OR name = ? OR code = CONCAT("PRI_", ?)) LIMIT 1',
         [targetTenant, priCand, priCand, priCand, priCand]
       );
-      if (pRows.length > 0) priorityId = pRows[0].id;
+      if (pRows.length > 0) {
+        priorityId = pRows[0].id;
+      } else {
+        return res.status(400).json({ error: 'Invalid or inactive task priority', code: 'INVALID_TASK_PRIORITY' });
+      }
     }
 
     let picId = current.picId;
@@ -449,7 +513,6 @@ tasksRoutes.put('/:id', async (req: any, res: any) => {
       }
     }
 
-    const isCompleted = statusId === 'TS-3' || statusId === 'COMPLETED' || String(data.status).toUpperCase() === 'COMPLETED';
     const completedAtVal = isCompleted
       ? (current.completedAt || new Date())
       : null;

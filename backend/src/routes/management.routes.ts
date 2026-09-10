@@ -138,16 +138,20 @@ managementRoutes.get('/control-tower', async (req, res) => {
 
     // 4. Batch Query 2: Tasks aggregation
     const [scopedTasks]: any = await pool.query(`
-      SELECT t.id, t.title, t.customerId, t.relatedProjectId, t.priorityId, t.statusId, t.dueDate, t.completedAt, t.picId
+      SELECT t.id, t.title, t.customerId, t.relatedProjectId, t.priorityId, t.statusId, t.dueDate, t.completedAt, t.picId,
+             ts.code as statusCode, ts.isTerminal as statusIsTerminal
       FROM tasks t
+      LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
       ${taskWhere.replace(/WHERE tenantId/g, 'WHERE t.tenantId')}
     `, taskParams);
     const filteredTasks = requestedRepId ? scopedTasks.filter((t: any) => t.picId === requestedRepId) : scopedTasks;
 
     // 5. Batch Query 3: Visits aggregation
     const [scopedVisits]: any = await pool.query(`
-      SELECT v.id, v.title, v.customerId, v.relatedProjectId, v.statusId, v.visitDate, v.completedAt, v.picId
+      SELECT v.id, v.title, v.customerId, v.relatedProjectId, v.statusId, v.visitDate, v.completedAt, v.picId,
+             vs.code as statusCode, vs.isTerminal as statusIsTerminal
       FROM visits v
+      LEFT JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
       ${visitWhere.replace(/WHERE tenantId/g, 'WHERE v.tenantId')}
     `, visitParams);
     const filteredVisits = requestedRepId ? scopedVisits.filter((v: any) => v.picId === requestedRepId) : scopedVisits;
@@ -364,13 +368,17 @@ managementRoutes.get('/control-tower', async (req, res) => {
 
     filteredTasks.forEach((t: any) => {
       const d = getBusinessDate(t.dueDate);
-      if (d === todayStr && t.statusId !== 'COMPLETED' && t.statusId !== 'CANCELLED') {
+      const isTaskDone = t.statusCode === 'COMPLETED' || t.statusIsTerminal === 1 || t.statusId === 'COMPLETED';
+      const isTaskCancel = t.statusCode === 'CANCELLED' || t.statusId === 'CANCELLED';
+      const isTaskOpen = !isTaskDone && !isTaskCancel;
+
+      if (d === todayStr && isTaskOpen) {
         dueTodayCount++;
         if (t.picId) todayTasksByRep[t.picId] = (todayTasksByRep[t.picId] || 0) + 1;
-      } else if (d && d > todayStr && d <= upcomingWindowEnd && t.statusId !== 'COMPLETED' && t.statusId !== 'CANCELLED') {
+      } else if (d && d > todayStr && d <= upcomingWindowEnd && isTaskOpen) {
         upcomingWorkCount++;
       }
-      if (t.completedAt && getBusinessDate(t.completedAt) === todayStr && t.statusId === 'COMPLETED') {
+      if (t.completedAt && getBusinessDate(t.completedAt) === todayStr && isTaskDone) {
         completedTodayCount++;
         if (t.picId) completedTodayByRep[t.picId] = (completedTodayByRep[t.picId] || 0) + 1;
       }
@@ -378,13 +386,17 @@ managementRoutes.get('/control-tower', async (req, res) => {
 
     filteredVisits.forEach((v: any) => {
       const d = getBusinessDate(v.visitDate);
-      if (d === todayStr && v.statusId !== 'COMPLETED' && v.statusId !== 'CANCELLED') {
+      const isVisitDone = v.statusCode === 'COMPLETED' || v.statusIsTerminal === 1 || v.statusId === 'COMPLETED';
+      const isVisitCancel = v.statusCode === 'CANCELLED' || v.statusId === 'CANCELLED';
+      const isVisitOpen = !isVisitDone && !isVisitCancel;
+
+      if (d === todayStr && isVisitOpen) {
         dueTodayCount++;
         if (v.picId) todayVisitsByRep[v.picId] = (todayVisitsByRep[v.picId] || 0) + 1;
-      } else if (d && d > todayStr && d <= upcomingWindowEnd && v.statusId !== 'COMPLETED' && v.statusId !== 'CANCELLED') {
+      } else if (d && d > todayStr && d <= upcomingWindowEnd && isVisitOpen) {
         upcomingWorkCount++;
       }
-      if (v.completedAt && getBusinessDate(v.completedAt) === todayStr && v.statusId === 'COMPLETED') {
+      if (v.completedAt && getBusinessDate(v.completedAt) === todayStr && isVisitDone) {
         completedTodayCount++;
         if (v.picId) completedTodayByRep[v.picId] = (completedTodayByRep[v.picId] || 0) + 1;
       }
@@ -408,14 +420,16 @@ managementRoutes.get('/control-tower', async (req, res) => {
     const repWorkloads: any[] = [];
     const openProjectsByRep: Record<string, number> = {};
     filteredProjects.forEach((p: any) => {
-      if (p.stageId !== 'WON' && p.stageId !== 'LOST' && p.picId) {
+      const isClosed = p.stageCommercialOutcome === 'WON' || p.stageCommercialOutcome === 'LOST' || p.stageId === 'WON' || p.stageId === 'LOST';
+      if (!isClosed && p.picId) {
         openProjectsByRep[p.picId] = (openProjectsByRep[p.picId] || 0) + 1;
       }
     });
 
     const openTasksByRep: Record<string, number> = {};
     filteredTasks.forEach((t: any) => {
-      if (t.statusId !== 'COMPLETED' && t.statusId !== 'CANCELLED' && t.picId) {
+      const isTaskDoneOrCancel = t.statusCode === 'COMPLETED' || t.statusCode === 'CANCELLED' || t.statusIsTerminal === 1 || t.statusId === 'COMPLETED' || t.statusId === 'CANCELLED';
+      if (!isTaskDoneOrCancel && t.picId) {
         openTasksByRep[t.picId] = (openTasksByRep[t.picId] || 0) + 1;
       }
     });

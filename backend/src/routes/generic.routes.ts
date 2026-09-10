@@ -29,13 +29,25 @@ genericRoutes.get('/activities', async (req: any, res: any) => {
 });
 
 genericRoutes.get('/customer_contacts', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
   const customerId = req.query.customerId;
   if (!customerId) return res.json([]);
   try {
-    const [rows]: any = await pool.query(
-      'SELECT * FROM customer_contacts WHERE customerId = ? ORDER BY isPrimary DESC, createdAt ASC',
-      [customerId]
-    );
+    const [rows]: any = await pool.query(`
+      SELECT cc.* 
+      FROM customer_contacts cc
+      JOIN customers c ON c.id = cc.customerId
+      WHERE cc.customerId = ? AND c.tenantId = ?
+      ORDER BY cc.isPrimary DESC, cc.createdAt ASC
+    `, [customerId, targetTenant]);
     res.json(rows);
   } catch (err: any) {
     console.error('GET /api/customer_contacts error:', err);

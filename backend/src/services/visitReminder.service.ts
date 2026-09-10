@@ -172,7 +172,7 @@ export async function executeReminderProcessing(
         c.name as customerName, c.code as customerCode,
         u.name as picName, u.email as picEmail
       FROM visits v
-      JOIN visit_statuses vs ON vs.id = v.statusId
+      JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
       JOIN customers c ON c.id = v.customerId
       LEFT JOIN users u ON u.id = v.picId
       WHERE v.tenantId = ?

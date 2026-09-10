@@ -28,6 +28,7 @@ import { tenantUsersRoutes } from './routes/tenant_users.routes';
 import { onboardingRoutes } from './routes/onboarding.routes';
 import { navigationRoutes } from './routes/navigation.routes';
 import { platformMenusRoutes } from './routes/platformMenus.routes';
+import { reportsRoutes } from './routes/reports.routes';
 import { startVisitReminderScheduler } from './workers/visitReminder.worker';
 
 import { authMiddleware } from './middleware/auth';
@@ -71,6 +72,7 @@ app.use('/api/system', authMiddleware, systemRoutes);
 app.use('/api/notifications', authMiddleware, notificationsRoutes);
 app.use('/api/navigation', authMiddleware, navigationRoutes);
 app.use('/api/platform/menus', authMiddleware, platformMenusRoutes);
+app.use('/api/reports', authMiddleware, tenantMiddleware, reportsRoutes);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Endpoint Not Found', path: req.originalUrl }));
 

@@ -20,20 +20,26 @@ export const TASK_PRIORITY = {
   LOW: 'TP-4',
 } as const;
 
-async function resolveTenantTaskDefaults(conn: any, tenantId: string) {
+export async function resolveTenantTaskDefaults(conn: any, tenantId: string) {
   const [statuses]: any = await conn.query(
-    'SELECT id, code, platformMasterId FROM task_statuses WHERE tenantId = ?',
+    'SELECT id, code, platformMasterId FROM task_statuses WHERE tenantId = ? AND isActive = 1',
     [tenantId]
   );
   const [priorities]: any = await conn.query(
-    'SELECT id, code, platformMasterId FROM task_priorities WHERE tenantId = ?',
+    'SELECT id, code, platformMasterId FROM task_priorities WHERE tenantId = ? AND isActive = 1',
     [tenantId]
   );
   
-  const todoStatus = statuses.find((s: any) => s.code === 'TODO' || s.code === 'TSK_TODO' || s.platformMasterId === 'TS-1')?.id || statuses[0]?.id || 'TS-1';
-  const cancelledStatus = statuses.find((s: any) => s.code === 'CANCELLED' || s.code === 'TSK_CANCELLED' || s.platformMasterId === 'TS-4')?.id || statuses[statuses.length - 1]?.id || 'TS-4';
-  const completedStatus = statuses.find((s: any) => s.code === 'COMPLETED' || s.code === 'TSK_COMPLETED' || s.platformMasterId === 'TS-3')?.id || statuses[0]?.id || 'TS-3';
-  const mediumPriority = priorities.find((p: any) => p.code === 'MEDIUM' || p.code === 'PRIO_MEDIUM' || p.platformMasterId === 'TP-3')?.id || priorities[0]?.id || 'TP-3';
+  const todoStatus = statuses.find((s: any) => s.code === 'TODO' || s.code === 'TSK_TODO' || s.platformMasterId === 'TS-1')?.id;
+  const cancelledStatus = statuses.find((s: any) => s.code === 'CANCELLED' || s.code === 'TSK_CANCELLED' || s.platformMasterId === 'TS-4')?.id;
+  const completedStatus = statuses.find((s: any) => s.code === 'COMPLETED' || s.code === 'TSK_COMPLETED' || s.platformMasterId === 'TS-3')?.id;
+  const mediumPriority = priorities.find((p: any) => p.code === 'MEDIUM' || p.code === 'PRIO_MEDIUM' || p.platformMasterId === 'TP-3')?.id;
+
+  if (!todoStatus || !cancelledStatus || !completedStatus || !mediumPriority) {
+    const err: any = new Error(`CONFIG_INTEGRITY_ERROR: Tenant ${tenantId} is missing required active task statuses or priorities.`);
+    err.code = 'CONFIG_INTEGRITY_ERROR';
+    throw err;
+  }
 
   return { todoStatus, cancelledStatus, completedStatus, mediumPriority };
 }
@@ -119,7 +125,6 @@ export async function syncProjectAssignmentTasks(
   if (activePicId && !activeTaskFound) {
     const taskId = 'TSK-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
     const taskTitle = `Project Assignment — ${project.title || 'Project'}`;
-    const taskDesc = `Automated project assignment task for project: ${project.title || project.id}`;
 
     await conn.query(
       `INSERT INTO tasks (
@@ -130,7 +135,7 @@ export async function syncProjectAssignmentTasks(
         taskId,
         tenantId,
         taskTitle,
-        taskDesc,
+        'Auto-assigned project ownership task. Keep details and customer relationship on schedule.',
         project.customerId || null,
         projectId,
         tntDefaults.mediumPriority,
@@ -146,7 +151,7 @@ export async function syncProjectAssignmentTasks(
 /**
  * Synchronizes VISIT_ASSIGNMENT tasks for a given visit.
  * - Server-side, transactional, tenant-safe, and idempotent.
- * - Primary PIC and each Additional Participant receive exactly ONE VISIT_ASSIGNMENT task.
+ * - Each participant (primary PIC + additional participants) receives exactly ONE active task.
  * - Primary PIC is never duplicated if also present in visit_participants.
  * - If Visit is cancelled: unfinished assignment tasks become cancelled.
  * - If Visit is rescheduled / reactivated: active tasks receive updated dueDate or are reactivated.
@@ -166,7 +171,13 @@ export async function syncVisitAssignmentTasks(
 
   if (visitRows.length === 0) return;
   const visit = visitRows[0];
-  const isVisitCancelled = visit.statusId === 'VS-3' || visit.statusId === 'CANCELLED';
+  const [vStatusRows]: any = await conn.query(
+    'SELECT code, isTerminal FROM visit_statuses WHERE id = ? AND tenantId = ?',
+    [visit.statusId, tenantId]
+  );
+  const isVisitCancelled = (vStatusRows.length > 0 && vStatusRows[0].code === 'CANCELLED') || visit.statusId === 'VS-3' || visit.statusId === 'CANCELLED';
+
+  const tntDefaults = await resolveTenantTaskDefaults(conn, tenantId);
 
   // If visit is CANCELLED: cancel all unfinished auto-generated visit assignment tasks
   if (isVisitCancelled) {
@@ -175,7 +186,7 @@ export async function syncVisitAssignmentTasks(
        SET statusId = ?, updatedAt = NOW()
        WHERE tenantId = ? AND relatedVisitId = ? AND sourceType = ? 
        AND statusId NOT IN (?, 'COMPLETED')`,
-      [TASK_STATUS.CANCELLED, tenantId, visitId, TASK_SOURCE_TYPE.VISIT_ASSIGNMENT, TASK_STATUS.COMPLETED]
+      [tntDefaults.cancelledStatus, tenantId, visitId, TASK_SOURCE_TYPE.VISIT_ASSIGNMENT, tntDefaults.completedStatus]
     );
     return;
   }
@@ -203,7 +214,6 @@ export async function syncVisitAssignmentTasks(
     [tenantId, visitId, TASK_SOURCE_TYPE.VISIT_ASSIGNMENT]
   );
 
-  const tntDefaults = await resolveTenantTaskDefaults(conn, tenantId);
   const activeAssigneeSet = new Set<string>();
   const taskTitle = `Visit Assignment — ${visit.title || 'Client Visit'}`;
 
