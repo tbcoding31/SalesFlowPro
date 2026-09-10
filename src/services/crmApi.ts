@@ -1066,13 +1066,16 @@ export const crmApi = {
       if (filters?.toDate) params.set('toDate', filters.toDate);
       if (filters?.teamId) params.set('teamId', filters.teamId);
       if (filters?.repId) params.set('repId', filters.repId);
-      const url = `${API_BASE}/reports/pipeline${params.toString() ? '?' + params.toString() : ''}`;
+      const url = `${API_BASE}/sales/pipeline${params.toString() ? '?' + params.toString() : ''}`;
       const res = await fetch(url, { headers: getAuthHeaders() });
-      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch pipeline analytics`);
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.message || errorData.error || `HTTP ${res.status}: Failed to fetch pipeline analytics`);
+      }
       return await res.json();
     } catch (err) {
       console.error('[crmApi.fetchPipelineAnalytics error]', err);
-      return null;
+      throw err;
     }
   },
 
@@ -1082,13 +1085,16 @@ export const crmApi = {
       if (filters?.teamId) params.set('teamId', filters.teamId);
       if (filters?.repId) params.set('repId', filters.repId);
 
-      const url = `${API_BASE}/reports/pipeline-velocity${params.toString() ? '?' + params.toString() : ''}`;
+      const url = `${API_BASE}/sales/pipeline-velocity${params.toString() ? '?' + params.toString() : ''}`;
       const res = await fetch(url, { headers: getAuthHeaders() });
-      if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch pipeline velocity`);
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.message || errorData.error || `HTTP ${res.status}: Failed to fetch pipeline velocity`);
+      }
       return await res.json();
     } catch (err) {
       console.error('[crmApi.fetchPipelineVelocity error]', err);
-      return null;
+      throw err;
     }
   },
 

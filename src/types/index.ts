@@ -701,6 +701,10 @@ export interface MasterDataItem {
   codeValue: string;
   code_value?: string;
   indicator?: string;
+  icon?: string;
+  color?: string;
+  description?: string;
+  level?: number;
   isDefault: boolean;
   is_default?: boolean;
   displayOrder: number;

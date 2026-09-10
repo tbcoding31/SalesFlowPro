@@ -483,10 +483,11 @@ export const SalesReportPage: React.FC = () => {
                         <td className="px-4 py-3 text-slate-600">{p.customerName || 'Unassigned'}</td>
                         <td className="px-4 py-3">
                           <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            p.stageId === 'WON' ? 'bg-emerald-100 text-emerald-700' :
-                            p.stageId === 'LOST' ? 'bg-rose-100 text-rose-700' : 'bg-indigo-50 text-indigo-700'
+                            p.stageCommercialOutcome === 'WON' || p.stageId === 'WON' ? 'bg-emerald-100 text-emerald-700' :
+                            p.stageCommercialOutcome === 'LOST' || p.stageId === 'LOST' ? 'bg-rose-100 text-rose-700' :
+                            p.stageCommercialOutcome === 'CANCELLED' ? 'bg-amber-100 text-amber-700' : 'bg-indigo-50 text-indigo-700'
                           }`}>
-                            {p.stageId}
+                            {p.stageName || p.stageCode || p.stageId}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-slate-700">{p.picName || 'Unassigned'}</td>

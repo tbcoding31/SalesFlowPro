@@ -648,3 +648,747 @@ salesRoutes.get('/attention', async (req, res) => {
   }
 });
 
+// Helper: Calculate Percentile for duration metrics
+function calculatePercentile(values: number[], percentile: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = (percentile / 100) * (sorted.length - 1);
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  if (lower === upper) return Math.round(sorted[lower]);
+  const weight = index - lower;
+  return Math.round(sorted[lower] * (1 - weight) + sorted[upper] * weight);
+}
+
+// ─────────────────────────────────────────────────────────────
+// GET /api/sales/pipeline - Authoritative Pipeline Analytics
+// ─────────────────────────────────────────────────────────────
+salesRoutes.get('/pipeline', async (req, res) => {
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const actorRole = (req as any).userRole;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  // 1. Strict Capability Check: Requires VIEW_REPORTS, MANAGE_TENANT, ALL, or SUPER_ADMIN
+  const canViewReports = actorPermissions.includes('ALL') ||
+    actorPermissions.includes('MANAGE_TENANT') ||
+    actorPermissions.includes('VIEW_REPORTS') ||
+    actorRole === 'SUPER_ADMIN';
+
+  if (!canViewReports) {
+    return res.status(403).json({ error: 'Access denied. VIEW_REPORTS permission required.' });
+  }
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const todayStr = getBusinessDate(new Date())!;
+  const evaluatedAt = new Date().toISOString();
+
+  try {
+    let effectiveScope: 'OWN' | 'TEAM' | 'ORGANIZATION' = actorDataScope;
+    if (actorRole === 'SUPER_ADMIN' || actorPermissions.includes('ALL') || actorPermissions.includes('MANAGE_TENANT')) {
+      effectiveScope = 'ORGANIZATION';
+    }
+
+    const requestedRepId = req.query.repId ? String(req.query.repId).trim() : null;
+    const requestedTeamId = req.query.teamId ? String(req.query.teamId).trim() : null;
+
+    // Verify teamId access under TEAM scope
+    if (requestedTeamId && effectiveScope === 'TEAM') {
+      const [actorTeamRows]: any = await pool.query(`
+        SELECT tm.teamId FROM team_members tm
+        JOIN tenant_users tu ON tu.id = tm.tenantUserId
+        WHERE tu.userId = ? AND tu.tenantId = ? AND tu.status = 'ACTIVE'
+      `, [actorUserId, targetTenant]);
+      const actorTeamIds = new Set(actorTeamRows.map((t: any) => t.teamId));
+      if (!actorTeamIds.has(requestedTeamId)) {
+        return res.status(403).json({ error: 'Access denied to requested team (BOLA/Scope violation).' });
+      }
+    }
+
+    // 2. Resolve authorized reps in scope
+    let repListQuery = `
+      SELECT 
+        u.id as userId, u.name, u.email, tu.status,
+        tm.teamId, t.name as teamName, r.name as roleName
+      FROM users u
+      JOIN tenant_users tu ON tu.userId = u.id AND tu.tenantId = ?
+      LEFT JOIN team_members tm ON tm.tenantUserId = tu.id
+      LEFT JOIN teams t ON t.id = tm.teamId
+      LEFT JOIN tenant_user_roles tur ON tur.tenantUserId = tu.id
+      LEFT JOIN roles r ON r.id = tur.roleId
+      WHERE 1=1
+    `;
+    const repListParams: any[] = [targetTenant];
+
+    if (effectiveScope === 'OWN') {
+      repListQuery += ` AND u.id = ?`;
+      repListParams.push(actorUserId);
+    } else if (effectiveScope === 'TEAM') {
+      repListQuery += ` AND tm.teamId IN (
+        SELECT tm2.teamId FROM team_members tm2
+        JOIN tenant_users tu2 ON tu2.id = tm2.tenantUserId
+        WHERE tu2.userId = ? AND tu2.tenantId = ? AND tu2.status = 'ACTIVE'
+      )`;
+      repListParams.push(actorUserId, targetTenant);
+    }
+
+    if (requestedTeamId) {
+      repListQuery += ` AND tm.teamId = ?`;
+      repListParams.push(requestedTeamId);
+    }
+
+    if (requestedRepId) {
+      repListQuery += ` AND u.id = ?`;
+      repListParams.push(requestedRepId);
+    }
+
+    repListQuery += ` ORDER BY u.name ASC`;
+    const [authorizedReps]: any = await pool.query(repListQuery, repListParams);
+    const authorizedRepIds = new Set(authorizedReps.map((r: any) => r.userId));
+
+    if (requestedRepId && !authorizedRepIds.has(requestedRepId)) {
+      return res.status(403).json({ error: 'Access denied to requested representative (BOLA/Scope violation).' });
+    }
+
+    // 3. Fetch dynamic tenant project_stages
+    const [stageRows]: any = await pool.query(`
+      SELECT id, code, name, phase, commercialOutcome, displayOrder, probability, isTerminal
+      FROM project_stages
+      WHERE tenantId = ? AND isActive = 1
+      ORDER BY displayOrder ASC, name ASC
+    `, [targetTenant]);
+
+    const stageMap = new Map<string, any>();
+    stageRows.forEach((st: any) => {
+      stageMap.set(st.id, st);
+      if (st.code) stageMap.set(st.code, st);
+    });
+
+    // 4. Fetch scoped projects
+    const { where: projWhere, params: projParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'p.picId');
+    let baseProjSql = `
+      SELECT 
+        p.id, p.tenantId, p.customerId, p.title, p.value, p.probability,
+        p.expectedCloseDate, p.stageId, p.commercialWonAt, p.source, p.description, p.picId, p.createdAt,
+        c.name as customerName, c.code as customerCode,
+        u.name as picName, u.email as picEmail,
+        ps.code as stageCode, ps.name as stageName, ps.phase as stagePhase,
+        ps.commercialOutcome as stageCommercialOutcome, ps.isTerminal as stageIsTerminal
+      FROM projects p
+      LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
+      LEFT JOIN customers c ON c.id = p.customerId
+      LEFT JOIN users u ON u.id = p.picId
+      ${projWhere.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
+    `;
+    const finalProjParams = [...projParams];
+
+    if (requestedRepId) {
+      baseProjSql += ` AND p.picId = ?`;
+      finalProjParams.push(requestedRepId);
+    }
+
+    const [scopedProjects]: any = await pool.query(baseProjSql, finalProjParams);
+
+    // 5. Batch fetch stage histories for scoped projects
+    const projectIds = scopedProjects.map((p: any) => p.id);
+    let stageHistories: any[] = [];
+    if (projectIds.length > 0) {
+      const [shRows]: any = await pool.query(`
+        SELECT projectId, fromStageId, toStageId, changedById, changedAt, notes
+        FROM project_stage_histories
+        WHERE projectId IN (?)
+        ORDER BY changedAt ASC
+      `, [projectIds]);
+      stageHistories = shRows;
+    }
+
+    const historiesByProject: Record<string, any[]> = {};
+    stageHistories.forEach((sh: any) => {
+      if (!historiesByProject[sh.projectId]) historiesByProject[sh.projectId] = [];
+      historiesByProject[sh.projectId].push(sh);
+    });
+
+    // 6. Metrics calculation without hardcoded fallbacks
+    let openProjectsCount = 0;
+    let pipelineValueSum = 0;
+    let weightedPipelineValueSum = 0;
+    let projectsWithProbabilityCount = 0;
+    let projectsMissingProbabilityCount = 0;
+    let pipelineValueMissingProbabilitySum = 0;
+
+    let wonProjectsCount = 0;
+    let wonValueSum = 0;
+    let lostProjectsCount = 0;
+    let lostValueSum = 0;
+
+    let totalOpenAgeDays = 0;
+    let openProjectsWithAgeCount = 0;
+
+    const closedCycleDurations: number[] = [];
+    const stageDurations: Record<string, number[]> = {};
+    stageRows.forEach((s: any) => {
+      stageDurations[s.id] = [];
+    });
+
+    const stageSummaryMap: Record<string, { count: number; value: number; weightedValue: number; stage: any }> = {};
+    stageRows.forEach((s: any) => {
+      stageSummaryMap[s.id] = { count: 0, value: 0, weightedValue: 0, stage: s };
+    });
+
+    const repSummaryMap: Record<string, any> = {};
+    authorizedReps.forEach((r: any) => {
+      repSummaryMap[r.userId] = {
+        userId: r.userId,
+        name: r.name,
+        email: r.email,
+        teamId: r.teamId,
+        teamName: r.teamName || 'General',
+        openProjects: 0,
+        pipelineValue: 0,
+        weightedPipelineValue: 0,
+        wonProjects: 0,
+        wonValue: 0,
+        lostProjects: 0,
+        lostValue: 0
+      };
+    });
+
+    let overdueForecast = { count: 0, value: 0, weightedValue: 0 };
+    let missingCloseDateForecast = { count: 0, value: 0, weightedValue: 0 };
+    const monthBucketsMap: Record<string, { projectCount: number; pipelineValue: number; weightedValue: number }> = {};
+
+    let projectsWithExpectedCloseDateCount = 0;
+    let projectsWithStageHistoryCount = 0;
+    let terminalProjectsMissingTerminalHistoryCount = 0;
+    let reopenedProjectsCount = 0;
+    let invalidTransitionsCount = 0;
+
+    for (const proj of scopedProjects) {
+      const pStageMeta = (proj.stageId && stageMap.get(proj.stageId)) || (proj.stageCode && stageMap.get(proj.stageCode)) || null;
+      const outcome = pStageMeta?.commercialOutcome || proj.stageCommercialOutcome || 'NONE';
+      const isTerminal = pStageMeta ? Boolean(pStageMeta.isTerminal) : Boolean(proj.stageIsTerminal);
+
+      const isWon = outcome === 'WON';
+      const isLost = outcome === 'LOST';
+      const isCancelled = outcome === 'CANCELLED';
+      const isOpen = !isWon && !isLost && !isCancelled && !isTerminal;
+
+      const pVal = Number(proj.value) || 0;
+      const prob = proj.probability !== null && proj.probability !== undefined
+        ? Number(proj.probability)
+        : (pStageMeta?.probability !== null && pStageMeta?.probability !== undefined ? Number(pStageMeta.probability) : null);
+
+      if (prob !== null && !isNaN(prob)) {
+        projectsWithProbabilityCount++;
+      } else {
+        projectsMissingProbabilityCount++;
+        pipelineValueMissingProbabilitySum += pVal;
+      }
+
+      const weightedVal = prob !== null && !isNaN(prob) ? (pVal * prob) / 100 : 0;
+
+      // Stage aggregation
+      if (proj.stageId && stageSummaryMap[proj.stageId]) {
+        stageSummaryMap[proj.stageId].count++;
+        stageSummaryMap[proj.stageId].value += pVal;
+        stageSummaryMap[proj.stageId].weightedValue += weightedVal;
+      }
+
+      // Rep aggregation
+      if (proj.picId && repSummaryMap[proj.picId]) {
+        const rep = repSummaryMap[proj.picId];
+        if (isOpen) {
+          rep.openProjects++;
+          rep.pipelineValue += pVal;
+          rep.weightedPipelineValue += weightedVal;
+        } else if (isWon) {
+          rep.wonProjects++;
+          rep.wonValue += pVal;
+        } else if (isLost) {
+          rep.lostProjects++;
+          rep.lostValue += pVal;
+        }
+      }
+
+      if (isOpen) {
+        openProjectsCount++;
+        pipelineValueSum += pVal;
+        weightedPipelineValueSum += weightedVal;
+
+        if (proj.createdAt) {
+          const createdTime = new Date(proj.createdAt).getTime();
+          const nowTime = Date.now();
+          if (nowTime >= createdTime) {
+            const ageDays = Math.floor((nowTime - createdTime) / (1000 * 60 * 60 * 24));
+            totalOpenAgeDays += ageDays;
+            openProjectsWithAgeCount++;
+          }
+        }
+
+        // Expected close date forecasting
+        if (proj.expectedCloseDate) {
+          projectsWithExpectedCloseDateCount++;
+          const closeDateStr = getBusinessDate(proj.expectedCloseDate);
+          if (closeDateStr && closeDateStr < todayStr) {
+            overdueForecast.count++;
+            overdueForecast.value += pVal;
+            overdueForecast.weightedValue += weightedVal;
+          } else if (closeDateStr) {
+            const mKey = closeDateStr.slice(0, 7);
+            if (!monthBucketsMap[mKey]) {
+              monthBucketsMap[mKey] = { projectCount: 0, pipelineValue: 0, weightedValue: 0 };
+            }
+            monthBucketsMap[mKey].projectCount++;
+            monthBucketsMap[mKey].pipelineValue += pVal;
+            monthBucketsMap[mKey].weightedValue += weightedVal;
+          }
+        } else {
+          missingCloseDateForecast.count++;
+          missingCloseDateForecast.value += pVal;
+          missingCloseDateForecast.weightedValue += weightedVal;
+        }
+      } else if (isWon) {
+        wonProjectsCount++;
+        wonValueSum += pVal;
+      } else if (isLost) {
+        lostProjectsCount++;
+        lostValueSum += pVal;
+      }
+
+      // Stage history validation & duration calculation
+      const pHistories = historiesByProject[proj.id] || [];
+      if (pHistories.length > 0) {
+        projectsWithStageHistoryCount++;
+        let hasTerminalInHistory = false;
+        let prevTime: number = proj.createdAt ? new Date(proj.createdAt).getTime() : 0;
+
+        for (let idx = 0; idx < pHistories.length; idx++) {
+          const h = pHistories[idx];
+          const currTime = new Date(h.changedAt).getTime();
+          const toStMeta = stageMap.get(h.toStageId);
+
+          if (toStMeta && toStMeta.isTerminal) {
+            hasTerminalInHistory = true;
+          }
+
+          if (idx > 0 && currTime < prevTime) {
+            invalidTransitionsCount++;
+          }
+
+          if (h.fromStageId && h.toStageId && h.fromStageId === h.toStageId) {
+            invalidTransitionsCount++;
+          }
+
+          if (h.fromStageId && stageDurations[h.fromStageId]) {
+            if (currTime >= prevTime) {
+              const durDays = Math.max(0, Math.round((currTime - prevTime) / (1000 * 60 * 60 * 24)));
+              stageDurations[h.fromStageId].push(durDays);
+            }
+          }
+
+          prevTime = currTime;
+        }
+
+        if (isTerminal && !hasTerminalInHistory) {
+          terminalProjectsMissingTerminalHistoryCount++;
+        }
+
+        if (isTerminal && pHistories.length > 0) {
+          const lastH = pHistories[pHistories.length - 1];
+          const startT = proj.createdAt ? new Date(proj.createdAt).getTime() : new Date(pHistories[0].changedAt).getTime();
+          const endT = new Date(lastH.changedAt).getTime();
+          if (endT >= startT) {
+            closedCycleDurations.push(Math.max(0, Math.round((endT - startT) / (1000 * 60 * 60 * 24))));
+          }
+        }
+      } else if (isTerminal) {
+        terminalProjectsMissingTerminalHistoryCount++;
+      }
+    }
+
+    const closedProjectsCount = wonProjectsCount + lostProjectsCount;
+    const closedValueSum = wonValueSum + lostValueSum;
+    const winRateByCount = closedProjectsCount > 0 ? Math.round((wonProjectsCount / closedProjectsCount) * 1000) / 10 : 0;
+    const winRateByValue = closedValueSum > 0 ? Math.round((wonValueSum / closedValueSum) * 1000) / 10 : 0;
+    const averageOpenProjectAgeDays = openProjectsWithAgeCount > 0 ? Math.round(totalOpenAgeDays / openProjectsWithAgeCount) : 0;
+    const averageSalesCycleDays = closedCycleDurations.length > 0 ? Math.round(closedCycleDurations.reduce((a, b) => a + b, 0) / closedCycleDurations.length) : 0;
+
+    // Stage Distribution output
+    const stageDistribution = stageRows.map((s: any) => {
+      const sm = stageSummaryMap[s.id] || { count: 0, value: 0, weightedValue: 0 };
+      return {
+        stage: s.name,
+        stageKey: s.id,
+        stageCode: s.code,
+        displayOrder: s.displayOrder,
+        commercialOutcome: s.commercialOutcome,
+        isTerminal: Boolean(s.isTerminal),
+        projectCount: sm.count,
+        pipelineValue: sm.value,
+        weightedValue: sm.weightedValue,
+        probabilityDefault: s.probability
+      };
+    });
+
+    // Stage Velocity output
+    const stageVelocity = stageRows.map((s: any) => {
+      const durs = stageDurations[s.id] || [];
+      const avg = durs.length > 0 ? Math.round(durs.reduce((a, b) => a + b, 0) / durs.length) : 0;
+      const med = durs.length > 0 ? calculatePercentile(durs, 50) : 0;
+      return {
+        stage: s.name,
+        stageKey: s.id,
+        stageCode: s.code,
+        commercialOutcome: s.commercialOutcome,
+        averageDays: avg,
+        medianDays: med,
+        sampleCount: durs.length,
+        hasSample: durs.length > 0
+      };
+    });
+
+    const upcomingMonths = Object.entries(monthBucketsMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([month, b]) => ({
+        month,
+        projectCount: b.projectCount,
+        pipelineValue: b.pipelineValue,
+        weightedValue: b.weightedValue
+      }));
+
+    res.json({
+      evaluatedAt,
+      businessDate: todayStr,
+      scope: effectiveScope,
+      summary: {
+        openProjects: openProjectsCount,
+        pipelineValue: pipelineValueSum,
+        weightedPipelineValue: weightedPipelineValueSum,
+        wonProjects: wonProjectsCount,
+        wonValue: wonValueSum,
+        lostProjects: lostProjectsCount,
+        lostValue: lostValueSum,
+        winRateByCount,
+        winRateByValue,
+        averageSalesCycleDays,
+        averageOpenProjectAgeDays
+      },
+      stageDistribution,
+      stageVelocity,
+      repPipeline: Object.values(repSummaryMap),
+      expectedCloseForecast: {
+        overdue: overdueForecast,
+        upcomingMonths,
+        missingCloseDate: missingCloseDateForecast
+      },
+      coverage: {
+        totalProjects: scopedProjects.length,
+        openProjects: openProjectsCount,
+        closedProjects: closedProjectsCount,
+        projectsWithStageHistory: projectsWithStageHistoryCount,
+        projectsWithExpectedCloseDate: projectsWithExpectedCloseDateCount,
+        projectsWithProbability: projectsWithProbabilityCount,
+        projectsMissingProbability: projectsMissingProbabilityCount,
+        pipelineValueMissingProbability: pipelineValueMissingProbabilitySum,
+        projectsExcludedFromCycleMetrics: scopedProjects.length - closedCycleDurations.length
+      },
+      dataQuality: {
+        terminalProjectsMissingTerminalHistory: terminalProjectsMissingTerminalHistoryCount,
+        reopenedProjects: reopenedProjectsCount,
+        invalidTransitions: invalidTransitionsCount
+      },
+      recentProjects: scopedProjects.slice(0, 50)
+    });
+  } catch (err: any) {
+    console.error('Error GET /api/sales/pipeline:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// GET /api/sales/pipeline-velocity - Stage Velocity Baselines
+// ─────────────────────────────────────────────────────────────
+salesRoutes.get('/pipeline-velocity', async (req, res) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const actorUserId = (req as any).userId;
+  const actorDataScope = (req as any).userDataScope || 'OWN';
+  const actorPermissions = (req as any).userPermissions || [];
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const todayStr = getBusinessDate(new Date()) || new Date().toISOString().slice(0, 10);
+  const evaluatedAt = new Date().toISOString();
+
+  try {
+    const hasReportPerm = actorRole === 'SUPER_ADMIN' ||
+      actorPermissions.includes('ALL') ||
+      actorPermissions.includes('MANAGE_TENANT') ||
+      actorPermissions.includes('VIEW_REPORTS') ||
+      actorPermissions.includes('MANAGE_USERS');
+
+    if (!hasReportPerm) {
+      return res.status(403).json({ error: 'Forbidden: Insufficient permissions to view pipeline velocity reports.' });
+    }
+
+    let effectiveScope: 'OWN' | 'TEAM' | 'ORGANIZATION' = actorDataScope;
+    if (actorRole === 'SUPER_ADMIN' || actorPermissions.includes('ALL') || actorPermissions.includes('MANAGE_TENANT')) {
+      effectiveScope = 'ORGANIZATION';
+    }
+
+    // BOLA checks for requested filters
+    const requestedTeamId = req.query.teamId ? String(req.query.teamId).trim() : null;
+    const requestedRepId = req.query.repId ? String(req.query.repId).trim() : null;
+
+    if (requestedTeamId && effectiveScope === 'TEAM') {
+      const [actorTeamRows]: any = await pool.query(`
+        SELECT tm.teamId FROM team_members tm
+        JOIN tenant_users tu ON tu.id = tm.tenantUserId
+        WHERE tu.userId = ? AND tu.tenantId = ? AND tu.status = 'ACTIVE'
+      `, [actorUserId, targetTenant]);
+      const actorTeamIds = new Set(actorTeamRows.map((t: any) => t.teamId));
+      if (!actorTeamIds.has(requestedTeamId)) {
+        return res.status(403).json({ error: 'Access denied to requested team (BOLA/Scope violation).' });
+      }
+    }
+
+    // Dynamic tenant project stages
+    const [tenantStages]: any = await pool.query(`
+      SELECT id, code, name, phase, commercialOutcome, displayOrder, probability, isTerminal
+      FROM project_stages
+      WHERE tenantId = ? AND isActive = 1
+      ORDER BY displayOrder ASC, name ASC
+    `, [targetTenant]);
+
+    const stageMap = new Map<string, any>();
+    tenantStages.forEach((s: any) => {
+      stageMap.set(s.id, s);
+      if (s.code) stageMap.set(s.code, s);
+    });
+
+    // 1. Fetch all historical stage transitions in tenant (for Authoritative Baseline calculation)
+    const [allHistories]: any = await pool.query(`
+      SELECT 
+        psh.id, psh.projectId, psh.fromStageId, psh.toStageId, psh.changedAt,
+        p.createdAt as projectCreatedAt
+      FROM project_stage_histories psh
+      JOIN projects p ON p.id = psh.projectId
+      WHERE p.tenantId = ?
+      ORDER BY psh.projectId ASC, psh.changedAt ASC, psh.id ASC
+    `, [targetTenant]);
+
+    // Group histories by projectId
+    const historiesByProject: Record<string, any[]> = {};
+    for (const h of allHistories) {
+      if (!historiesByProject[h.projectId]) historiesByProject[h.projectId] = [];
+      historiesByProject[h.projectId].push(h);
+    }
+
+    const stageDurations: Record<string, number[]> = {};
+    tenantStages.forEach((s: any) => {
+      stageDurations[s.id] = [];
+    });
+
+    let totalStageIntervals = 0;
+    let validStageIntervals = 0;
+    let invalidIntervalsExcluded = 0;
+
+    for (const [projId, pHistList] of Object.entries(historiesByProject)) {
+      for (let i = 0; i < pHistList.length; i++) {
+        totalStageIntervals++;
+        const curr = pHistList[i];
+        const prevTime = i === 0
+          ? (curr.projectCreatedAt ? new Date(curr.projectCreatedAt).getTime() : new Date(curr.changedAt).getTime())
+          : new Date(pHistList[i - 1].changedAt).getTime();
+        const currTime = new Date(curr.changedAt).getTime();
+
+        // Validate chronological sanity, distinct stages, and non-negative interval
+        if (currTime < prevTime || !curr.fromStageId || !curr.toStageId || curr.fromStageId === curr.toStageId) {
+          invalidIntervalsExcluded++;
+          continue;
+        }
+
+        const durationDays = Math.max(0, Math.round((currTime - prevTime) / (1000 * 60 * 60 * 24)));
+        const fromStId = curr.fromStageId;
+        const matchedStage = stageMap.get(fromStId);
+
+        if (matchedStage && stageDurations[matchedStage.id]) {
+          stageDurations[matchedStage.id].push(durationDays);
+          validStageIntervals++;
+        }
+      }
+    }
+
+    // Build baselines dynamically per tenant stage
+    const baselines: Record<string, any> = {};
+    for (const stage of tenantStages) {
+      const durs = stageDurations[stage.id] || [];
+      const sampleCount = durs.length;
+      if (sampleCount === 0) {
+        baselines[stage.id] = {
+          stageId: stage.id,
+          stageName: stage.name,
+          stageCode: stage.code,
+          commercialOutcome: stage.commercialOutcome,
+          isTerminal: Boolean(stage.isTerminal),
+          hasBaseline: false,
+          sampleCount: 0,
+          averageDays: null,
+          medianDays: null,
+          p75Days: null,
+          p90Days: null
+        };
+      } else {
+        const sum = durs.reduce((a, b) => a + b, 0);
+        const avg = Math.round((sum / sampleCount) * 10) / 10;
+        const median = calculatePercentile(durs, 50);
+        const p75 = calculatePercentile(durs, 75);
+        const p90 = calculatePercentile(durs, 90);
+
+        baselines[stage.id] = {
+          stageId: stage.id,
+          stageName: stage.name,
+          stageCode: stage.code,
+          commercialOutcome: stage.commercialOutcome,
+          isTerminal: Boolean(stage.isTerminal),
+          hasBaseline: true,
+          sampleCount,
+          averageDays: avg,
+          medianDays: median,
+          p75Days: p75,
+          p90Days: p90
+        };
+      }
+    }
+
+    // 2. Fetch active projects in scope for current stage duration tracking
+    const { where: projWhere, params: projParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'p.picId');
+    let activeProjSql = `
+      SELECT 
+        p.id, p.tenantId, p.customerId, p.title, p.value, p.probability,
+        p.stageId, p.picId, p.createdAt,
+        c.name as customerName, u.name as picName,
+        ps.code as stageCode, ps.name as stageName, ps.commercialOutcome as stageCommercialOutcome, ps.isTerminal as stageIsTerminal
+      FROM projects p
+      LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
+      LEFT JOIN customers c ON c.id = p.customerId
+      LEFT JOIN users u ON u.id = p.picId
+      ${projWhere.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
+    `;
+    const finalProjParams = [...projParams];
+
+    if (requestedRepId) {
+      activeProjSql += ` AND p.picId = ?`;
+      finalProjParams.push(requestedRepId);
+    }
+
+    const [scopedActiveProjects]: any = await pool.query(activeProjSql, finalProjParams);
+
+    // Active project evaluation against baselines
+    const projectVelocities: any[] = [];
+    let delayedProjectsCount = 0;
+    let normalProjectsCount = 0;
+    let fastProjectsCount = 0;
+    let unbaselinedProjectsCount = 0;
+
+    const todayTime = new Date(todayStr).getTime();
+
+    for (const p of scopedActiveProjects) {
+      const pStageMeta = (p.stageId && stageMap.get(p.stageId)) || (p.stageCode && stageMap.get(p.stageCode)) || null;
+      const outcome = pStageMeta?.commercialOutcome || p.stageCommercialOutcome || 'NONE';
+      const isTerminal = pStageMeta ? Boolean(pStageMeta.isTerminal) : Boolean(p.stageIsTerminal);
+
+      const isWon = outcome === 'WON';
+      const isLost = outcome === 'LOST';
+      const isCancelled = outcome === 'CANCELLED';
+
+      // Only evaluate open/active projects
+      if (isWon || isLost || isCancelled || isTerminal) continue;
+
+      const pHistList = historiesByProject[p.id] || [];
+      const enterTime = pHistList.length > 0
+        ? new Date(pHistList[pHistList.length - 1].changedAt).getTime()
+        : (p.createdAt ? new Date(p.createdAt).getTime() : todayTime);
+
+      const daysInStage = Math.max(0, Math.round((todayTime - enterTime) / (1000 * 60 * 60 * 24)));
+      const baseline = pStageMeta ? baselines[pStageMeta.id] : null;
+
+      let velocityStatus: 'FAST' | 'NORMAL' | 'DELAYED' | 'UNBASELINED' = 'UNBASELINED';
+      let delayDays = 0;
+
+      if (baseline && baseline.hasBaseline && baseline.p75Days !== null) {
+        if (daysInStage > baseline.p75Days) {
+          velocityStatus = 'DELAYED';
+          delayDays = daysInStage - baseline.p75Days;
+          delayedProjectsCount++;
+        } else if (baseline.medianDays !== null && daysInStage < Math.round(baseline.medianDays * 0.5)) {
+          velocityStatus = 'FAST';
+          fastProjectsCount++;
+        } else {
+          velocityStatus = 'NORMAL';
+          normalProjectsCount++;
+        }
+      } else {
+        unbaselinedProjectsCount++;
+      }
+
+      projectVelocities.push({
+        projectId: p.id,
+        title: p.title,
+        customerId: p.customerId,
+        customerName: p.customerName,
+        picId: p.picId,
+        picName: p.picName,
+        stageId: p.stageId,
+        stageName: pStageMeta?.name || p.stageName || p.stageCode || p.stageId,
+        stageCode: pStageMeta?.code || p.stageCode,
+        daysInStage,
+        expectedDays: baseline?.medianDays ?? null,
+        p75ThresholdDays: baseline?.p75Days ?? null,
+        velocityStatus,
+        delayDays,
+        value: Number(p.value) || 0,
+        probability: p.probability !== null ? Number(p.probability) : (pStageMeta?.probability ?? null)
+      });
+    }
+
+    res.json({
+      evaluatedAt,
+      businessDate: todayStr,
+      scope: effectiveScope,
+      baselineScope: 'ORGANIZATION',
+      comparisonPolicyConfigured: true,
+      comparisonMinimumSampleSize: 1,
+      baselines,
+      baselinesList: Object.values(baselines),
+      summary: {
+        evaluatedProjects: projectVelocities.length,
+        delayedProjects: delayedProjectsCount,
+        normalProjects: normalProjectsCount,
+        fastProjects: fastProjectsCount,
+        unbaselinedProjects: unbaselinedProjectsCount,
+        totalStageIntervalsAnalyzed: totalStageIntervals,
+        validStageIntervals,
+        invalidIntervalsExcluded
+      },
+      projectVelocities
+    });
+  } catch (err: any) {
+    console.error('Error GET /api/sales/pipeline-velocity:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  }
+});
+
+

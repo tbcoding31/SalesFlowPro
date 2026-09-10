@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { pool } from '../db';
 import { validateTargetTenant, buildReportScopeWhere } from '../utils/scope';
 import { getBusinessDate } from '../utils/date';
+import { salesRoutes } from './sales.routes';
 
 export const reportsRoutes = Router();
 
@@ -543,3 +544,17 @@ reportsRoutes.get('/performance', async (req: any, res: any) => {
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+
+// ─────────────────────────────────────────────────────────────
+// Compatibility Aliases: Forward /api/reports/pipeline* to salesRoutes
+// ─────────────────────────────────────────────────────────────
+reportsRoutes.get('/pipeline', (req, res, next) => {
+  req.url = '/pipeline' + (req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '');
+  salesRoutes(req, res, next);
+});
+
+reportsRoutes.get('/pipeline-velocity', (req, res, next) => {
+  req.url = '/pipeline-velocity' + (req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '');
+  salesRoutes(req, res, next);
+});
+

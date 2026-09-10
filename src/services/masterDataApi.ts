@@ -1,4 +1,5 @@
 import { MasterDataItem } from '../types';
+import { isColorValue } from '../components/master-data/MasterDataIndicator';
 
 const API_BASE = '/api';
 
@@ -9,12 +10,18 @@ export const getTableName = (category: MasterDataItem['category']): string => {
 };
 
 const mapFromDb = (category: MasterDataItem['category'], row: any): MasterDataItem => {
+  const icon = row.icon || undefined;
+  const color = row.color || undefined;
   return {
     id: row.id,
     category,
     label: row.name || row.label || '',
     codeValue: row.code || row.id || '',
-    indicator: row.color || row.icon || '',
+    indicator: icon || color || '',
+    icon,
+    color,
+    description: row.description || undefined,
+    level: row.level !== undefined ? Number(row.level) : undefined,
     isDefault: !!row.isDefault,
     displayOrder: row.displayOrder || row.level || 0,
     probability: row.probability !== undefined ? Number(row.probability) : undefined,
@@ -38,17 +45,37 @@ const mapToDb = (category: MasterDataItem['category'], item: MasterDataItem, ten
     displayOrder: item.displayOrder || 1,
   };
 
+  // Derive separated color and icon without cross-pollination
+  const resolvedColor = item.color || (isColorValue(item.indicator) ? item.indicator : null);
+  const resolvedIcon = item.icon || (!isColorValue(item.indicator) ? item.indicator : null);
+
   switch (category) {
     case 'task_types':
-      return { ...base, icon: item.indicator, color: item.indicator };
+      return {
+        ...base,
+        icon: resolvedIcon || null,
+        color: resolvedColor || null
+      };
     case 'task_priorities':
-      return { ...base, color: item.indicator, isDefault: item.isDefault ? 1 : 0 };
+      return {
+        ...base,
+        color: resolvedColor || null,
+        isDefault: item.isDefault ? 1 : 0
+      };
     case 'task_statuses':
     case 'customer_status':
     case 'customer_statuses':
-      return { ...base, color: item.indicator };
-    case 'customer_types':
+    case 'visit_statuses':
+      return {
+        ...base,
+        color: resolvedColor || null
+      };
     case 'visit_purposes':
+      return {
+        ...base,
+        description: item.description || null
+      };
+    case 'customer_types':
       return { ...base };
     case 'project_stages':
       return {
@@ -63,9 +90,22 @@ const mapToDb = (category: MasterDataItem['category'], item: MasterDataItem, ten
         isActive: item.isActive !== undefined ? (item.isActive ? 1 : 0) : 1
       };
     case 'departments':
-      return { id: item.id, tenantId: tenantId === 'platform' ? null : tenantId, name: item.label, description: item.codeValue };
+      return {
+        id: item.id,
+        tenantId: tenantId === 'platform' ? null : tenantId,
+        name: item.label,
+        description: item.description || item.codeValue || null,
+        isActive: item.isActive !== undefined ? (item.isActive ? 1 : 0) : 1,
+        displayOrder: item.displayOrder || 0
+      };
     case 'positions':
-      return { id: item.id, tenantId: tenantId === 'platform' ? null : tenantId, name: item.label, level: item.displayOrder };
+      return {
+        id: item.id,
+        tenantId: tenantId === 'platform' ? null : tenantId,
+        name: item.label,
+        level: item.level !== undefined ? item.level : (item.displayOrder || 1),
+        isActive: item.isActive !== undefined ? (item.isActive ? 1 : 0) : 1
+      };
     default:
       return base;
   }

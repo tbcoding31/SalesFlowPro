@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { masterDataApi } from '../../services/masterDataApi';
 import { MasterDataItem } from '../../types';
+import { MasterDataIndicator, isColorValue } from '../../components/master-data/MasterDataIndicator';
 
 const TYPE_B_CATEGORIES: string[] = [
   'project_stages',
@@ -33,6 +34,10 @@ export const MasterDataPage: React.FC = () => {
   const [label, setLabel] = useState('');
   const [codeValue, setCodeValue] = useState('');
   const [indicator, setIndicator] = useState('flag');
+  const [icon, setIcon] = useState('');
+  const [color, setColor] = useState('#6366F1');
+  const [description, setDescription] = useState('');
+  const [level, setLevel] = useState<number>(1);
   const [isDefault, setIsDefault] = useState(false);
   const [probability, setProbability] = useState<number>(50);
   const [phase, setPhase] = useState<'SALES' | 'DELIVERY' | 'POST_LIVE' | 'CLOSED'>('SALES');
@@ -121,7 +126,17 @@ export const MasterDataPage: React.FC = () => {
     setEditingItem(null);
     setLabel('');
     setCodeValue('');
-    setIndicator('flag');
+    setIndicator('');
+    setIcon(selectedCategory === 'task_types' ? 'task' : '');
+    setColor(
+      selectedCategory === 'task_priorities' ? '#EF4444' :
+      selectedCategory === 'task_statuses' ? '#3B82F6' :
+      selectedCategory === 'customer_status' ? '#10B981' :
+      selectedCategory === 'visit_statuses' ? '#3B82F6' :
+      '#6366F1'
+    );
+    setDescription('');
+    setLevel(1);
     setIsDefault(false);
     setProbability(50);
     setPhase('SALES');
@@ -138,6 +153,10 @@ export const MasterDataPage: React.FC = () => {
     setLabel(item.label);
     setCodeValue(item.codeValue);
     setIndicator(item.indicator || '');
+    setIcon(item.icon || (!isColorValue(item.indicator) ? item.indicator || '' : ''));
+    setColor(item.color || (isColorValue(item.indicator) ? item.indicator || '#6366F1' : '#6366F1'));
+    setDescription(item.description || item.codeValue || '');
+    setLevel(item.level !== undefined ? item.level : 1);
     setIsDefault(!!item.isDefault);
     setProbability(item.probability !== undefined ? item.probability : 50);
     setPhase(item.phase || 'SALES');
@@ -159,15 +178,22 @@ export const MasterDataPage: React.FC = () => {
       }
     }
 
+    const isColorCategory = ['task_priorities', 'task_statuses', 'customer_status', 'customer_statuses', 'visit_statuses'].includes(selectedCategory);
+    const isIconAndColorCategory = selectedCategory === 'task_types';
+
     const isNew = !editingItem;
     const itemToSave: MasterDataItem = {
       id: editingItem ? editingItem.id : (selectedCategory === 'project_stages' ? `PS-${Date.now().toString().slice(-4)}` : `MD-${Date.now().toString().slice(-4)}`),
       category: selectedCategory as MasterDataItem['category'],
       label,
       codeValue,
-      indicator,
+      indicator: isIconAndColorCategory ? (icon || color) : isColorCategory ? color : undefined,
+      icon: isIconAndColorCategory ? (icon || undefined) : undefined,
+      color: (isColorCategory || isIconAndColorCategory) ? (color || undefined) : undefined,
+      description: ['departments', 'visit_purposes'].includes(selectedCategory) ? description : undefined,
+      level: selectedCategory === 'positions' ? level : undefined,
       isDefault,
-      displayOrder: editingItem ? editingItem.displayOrder : items.length + 1,
+      displayOrder: editingItem ? editingItem.displayOrder : (selectedCategory === 'positions' ? level : items.length + 1),
       probability: selectedCategory === 'project_stages' ? probability : undefined,
       phase: selectedCategory === 'project_stages' ? phase : undefined,
       commercialOutcome: selectedCategory === 'project_stages' ? commercialOutcome : undefined,
@@ -576,11 +602,7 @@ export const MasterDataPage: React.FC = () => {
                             ) : (
                               <>
                                 <td className="px-4 py-3">
-                                  {item.indicator && (
-                                    <span className="material-symbols-outlined text-[18px] text-[#4744e5]">
-                                      {item.indicator}
-                                    </span>
-                                  )}
+                                  <MasterDataIndicator item={item} />
                                 </td>
                                 <td className="px-4 py-3">
                                   {item.isDefault ? (
@@ -814,29 +836,133 @@ export const MasterDataPage: React.FC = () => {
                 </>
               ) : (
                 <>
-                  <div>
-                    <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Icon Identifier</label>
-                    <input
-                      type="text"
-                      value={indicator}
-                      onChange={(e) => setIndicator(e.target.value)}
-                      placeholder="e.g. flag, priority_high, star"
-                      className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded text-xs"
-                    />
-                  </div>
+                  {/* Category-Specific Visual / Model Inputs */}
+                  {selectedCategory === 'task_types' && (
+                    <>
+                      <div>
+                        <label className="block text-xs font-bold text-[#1a1c1c] mb-1">
+                          Material Icon Identifier
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={icon}
+                            onChange={(e) => {
+                              setIcon(e.target.value);
+                              setIndicator(e.target.value || color);
+                            }}
+                            placeholder="e.g. task, note, admin_panel_settings"
+                            className="flex-1 px-3 py-1.5 border border-[#E1E1E1] rounded text-xs"
+                          />
+                          {icon && (
+                            <div className="w-8 h-8 rounded border border-slate-200 flex items-center justify-center bg-slate-50 shrink-0">
+                              <span className="material-symbols-outlined text-[18px]" style={{ color }}>
+                                {icon}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
 
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="def"
-                      checked={isDefault}
-                      onChange={(e) => setIsDefault(e.target.checked)}
-                      className="w-4 h-4 rounded text-[#4744e5]"
-                    />
-                    <label htmlFor="def" className="text-xs text-[#1a1c1c] font-semibold">
-                      Set as Default Selection Option
-                    </label>
-                  </div>
+                      <div>
+                        <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Theme Color (HEX)</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="color"
+                            value={color && color.startsWith('#') ? color : '#6366F1'}
+                            onChange={(e) => {
+                              setColor(e.target.value);
+                              if (!icon) setIndicator(e.target.value);
+                            }}
+                            className="w-8 h-8 p-0.5 border border-[#E1E1E1] rounded cursor-pointer shrink-0"
+                          />
+                          <input
+                            type="text"
+                            value={color}
+                            onChange={(e) => {
+                              setColor(e.target.value);
+                              if (!icon) setIndicator(e.target.value);
+                            }}
+                            placeholder="#6366F1"
+                            className="flex-1 px-3 py-1.5 border border-[#E1E1E1] rounded text-xs font-mono"
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {['task_priorities', 'task_statuses', 'customer_status', 'customer_statuses', 'visit_statuses'].includes(selectedCategory) && (
+                    <div>
+                      <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Badge Color (HEX)</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={color && color.startsWith('#') ? color : '#6366F1'}
+                          onChange={(e) => {
+                            setColor(e.target.value);
+                            setIndicator(e.target.value);
+                          }}
+                          className="w-8 h-8 p-0.5 border border-[#E1E1E1] rounded cursor-pointer shrink-0"
+                        />
+                        <input
+                          type="text"
+                          value={color}
+                          onChange={(e) => {
+                            setColor(e.target.value);
+                            setIndicator(e.target.value);
+                          }}
+                          placeholder="#EF4444"
+                          className="flex-1 px-3 py-1.5 border border-[#E1E1E1] rounded text-xs font-mono"
+                        />
+                        <span
+                          className="w-6 h-6 rounded-full border border-black/15 shrink-0"
+                          style={{ backgroundColor: color }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {['departments', 'visit_purposes'].includes(selectedCategory) && (
+                    <div>
+                      <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Description</label>
+                      <textarea
+                        value={description}
+                        onChange={(e) => setDescription(e.target.value)}
+                        placeholder="Provide details or operational scope"
+                        rows={2}
+                        className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded text-xs resize-none"
+                      />
+                    </div>
+                  )}
+
+                  {selectedCategory === 'positions' && (
+                    <div>
+                      <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Hierarchy Level (1-10)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="10"
+                        value={level}
+                        onChange={(e) => setLevel(parseInt(e.target.value, 10) || 1)}
+                        className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded text-xs"
+                      />
+                    </div>
+                  )}
+
+                  {selectedCategory === 'task_priorities' && (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="def"
+                        checked={isDefault}
+                        onChange={(e) => setIsDefault(e.target.checked)}
+                        className="w-4 h-4 rounded text-[#4744e5]"
+                      />
+                      <label htmlFor="def" className="text-xs text-[#1a1c1c] font-semibold">
+                        Set as Default Selection Option
+                      </label>
+                    </div>
+                  )}
 
                   <div className="flex items-center gap-2">
                     <input
