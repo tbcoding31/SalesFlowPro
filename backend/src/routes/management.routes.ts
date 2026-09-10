@@ -184,8 +184,8 @@ managementRoutes.get('/control-tower', async (req, res) => {
     const validTenantUserIds = new Set(activeUsersRows.map((u: any) => u.userId));
 
     // Helpers for tenant master status evaluation
-    const isTaskTerminal = (t: any) => t.statusIsTerminal === 1 || t.statusCode === 'COMPLETED' || t.statusCode === 'CANCELLED' || t.statusCode === 'TSK_COMPLETED' || t.statusCode === 'TSK_CANCELLED' || t.statusId === 'COMPLETED' || t.statusId === 'CANCELLED';
-    const isVisitTerminal = (v: any) => v.statusIsTerminal === 1 || v.statusCode === 'COMPLETED' || v.statusCode === 'CANCELLED' || v.statusId === 'COMPLETED' || v.statusId === 'CANCELLED';
+    const isTaskTerminal = (t: any) => t.statusIsTerminal === 1 || t.statusCode === 'COMPLETED' || t.statusCode === 'CANCELLED' || t.statusCode === 'TSK_COMPLETED' || t.statusCode === 'TSK_CANCELLED';
+    const isVisitTerminal = (v: any) => v.statusIsTerminal === 1 || v.statusCode === 'COMPLETED' || v.statusCode === 'CANCELLED';
     const isFuTerminal = (f: any) => f.status === 'COMPLETED' || f.status === 'CANCELLED';
 
     // 9. Evaluate Operational Attention Signals across scoped Projects
@@ -373,8 +373,8 @@ managementRoutes.get('/control-tower', async (req, res) => {
 
     filteredTasks.forEach((t: any) => {
       const d = getBusinessDate(t.dueDate);
-      const isTaskDone = t.statusCode === 'COMPLETED' || t.statusIsTerminal === 1 || t.statusId === 'COMPLETED';
-      const isTaskCancel = t.statusCode === 'CANCELLED' || t.statusId === 'CANCELLED';
+      const isTaskDone = t.statusCode === 'COMPLETED' || t.statusCode === 'TSK_COMPLETED' || t.statusIsTerminal === 1;
+      const isTaskCancel = t.statusCode === 'CANCELLED' || t.statusCode === 'TSK_CANCELLED';
       const isTaskOpen = !isTaskDone && !isTaskCancel;
 
       if (d === todayStr && isTaskOpen) {
@@ -391,8 +391,8 @@ managementRoutes.get('/control-tower', async (req, res) => {
 
     filteredVisits.forEach((v: any) => {
       const d = getBusinessDate(v.visitDate);
-      const isVisitDone = v.statusCode === 'COMPLETED' || v.statusIsTerminal === 1 || v.statusId === 'COMPLETED';
-      const isVisitCancel = v.statusCode === 'CANCELLED' || v.statusId === 'CANCELLED';
+      const isVisitDone = v.statusCode === 'COMPLETED' || v.statusIsTerminal === 1;
+      const isVisitCancel = v.statusCode === 'CANCELLED';
       const isVisitOpen = !isVisitDone && !isVisitCancel;
 
       if (d === todayStr && isVisitOpen) {
@@ -425,7 +425,7 @@ managementRoutes.get('/control-tower', async (req, res) => {
     const repWorkloads: any[] = [];
     const openProjectsByRep: Record<string, number> = {};
     filteredProjects.forEach((p: any) => {
-      const isClosed = p.stageCommercialOutcome === 'WON' || p.stageCommercialOutcome === 'LOST' || p.stageCommercialOutcome === 'CANCELLED' || p.stageIsTerminal === 1 || p.stageId === 'WON' || p.stageId === 'LOST';
+      const isClosed = p.stageCommercialOutcome === 'WON' || p.stageCommercialOutcome === 'LOST' || p.stageCommercialOutcome === 'CANCELLED' || p.stageIsTerminal === 1;
       if (!isClosed && p.picId) {
         openProjectsByRep[p.picId] = (openProjectsByRep[p.picId] || 0) + 1;
       }

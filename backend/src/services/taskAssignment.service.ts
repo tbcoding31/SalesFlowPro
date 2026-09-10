@@ -67,7 +67,7 @@ export async function syncProjectAssignmentTasks(
   let activeTaskFound = false;
 
   for (const task of existingTasks) {
-    const isCompleted = tntDefaults.completedStatusIds.has(task.statusId) || task.statusId === 'COMPLETED';
+    const isCompleted = tntDefaults.completedStatusIds.has(task.statusId);
     if (isCompleted) {
       // Completed historical tasks are preserved untouched
       continue;
@@ -77,7 +77,7 @@ export async function syncProjectAssignmentTasks(
       if (!activeTaskFound) {
         // Active assignment for current PIC -> sync metadata and ensure active
         const expectedTitle = `Project Assignment — ${project.title || 'Project'}`;
-        const isCancelled = tntDefaults.cancelledStatusIds.has(task.statusId) || task.statusId === 'CANCELLED';
+        const isCancelled = tntDefaults.cancelledStatusIds.has(task.statusId);
         await conn.query(
           `UPDATE tasks 
            SET title = ?, customerId = ?, dueDate = ?, statusId = ?, updatedAt = NOW()
@@ -100,7 +100,7 @@ export async function syncProjectAssignmentTasks(
       }
     } else {
       // Task belongs to previous PIC or PIC was removed -> cancel unfinished task
-      const isCancelled = tntDefaults.cancelledStatusIds.has(task.statusId) || task.statusId === 'CANCELLED';
+      const isCancelled = tntDefaults.cancelledStatusIds.has(task.statusId);
       if (!isCancelled) {
         await conn.query(
           `UPDATE tasks SET statusId = ?, updatedAt = NOW() WHERE id = ?`,
@@ -164,7 +164,7 @@ export async function syncVisitAssignmentTasks(
     'SELECT code, isTerminal FROM visit_statuses WHERE id = ? AND tenantId = ?',
     [visit.statusId, tenantId]
   );
-  const isVisitCancelled = (vStatusRows.length > 0 && vStatusRows[0].code === 'CANCELLED') || visit.statusId === 'CANCELLED';
+  const isVisitCancelled = vStatusRows.length > 0 && (vStatusRows[0].code === 'CANCELLED' || (vStatusRows[0].isTerminal === 1 && vStatusRows[0].code !== 'COMPLETED'));
 
   const tntDefaults = await resolveTenantTaskDefaults(conn, tenantId);
 
@@ -176,7 +176,7 @@ export async function syncVisitAssignmentTasks(
        SET t.statusId = ?, t.updatedAt = NOW()
        WHERE t.tenantId = ? AND t.relatedVisitId = ? AND t.sourceType = ? 
          AND COALESCE(ts.isTerminal, 0) = 0
-         AND COALESCE(ts.code, t.statusId) NOT IN ('COMPLETED', 'CANCELLED', 'TSK_COMPLETED', 'TSK_CANCELLED')`,
+         AND (ts.code NOT IN ('COMPLETED', 'CANCELLED', 'TSK_COMPLETED', 'TSK_CANCELLED') OR ts.code IS NULL)`,
       [tntDefaults.cancelledStatus, tenantId, visitId, TASK_SOURCE_TYPE.VISIT_ASSIGNMENT]
     );
     return;
@@ -209,7 +209,7 @@ export async function syncVisitAssignmentTasks(
   const taskTitle = `Visit Assignment — ${visit.title || 'Client Visit'}`;
 
   for (const task of existingTasks) {
-    const isCompleted = tntDefaults.completedStatusIds.has(task.statusId) || task.statusId === 'COMPLETED';
+    const isCompleted = tntDefaults.completedStatusIds.has(task.statusId);
     if (isCompleted) {
       continue;
     }
@@ -217,7 +217,7 @@ export async function syncVisitAssignmentTasks(
     if (desiredAssigneeIds.has(task.picId)) {
       if (!activeAssigneeSet.has(task.picId)) {
         // Active assignment task for this assignee -> sync metadata
-        const isCancelled = tntDefaults.cancelledStatusIds.has(task.statusId) || task.statusId === 'CANCELLED';
+        const isCancelled = tntDefaults.cancelledStatusIds.has(task.statusId);
         const nextStatus = isCancelled ? tntDefaults.todoStatus : task.statusId;
 
         await conn.query(
@@ -243,7 +243,7 @@ export async function syncVisitAssignmentTasks(
       }
     } else {
       // User was unassigned from this visit -> cancel unfinished task
-      const isCancelled = tntDefaults.cancelledStatusIds.has(task.statusId) || task.statusId === 'CANCELLED';
+      const isCancelled = tntDefaults.cancelledStatusIds.has(task.statusId);
       if (!isCancelled) {
         await conn.query(
           `UPDATE tasks SET statusId = ?, updatedAt = NOW() WHERE id = ?`,

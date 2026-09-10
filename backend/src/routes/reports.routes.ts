@@ -171,10 +171,10 @@ reportsRoutes.get('/tasks', async (req: any, res: any) => {
     const priorityMap: Record<string, { value: number; color: string }> = {};
 
     const tableData = tasks.map((t: any) => {
-      const isDone = t.statusCode === 'COMPLETED' || t.statusCode === 'TSK_COMPLETED' || t.isTerminal === 1 || t.statusId === 'COMPLETED';
+      const isDone = t.statusCode === 'COMPLETED' || t.statusCode === 'TSK_COMPLETED' || t.isTerminal === 1;
       const dueStr = t.dueDate ? getBusinessDate(t.dueDate) : null;
       const isOver = !isDone && dueStr && dueStr < todayStr;
-      const isInProg = t.statusCode === 'IN_PROGRESS' || t.statusCode === 'TSK_INPROGRESS' || t.statusId === 'IN_PROGRESS';
+      const isInProg = t.statusCode === 'IN_PROGRESS' || t.statusCode === 'TSK_INPROGRESS';
 
       if (isDone) completed++;
       else if (isOver) overdue++;

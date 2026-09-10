@@ -1096,9 +1096,9 @@ visitsRoutes.get('/:id/tasks', async (req: any, res: any) => {
         COALESCE(ts.name, t.statusId) as statusName,
         ts.color as statusColor,
         CASE 
-          WHEN ts.code IN ('COMPLETED', 'TSK_COMPLETED') OR ts.isTerminal = 1 OR t.statusId IN ('COMPLETED', 'TSK_COMPLETED') THEN 'COMPLETED'
-          WHEN ts.code IN ('CANCELLED', 'TSK_CANCELLED') OR t.statusId IN ('CANCELLED', 'TSK_CANCELLED') THEN 'CANCELLED'
-          WHEN ts.code IN ('IN_PROGRESS', 'TSK_INPROGRESS') OR t.statusId IN ('IN_PROGRESS', 'TSK_INPROGRESS') THEN 'IN_PROGRESS'
+          WHEN ts.code IN ('COMPLETED', 'TSK_COMPLETED') OR ts.isTerminal = 1 THEN 'COMPLETED'
+          WHEN ts.code IN ('CANCELLED', 'TSK_CANCELLED') THEN 'CANCELLED'
+          WHEN ts.code IN ('IN_PROGRESS', 'TSK_INPROGRESS') THEN 'IN_PROGRESS'
           ELSE 'TODO'
         END as status,
         COALESCE(tp.id, t.priorityId) as priorityId,
@@ -1106,11 +1106,11 @@ visitsRoutes.get('/:id/tasks', async (req: any, res: any) => {
         COALESCE(tp.name, t.priorityId) as priorityName,
         tp.color as priorityColor,
         CASE
-          WHEN tp.code IN ('URGENT', 'PRI_URGENT') OR t.priorityId IN ('URGENT', 'PRI_URGENT') THEN 'URGENT'
-          WHEN tp.code IN ('HIGH', 'PRI_HIGH') OR t.priorityId IN ('HIGH', 'PRI_HIGH') THEN 'HIGH'
-          WHEN tp.code IN ('LOW', 'PRI_LOW') OR t.priorityId IN ('LOW', 'PRI_LOW') THEN 'LOW'
-          WHEN tp.code IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') OR t.priorityId IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') THEN 'MEDIUM'
-          ELSE COALESCE(tp.code, t.priorityId, 'MEDIUM')
+          WHEN tp.code IN ('URGENT', 'PRI_URGENT') THEN 'URGENT'
+          WHEN tp.code IN ('HIGH', 'PRI_HIGH') THEN 'HIGH'
+          WHEN tp.code IN ('LOW', 'PRI_LOW') THEN 'LOW'
+          WHEN tp.code IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') THEN 'MEDIUM'
+          ELSE COALESCE(tp.code, 'MEDIUM')
         END as priority,
         t.picId,
         COALESCE(u.name, 'Unassigned') as picName,

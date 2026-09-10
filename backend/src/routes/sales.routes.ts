@@ -89,8 +89,8 @@ salesRoutes.get('/agenda', async (req, res) => {
 
     // Process Tasks
     taskRows.forEach((t: any) => {
-      const isCompleted = t.statusCode === 'COMPLETED' || t.statusCode === 'TSK_COMPLETED' || (t.statusIsTerminal === 1 && t.statusCode !== 'CANCELLED' && t.statusCode !== 'TSK_CANCELLED') || t.status === 'COMPLETED';
-      const isCancelled = t.statusCode === 'CANCELLED' || t.statusCode === 'TSK_CANCELLED' || t.status === 'CANCELLED';
+      const isCompleted = t.statusCode === 'COMPLETED' || t.statusCode === 'TSK_COMPLETED' || (t.statusIsTerminal === 1 && t.statusCode !== 'CANCELLED' && t.statusCode !== 'TSK_CANCELLED');
+      const isCancelled = t.statusCode === 'CANCELLED' || t.statusCode === 'TSK_CANCELLED';
       const isTerminal = isCompleted || isCancelled || t.statusIsTerminal === 1;
       const actionDate = toLocalDateStr(t.dueDate);
       const completedDate = toLocalDateStr(t.completedAt);
@@ -132,8 +132,8 @@ salesRoutes.get('/agenda', async (req, res) => {
 
     // Process Visits
     visitRows.forEach((v: any) => {
-      const isCompleted = v.statusCode === 'COMPLETED' || (v.statusIsTerminal === 1 && v.statusCode !== 'CANCELLED') || v.status === 'COMPLETED';
-      const isCancelled = v.statusCode === 'CANCELLED' || v.status === 'CANCELLED';
+      const isCompleted = v.statusCode === 'COMPLETED' || (v.statusIsTerminal === 1 && v.statusCode !== 'CANCELLED');
+      const isCancelled = v.statusCode === 'CANCELLED';
       const isTerminal = isCompleted || isCancelled || v.statusIsTerminal === 1;
       const actionDate = toLocalDateStr(v.visitDate);
       const completedDate = toLocalDateStr(v.completedAt);
@@ -348,7 +348,7 @@ salesRoutes.get('/attention', async (req, res) => {
       LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
       ${taskWhere.replace(/WHERE tenantId/g, 'WHERE t.tenantId')}
       AND COALESCE(ts.isTerminal, 0) = 0
-      AND COALESCE(ts.code, t.statusId) NOT IN ('COMPLETED', 'CANCELLED', 'TSK_COMPLETED', 'TSK_CANCELLED')
+      AND (ts.code NOT IN ('COMPLETED', 'CANCELLED', 'TSK_COMPLETED', 'TSK_CANCELLED') OR ts.code IS NULL)
       AND t.dueDate < ?
       UNION ALL
       SELECT 'VISIT' as opType, v.id, v.customerId, v.relatedProjectId as projectId, v.visitDate as actionDate, v.picId
@@ -356,7 +356,7 @@ salesRoutes.get('/attention', async (req, res) => {
       LEFT JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
       ${visitWhere.replace(/WHERE tenantId/g, 'WHERE v.tenantId')}
       AND COALESCE(vs.isTerminal, 0) = 0
-      AND COALESCE(vs.code, v.statusId) NOT IN ('COMPLETED', 'CANCELLED')
+      AND (vs.code NOT IN ('COMPLETED', 'CANCELLED') OR vs.code IS NULL)
       AND v.visitDate < ?
       UNION ALL
       SELECT 'FOLLOW_UP' as opType, f.id, f.customerId, f.relatedProjectId as projectId, f.followUpDate as actionDate, f.picId
@@ -389,7 +389,7 @@ salesRoutes.get('/attention', async (req, res) => {
       LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
       WHERE t.tenantId = ? 
         AND COALESCE(ts.isTerminal, 0) = 0
-        AND COALESCE(ts.code, t.statusId) NOT IN ('COMPLETED', 'CANCELLED', 'TSK_COMPLETED', 'TSK_CANCELLED')
+        AND (ts.code NOT IN ('COMPLETED', 'CANCELLED', 'TSK_COMPLETED', 'TSK_CANCELLED') OR ts.code IS NULL)
         AND t.relatedProjectId IS NOT NULL
       UNION ALL
       SELECT v.relatedProjectId as projectId 
@@ -397,7 +397,7 @@ salesRoutes.get('/attention', async (req, res) => {
       LEFT JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
       WHERE v.tenantId = ? 
         AND COALESCE(vs.isTerminal, 0) = 0
-        AND COALESCE(vs.code, v.statusId) NOT IN ('COMPLETED', 'CANCELLED')
+        AND (vs.code NOT IN ('COMPLETED', 'CANCELLED') OR vs.code IS NULL)
         AND v.relatedProjectId IS NOT NULL
       UNION ALL
       SELECT relatedProjectId as projectId FROM follow_ups WHERE tenantId = ? AND status NOT IN ('COMPLETED', 'CANCELLED') AND relatedProjectId IS NOT NULL
@@ -438,8 +438,8 @@ salesRoutes.get('/attention', async (req, res) => {
 
     for (const proj of projRows) {
       const pSignals: any[] = [];
-      const isWon = proj.stageCommercialOutcome === 'WON' || proj.stageId === 'WON';
-      const isLost = proj.stageCommercialOutcome === 'LOST' || proj.stageCommercialOutcome === 'CANCELLED' || proj.stageId === 'LOST';
+      const isWon = proj.stageCommercialOutcome === 'WON';
+      const isLost = proj.stageCommercialOutcome === 'LOST' || proj.stageCommercialOutcome === 'CANCELLED';
       const isOpen = !isWon && !isLost;
 
       if (isOpen || isWon) {
@@ -547,7 +547,7 @@ salesRoutes.get('/attention', async (req, res) => {
     const customerAttentionList: any[] = [];
     for (const cust of custRows) {
       const cSignals: any[] = [];
-      const isInactive = cust.statusCode === 'INACTIVE' || cust.statusId === 'INACTIVE' || cust.status === 'INACTIVE';
+      const isInactive = cust.statusCode === 'INACTIVE';
       const custOverdue = overdueByCustomer[cust.id] || [];
 
       // Customer PIC Check (Suppressed for INACTIVE customers with zero overdue/open work)

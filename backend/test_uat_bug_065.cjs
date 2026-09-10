@@ -1,8 +1,11 @@
+const fs = require('fs');
+const path = require('path');
 const http = require('http');
 const { pool } = require('./dist/db.js');
 const { app } = require('./dist/server.js');
 const { resolveTenantTaskDefaults } = require('./dist/services/taskAssignment.service.js');
 const { evaluateTenantAccess } = require('./dist/utils/scope.js');
+const { resolveLegacySemanticStatus } = require('./dist/utils/legacyCompatibility.js');
 
 async function runRegressionSuite() {
   let passed = 0;
@@ -544,6 +547,71 @@ async function runRegressionSuite() {
     assert(healthRes.status === 200 && healthText === 'OK',
       'HEALTH-01', `/api/health responds HTTP 200 without Authorization header: "${healthText}"`);
 
+    // =========================================================================
+    // TEST 15: ZERO CATEGORY 1 RUNTIME AUTHORITY RESIDUALS & LEGACY HELPER
+    // =========================================================================
+    console.log('\n--- TEST 15: ZERO CATEGORY 1 RUNTIME AUTHORITY RESIDUALS & LEGACY HELPER ---');
+    
+    // A. Verify legacy compatibility helper
+    const legTaskRes = resolveLegacySemanticStatus('COMPLETED', 'TASK');
+    assert(legTaskRes.isResolved && legTaskRes.semanticCode === 'COMPLETED' && legTaskRes.isTerminal,
+      'LEGACY-COMPAT-01', 'resolveLegacySemanticStatus maps COMPLETED to semantic code and terminal flag');
+
+    const legUnknownRes = resolveLegacySemanticStatus('UNKNOWN_XYZ', 'TASK');
+    assert(!legUnknownRes.isResolved && legUnknownRes.semanticCode === null,
+      'LEGACY-COMPAT-02', 'resolveLegacySemanticStatus safely fails on unknown status');
+
+    // B. Static search of backend/src runtime files for Category 1 violations
+    const backendSrcDir = path.join(__dirname, 'src');
+    const forbiddenPatterns = [
+      { name: "statusId === 'COMPLETED'", regex: /\bstatusId\s*===\s*['"]COMPLETED['"]/i },
+      { name: "statusId === 'CANCELLED'", regex: /\bstatusId\s*===\s*['"]CANCELLED['"]/i },
+      { name: "stageId === 'WON'", regex: /\bstageId\s*===\s*['"]WON['"]/i },
+      { name: "stageId === 'LOST'", regex: /\bstageId\s*===\s*['"]LOST['"]/i },
+      { name: "statusId NOT IN ('COMPLETED', 'CANCELLED')", regex: /\bstatusId\s+NOT\s+IN\s*\(['"]COMPLETED['"],\s*['"]CANCELLED['"]\)/i },
+      { name: "stageId NOT IN ('WON', 'LOST')", regex: /\bstageId\s+NOT\s+IN\s*\(['"]WON['"],\s*['"]LOST['"]\)/i },
+      { name: "COALESCE(ts.code, t.statusId) NOT IN", regex: /COALESCE\s*\(\s*ts\.code\s*,\s*t\.statusId\s*\)\s*NOT\s*IN/i },
+      { name: "t.statusId IN ('COMPLETED'", regex: /t\.statusId\s+IN\s*\(['"]COMPLETED['"]/i }
+    ];
+
+    function getRuntimeFiles(dir) {
+      let files = [];
+      const list = fs.readdirSync(dir);
+      for (const item of list) {
+        const full = path.join(dir, item);
+        const stat = fs.statSync(full);
+        if (stat.isDirectory()) {
+          if (item !== 'migrations') {
+            files = files.concat(getRuntimeFiles(full));
+          }
+        } else if (full.endsWith('.ts') && !full.endsWith('seed-data.ts')) {
+          files.push(full);
+        }
+      }
+      return files;
+    }
+
+    const runtimeFiles = getRuntimeFiles(backendSrcDir);
+    const violations = [];
+
+    for (const f of runtimeFiles) {
+      const content = fs.readFileSync(f, 'utf8');
+      const lines = content.split('\n');
+      lines.forEach((line, lineIdx) => {
+        for (const pat of forbiddenPatterns) {
+          if (pat.regex.test(line)) {
+            violations.push(`${path.relative(backendSrcDir, f)}:${lineIdx + 1} matches ${pat.name}`);
+          }
+        }
+      });
+    }
+
+    assert(violations.length === 0,
+      'RUNTIME-SCAN-01', `Zero Category 1 runtime authority violations in runtime files (found: ${violations.length})`);
+    if (violations.length > 0) {
+      console.error('Violations found:', violations);
+    }
+
   } catch (err) {
     console.error('Unhandled test suite error:', err);
     failed++;
@@ -601,7 +669,34 @@ async function runRegressionSuite() {
         await pool.query('DELETE FROM auth_sessions WHERE token IN (?)', [cleanupSessions]);
       }
 
-      console.log('Cleanup completed successfully. Zero orphaned test records.');
+      // 6. POST-CLEANUP ORPHAN VERIFICATION
+      console.log('--- POST-CLEANUP ORPHAN VERIFICATION ---');
+      if (cleanupTasks.length > 0) {
+        const [remTasks] = await pool.query('SELECT id FROM tasks WHERE id IN (?)', [cleanupTasks]);
+        assert(remTasks.length === 0, 'CLEANUP-TASKS-VERIFY', `Verified 0 orphaned tasks in database`);
+      }
+      if (cleanupVisits.length > 0) {
+        const [remVisits] = await pool.query('SELECT id FROM visits WHERE id IN (?)', [cleanupVisits]);
+        assert(remVisits.length === 0, 'CLEANUP-VISITS-VERIFY', `Verified 0 orphaned visits in database`);
+      }
+      if (cleanupProjects.length > 0) {
+        const [remProjs] = await pool.query('SELECT id FROM projects WHERE id IN (?)', [cleanupProjects]);
+        assert(remProjs.length === 0, 'CLEANUP-PROJECTS-VERIFY', `Verified 0 orphaned projects in database`);
+      }
+      if (cleanupCustomers.length > 0) {
+        const [remCusts] = await pool.query('SELECT id FROM customers WHERE id IN (?)', [cleanupCustomers]);
+        assert(remCusts.length === 0, 'CLEANUP-CUSTOMERS-VERIFY', `Verified 0 orphaned customers in database`);
+      }
+      if (cleanupTenants.length > 0) {
+        const [remTenants] = await pool.query('SELECT id FROM tenants WHERE id IN (?)', [cleanupTenants]);
+        assert(remTenants.length === 0, 'CLEANUP-TENANTS-VERIFY', `Verified 0 orphaned tenants in database`);
+      }
+      if (cleanupSessions.length > 0) {
+        const [remSess] = await pool.query('SELECT id FROM auth_sessions WHERE token IN (?)', [cleanupSessions]);
+        assert(remSess.length === 0, 'CLEANUP-SESSIONS-VERIFY', `Verified 0 orphaned auth sessions in database`);
+      }
+
+      console.log('Cleanup completed and mathematically verified. Zero orphaned test records.');
     } catch (cleanErr) {
       console.error('Error during cleanup:', cleanErr);
     }

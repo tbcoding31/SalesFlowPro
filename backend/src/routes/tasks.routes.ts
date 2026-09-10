@@ -7,8 +7,8 @@ import { logAudit } from '../utils/audit';
 export const tasksRoutes = Router();
 
 const TASK_JOIN_CLAUSES = `
-  LEFT JOIN task_statuses ts ON (ts.id = t.statusId OR ts.code = t.statusId) AND ts.tenantId = t.tenantId
-  LEFT JOIN task_priorities tp ON (tp.id = t.priorityId OR tp.code = t.priorityId) AND tp.tenantId = t.tenantId
+  LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
+  LEFT JOIN task_priorities tp ON tp.id = t.priorityId AND tp.tenantId = t.tenantId
   LEFT JOIN users u ON u.id = t.picId
   LEFT JOIN customers c ON c.id = t.customerId
   LEFT JOIN projects p ON p.id = t.relatedProjectId
@@ -26,9 +26,9 @@ const TASK_SELECT_FIELDS = `
   COALESCE(ts.name, t.statusId) as statusName,
   ts.color as statusColor,
   CASE 
-    WHEN ts.code = 'COMPLETED' OR ts.isTerminal = 1 OR t.statusId IN ('COMPLETED', 'TSK_COMPLETED') THEN 'COMPLETED'
-    WHEN ts.code = 'IN_PROGRESS' OR t.statusId IN ('IN_PROGRESS', 'TSK_INPROGRESS') THEN 'IN_PROGRESS'
-    WHEN ts.code = 'CANCELLED' OR t.statusId IN ('CANCELLED', 'TSK_CANCELLED') THEN 'CANCELLED'
+    WHEN ts.code = 'COMPLETED' OR ts.code = 'TSK_COMPLETED' OR ts.isTerminal = 1 THEN 'COMPLETED'
+    WHEN ts.code = 'IN_PROGRESS' OR ts.code = 'TSK_INPROGRESS' THEN 'IN_PROGRESS'
+    WHEN ts.code = 'CANCELLED' OR ts.code = 'TSK_CANCELLED' THEN 'CANCELLED'
     ELSE 'TODO'
   END as status,
   COALESCE(tp.id, t.priorityId) as priorityId,
@@ -36,11 +36,11 @@ const TASK_SELECT_FIELDS = `
   COALESCE(tp.name, t.priorityId) as priorityName,
   tp.color as priorityColor,
   CASE
-    WHEN tp.code = 'URGENT' OR t.priorityId IN ('URGENT', 'PRI_URGENT') THEN 'URGENT'
-    WHEN tp.code = 'HIGH' OR t.priorityId IN ('HIGH', 'PRI_HIGH') THEN 'HIGH'
-    WHEN tp.code = 'LOW' OR t.priorityId IN ('LOW', 'PRI_LOW') THEN 'LOW'
-    WHEN tp.code = 'MEDIUM' OR t.priorityId IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') THEN 'MEDIUM'
-    ELSE COALESCE(tp.code, t.priorityId, 'MEDIUM')
+    WHEN tp.code = 'URGENT' OR tp.code = 'PRI_URGENT' THEN 'URGENT'
+    WHEN tp.code = 'HIGH' OR tp.code = 'PRI_HIGH' THEN 'HIGH'
+    WHEN tp.code = 'LOW' OR tp.code = 'PRI_LOW' THEN 'LOW'
+    WHEN tp.code = 'MEDIUM' OR tp.code = 'PRI_MEDIUM' OR tp.code = 'NORMAL' THEN 'MEDIUM'
+    ELSE COALESCE(tp.code, 'MEDIUM')
   END as priority,
   t.picId,
   COALESCE(u.name, 'Unassigned') as picName,
@@ -123,24 +123,24 @@ tasksRoutes.get('/', async (req: any, res: any) => {
 
     if (status && status !== 'ALL') {
       extraWhere += ` AND (
-        t.statusId = ? OR ts.code = ? OR ts.name = ? OR ts.id = ?
-        OR ( ? = 'COMPLETED' AND (ts.code = 'COMPLETED' OR ts.isTerminal = 1 OR t.statusId IN ('COMPLETED', 'TSK_COMPLETED')) )
-        OR ( ? = 'IN_PROGRESS' AND (ts.code = 'IN_PROGRESS' OR t.statusId IN ('IN_PROGRESS', 'TSK_INPROGRESS')) )
-        OR ( ? = 'CANCELLED' AND (ts.code = 'CANCELLED' OR t.statusId IN ('CANCELLED', 'TSK_CANCELLED')) )
-        OR ( ? IN ('TODO', 'OPEN', 'PENDING') AND (ts.code = 'TODO' OR t.statusId IN ('TODO', 'OPEN', 'PENDING', 'TSK_TODO')) )
+        t.statusId = ? OR ts.code = ? OR ts.name = ?
+        OR ( ? = 'COMPLETED' AND (ts.code IN ('COMPLETED', 'TSK_COMPLETED') OR ts.isTerminal = 1) )
+        OR ( ? = 'IN_PROGRESS' AND ts.code IN ('IN_PROGRESS', 'TSK_INPROGRESS') )
+        OR ( ? = 'CANCELLED' AND ts.code IN ('CANCELLED', 'TSK_CANCELLED') )
+        OR ( ? IN ('TODO', 'OPEN', 'PENDING') AND ts.code IN ('TODO', 'OPEN', 'PENDING', 'TSK_TODO') )
       )`;
-      extraParams.push(status, status, status, status, status, status, status, status);
+      extraParams.push(status, status, status, status, status, status, status);
     }
 
     if (priority && priority !== 'ALL') {
       extraWhere += ` AND (
-        t.priorityId = ? OR tp.code = ? OR tp.name = ? OR tp.id = ?
-        OR ( ? = 'URGENT' AND (tp.code = 'URGENT' OR t.priorityId IN ('URGENT', 'PRI_URGENT')) )
-        OR ( ? = 'HIGH' AND (tp.code = 'HIGH' OR t.priorityId IN ('HIGH', 'PRI_HIGH')) )
-        OR ( ? = 'LOW' AND (tp.code = 'LOW' OR t.priorityId IN ('LOW', 'PRI_LOW')) )
-        OR ( ? = 'MEDIUM' AND (tp.code = 'MEDIUM' OR t.priorityId IN ('MEDIUM', 'PRI_MEDIUM')) )
+        t.priorityId = ? OR tp.code = ? OR tp.name = ?
+        OR ( ? = 'URGENT' AND tp.code IN ('URGENT', 'PRI_URGENT') )
+        OR ( ? = 'HIGH' AND tp.code IN ('HIGH', 'PRI_HIGH') )
+        OR ( ? = 'LOW' AND tp.code IN ('LOW', 'PRI_LOW') )
+        OR ( ? = 'MEDIUM' AND tp.code IN ('MEDIUM', 'PRI_MEDIUM') )
       )`;
-      extraParams.push(priority, priority, priority, priority, priority, priority, priority, priority);
+      extraParams.push(priority, priority, priority, priority, priority, priority, priority);
     }
 
     if (relatedProjectId && relatedProjectId !== 'ALL') {

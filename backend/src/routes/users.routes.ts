@@ -47,7 +47,7 @@ usersRoutes.get('/', async (req: any, res: any) => {
             WHERE tasks.tenantId = tu.tenantId 
             AND tasks.picId = u.id 
             AND COALESCE(ts.isTerminal, 0) = 0
-            AND COALESCE(ts.code, tasks.statusId) NOT IN ('COMPLETED', 'CANCELLED', 'TSK_COMPLETED', 'TSK_CANCELLED')
+            AND (ts.code NOT IN ('COMPLETED', 'CANCELLED', 'TSK_COMPLETED', 'TSK_CANCELLED') OR ts.code IS NULL)
           ) AS activeTasksCount, 
         tu.isPrimary,
         r.id AS role, 
