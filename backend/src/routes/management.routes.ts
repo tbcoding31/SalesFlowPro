@@ -183,11 +183,16 @@ managementRoutes.get('/control-tower', async (req, res) => {
     `, [targetTenant]);
     const validTenantUserIds = new Set(activeUsersRows.map((u: any) => u.userId));
 
+    // Helpers for tenant master status evaluation
+    const isTaskTerminal = (t: any) => t.statusIsTerminal === 1 || t.statusCode === 'COMPLETED' || t.statusCode === 'CANCELLED' || t.statusCode === 'TSK_COMPLETED' || t.statusCode === 'TSK_CANCELLED' || t.statusId === 'COMPLETED' || t.statusId === 'CANCELLED';
+    const isVisitTerminal = (v: any) => v.statusIsTerminal === 1 || v.statusCode === 'COMPLETED' || v.statusCode === 'CANCELLED' || v.statusId === 'COMPLETED' || v.statusId === 'CANCELLED';
+    const isFuTerminal = (f: any) => f.status === 'COMPLETED' || f.status === 'CANCELLED';
+
     // 9. Evaluate Operational Attention Signals across scoped Projects
     const projectsWithOpenActions = new Set([
-      ...filteredTasks.filter((t: any) => t.statusId !== 'COMPLETED' && t.statusId !== 'CANCELLED' && t.relatedProjectId).map((t: any) => t.relatedProjectId),
-      ...filteredVisits.filter((v: any) => v.statusId !== 'COMPLETED' && v.statusId !== 'CANCELLED' && v.relatedProjectId).map((v: any) => v.relatedProjectId),
-      ...filteredFollowups.filter((f: any) => f.status !== 'COMPLETED' && f.status !== 'CANCELLED' && f.relatedProjectId).map((f: any) => f.relatedProjectId)
+      ...filteredTasks.filter((t: any) => !isTaskTerminal(t) && t.relatedProjectId).map((t: any) => t.relatedProjectId),
+      ...filteredVisits.filter((v: any) => !isVisitTerminal(v) && v.relatedProjectId).map((v: any) => v.relatedProjectId),
+      ...filteredFollowups.filter((f: any) => !isFuTerminal(f) && f.relatedProjectId).map((f: any) => f.relatedProjectId)
     ]);
 
     const projectsNeedingAttentionList: any[] = [];
@@ -243,9 +248,9 @@ managementRoutes.get('/control-tower', async (req, res) => {
       }
 
       // Check overdue work for this project
-      const projOverdueTasks = filteredTasks.filter((t: any) => t.relatedProjectId === proj.id && t.statusId !== 'COMPLETED' && t.statusId !== 'CANCELLED' && getBusinessDate(t.dueDate) && getBusinessDate(t.dueDate)! < todayStr);
-      const projOverdueVisits = filteredVisits.filter((v: any) => v.relatedProjectId === proj.id && v.statusId !== 'COMPLETED' && v.statusId !== 'CANCELLED' && getBusinessDate(v.visitDate) && getBusinessDate(v.visitDate)! < todayStr);
-      const projOverdueFollowups = filteredFollowups.filter((f: any) => f.relatedProjectId === proj.id && f.status !== 'COMPLETED' && f.status !== 'CANCELLED' && getBusinessDate(f.followUpDate) && getBusinessDate(f.followUpDate)! < todayStr);
+      const projOverdueTasks = filteredTasks.filter((t: any) => t.relatedProjectId === proj.id && !isTaskTerminal(t) && getBusinessDate(t.dueDate) && getBusinessDate(t.dueDate)! < todayStr);
+      const projOverdueVisits = filteredVisits.filter((v: any) => v.relatedProjectId === proj.id && !isVisitTerminal(v) && getBusinessDate(v.visitDate) && getBusinessDate(v.visitDate)! < todayStr);
+      const projOverdueFollowups = filteredFollowups.filter((f: any) => f.relatedProjectId === proj.id && !isFuTerminal(f) && getBusinessDate(f.followUpDate) && getBusinessDate(f.followUpDate)! < todayStr);
       const pOverdueCount = projOverdueTasks.length + projOverdueVisits.length + projOverdueFollowups.length;
 
       if ((isOpen || isWon) && pOverdueCount > 0) {
@@ -306,7 +311,7 @@ managementRoutes.get('/control-tower', async (req, res) => {
     const overdueByRep: Record<string, number> = {};
 
     filteredTasks.forEach((t: any) => {
-      if (t.statusId !== 'COMPLETED' && t.statusId !== 'CANCELLED' && getBusinessDate(t.dueDate) && getBusinessDate(t.dueDate)! < todayStr) {
+      if (!isTaskTerminal(t) && getBusinessDate(t.dueDate) && getBusinessDate(t.dueDate)! < todayStr) {
         overdueWorkList.push({
           id: t.id,
           type: 'TASK',
@@ -322,7 +327,7 @@ managementRoutes.get('/control-tower', async (req, res) => {
     });
 
     filteredVisits.forEach((v: any) => {
-      if (v.statusId !== 'COMPLETED' && v.statusId !== 'CANCELLED' && getBusinessDate(v.visitDate) && getBusinessDate(v.visitDate)! < todayStr) {
+      if (!isVisitTerminal(v) && getBusinessDate(v.visitDate) && getBusinessDate(v.visitDate)! < todayStr) {
         overdueWorkList.push({
           id: v.id,
           type: 'VISIT',
@@ -420,7 +425,7 @@ managementRoutes.get('/control-tower', async (req, res) => {
     const repWorkloads: any[] = [];
     const openProjectsByRep: Record<string, number> = {};
     filteredProjects.forEach((p: any) => {
-      const isClosed = p.stageCommercialOutcome === 'WON' || p.stageCommercialOutcome === 'LOST' || p.stageId === 'WON' || p.stageId === 'LOST';
+      const isClosed = p.stageCommercialOutcome === 'WON' || p.stageCommercialOutcome === 'LOST' || p.stageCommercialOutcome === 'CANCELLED' || p.stageIsTerminal === 1 || p.stageId === 'WON' || p.stageId === 'LOST';
       if (!isClosed && p.picId) {
         openProjectsByRep[p.picId] = (openProjectsByRep[p.picId] || 0) + 1;
       }
@@ -428,7 +433,7 @@ managementRoutes.get('/control-tower', async (req, res) => {
 
     const openTasksByRep: Record<string, number> = {};
     filteredTasks.forEach((t: any) => {
-      const isTaskDoneOrCancel = t.statusCode === 'COMPLETED' || t.statusCode === 'CANCELLED' || t.statusIsTerminal === 1 || t.statusId === 'COMPLETED' || t.statusId === 'CANCELLED';
+      const isTaskDoneOrCancel = isTaskTerminal(t);
       if (!isTaskDoneOrCancel && t.picId) {
         openTasksByRep[t.picId] = (openTasksByRep[t.picId] || 0) + 1;
       }

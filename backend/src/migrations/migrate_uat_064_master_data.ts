@@ -115,6 +115,13 @@ export async function runUat064Migration() {
       if (!hasTenantIdx) {
         await conn.query(`ALTER TABLE ${tbl} ADD INDEX idx_${tbl}_tenant (tenantId)`);
       }
+      const hasUq = indexes.some((i: any) => i.Key_name === `uq_${tbl}_scope_name`);
+      if (!hasUq) {
+        try {
+          await conn.query(`ALTER TABLE ${tbl} ADD CONSTRAINT uq_${tbl}_scope_name UNIQUE (masterScopeKey, name)`);
+        } catch (e: any) {}
+      }
+
       const hasFk = indexes.some((i: any) => i.Key_name === `fk_${tbl}_platform_master`);
       if (!hasFk) {
         try {
@@ -148,6 +155,21 @@ export async function runUat064Migration() {
        VALUES ('CT-DIRECT', NULL, 'PLATFORM', NULL, 'DIRECT', 'Direct Client', 1, 0)
        ON DUPLICATE KEY UPDATE name = VALUES(name)`
     );
+
+    // Customer statuses
+    const canonicalCustomerStatuses = [
+      { id: 'CS-1', code: 'ACTIVE', name: 'Active', color: '#10B981', displayOrder: 1 },
+      { id: 'CS-2', code: 'PROSPECT', name: 'Prospect', color: '#3B82F6', displayOrder: 2 },
+      { id: 'CS-3', code: 'INACTIVE', name: 'Inactive', color: '#94A3B8', displayOrder: 3 }
+    ];
+    for (const item of canonicalCustomerStatuses) {
+      await conn.query(
+        `INSERT INTO customer_statuses (id, tenantId, sourceType, platformMasterId, code, name, color, isActive, displayOrder)
+         VALUES (?, NULL, 'PLATFORM', NULL, ?, ?, ?, 1, ?)
+         ON DUPLICATE KEY UPDATE name = VALUES(name), color = VALUES(color), displayOrder = VALUES(displayOrder)`,
+        [item.id, item.code, item.name, item.color, item.displayOrder]
+      );
+    }
 
     // Follow up types
     await conn.query(
@@ -331,6 +353,66 @@ export async function runUat064Migration() {
            VALUES (?, ?, 'PLATFORM', ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE name = VALUES(name), displayOrder = VALUES(displayOrder)`,
           [newId, tenantId, vp.id, vp.code, vp.name, vp.description || '', vp.isActive || 1, vp.displayOrder || 0]
+        );
+      }
+
+      // Customer Statuses
+      const [blueprintCustomerStatuses]: any = await conn.query('SELECT * FROM customer_statuses WHERE tenantId IS NULL');
+      for (const cs of blueprintCustomerStatuses) {
+        const newId = `CS-${tPart}-${cs.id}`;
+        await conn.query(
+          `INSERT INTO customer_statuses (id, tenantId, sourceType, platformMasterId, code, name, color, isActive, displayOrder)
+           VALUES (?, ?, 'PLATFORM', ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE name = VALUES(name), color = VALUES(color), displayOrder = VALUES(displayOrder)`,
+          [newId, tenantId, cs.id, cs.code, cs.name, cs.color, cs.isActive || 1, cs.displayOrder || 0]
+        );
+      }
+
+      // Customer Types
+      const [blueprintCustomerTypes]: any = await conn.query('SELECT * FROM customer_types WHERE tenantId IS NULL');
+      for (const ct of blueprintCustomerTypes) {
+        const newId = `CT-${tPart}-${ct.id}`;
+        await conn.query(
+          `INSERT INTO customer_types (id, tenantId, sourceType, platformMasterId, code, name, isActive, displayOrder)
+           VALUES (?, ?, 'PLATFORM', ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE name = VALUES(name), displayOrder = VALUES(displayOrder)`,
+          [newId, tenantId, ct.id, ct.code, ct.name, ct.isActive || 1, ct.displayOrder || 0]
+        );
+      }
+
+      // Activity Types
+      const [blueprintActivities]: any = await conn.query('SELECT * FROM activity_types WHERE tenantId IS NULL');
+      for (const at of blueprintActivities) {
+        const newId = `AT-${tPart}-${at.id}`;
+        await conn.query(
+          `INSERT INTO activity_types (id, tenantId, sourceType, platformMasterId, code, name, icon, color, isActive, displayOrder)
+           VALUES (?, ?, 'PLATFORM', ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE name = VALUES(name), icon = VALUES(icon), color = VALUES(color), displayOrder = VALUES(displayOrder)`,
+          [newId, tenantId, at.id, at.code, at.name, at.icon, at.color, at.isActive || 1, at.displayOrder || 0]
+        );
+      }
+
+      // Departments
+      const [blueprintDepts]: any = await conn.query('SELECT * FROM departments WHERE tenantId IS NULL');
+      for (const d of blueprintDepts) {
+        const newId = `DEPT-${tPart}-${d.id}`;
+        await conn.query(
+          `INSERT INTO departments (id, tenantId, sourceType, platformMasterId, name, description, isActive, displayOrder)
+           VALUES (?, ?, 'PLATFORM', ?, ?, ?, 1, ?)
+           ON DUPLICATE KEY UPDATE name = VALUES(name), description = VALUES(description), displayOrder = VALUES(displayOrder)`,
+          [newId, tenantId, d.id, d.name, d.description, d.displayOrder || 0]
+        );
+      }
+
+      // Positions
+      const [blueprintPos]: any = await conn.query('SELECT * FROM positions WHERE tenantId IS NULL');
+      for (const p of blueprintPos) {
+        const newId = `POS-${tPart}-${p.id}`;
+        await conn.query(
+          `INSERT INTO positions (id, tenantId, sourceType, platformMasterId, name, level, isActive)
+           VALUES (?, ?, 'PLATFORM', ?, ?, ?, 1)
+           ON DUPLICATE KEY UPDATE name = VALUES(name), level = VALUES(level)`,
+          [newId, tenantId, p.id, p.name, p.level || 1]
         );
       }
     }

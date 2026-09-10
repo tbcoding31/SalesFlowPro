@@ -32,10 +32,12 @@ salesRoutes.get('/agenda', async (req, res) => {
       SELECT 
         t.id, t.title, t.description, t.customerId, t.relatedProjectId, t.relatedVisitId,
         t.priorityId as priority, t.statusId as status, t.dueDate, t.picId, t.completedAt,
+        COALESCE(ts.code, t.statusId) as statusCode, ts.isTerminal as statusIsTerminal,
         c.name as customerName, c.code as customerCode,
         p.title as projectName, p.stageId as projectStage,
         u.name as picName, u.avatar as picAvatar
       FROM tasks t
+      LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
       LEFT JOIN customers c ON c.id = t.customerId
       LEFT JOIN projects p ON p.id = t.relatedProjectId
       LEFT JOIN users u ON u.id = t.picId
@@ -48,10 +50,12 @@ salesRoutes.get('/agenda', async (req, res) => {
         v.id, v.title, v.customerId, v.relatedProjectId, v.purposeId as purpose,
         v.statusId as status, v.visitDate, v.startTime, v.endTime, v.location,
         v.result, v.nextAction, v.picId, v.completedAt,
+        COALESCE(vs.code, v.statusId) as statusCode, vs.isTerminal as statusIsTerminal,
         c.name as customerName, c.code as customerCode,
         p.title as projectName, p.stageId as projectStage,
         u.name as picName, u.avatar as picAvatar
       FROM visits v
+      LEFT JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
       LEFT JOIN customers c ON c.id = v.customerId
       LEFT JOIN projects p ON p.id = v.relatedProjectId
       LEFT JOIN users u ON u.id = v.picId
@@ -85,9 +89,9 @@ salesRoutes.get('/agenda', async (req, res) => {
 
     // Process Tasks
     taskRows.forEach((t: any) => {
-      const isCompleted = t.status === 'COMPLETED';
-      const isCancelled = t.status === 'CANCELLED';
-      const isTerminal = isCompleted || isCancelled;
+      const isCompleted = t.statusCode === 'COMPLETED' || t.statusCode === 'TSK_COMPLETED' || (t.statusIsTerminal === 1 && t.statusCode !== 'CANCELLED' && t.statusCode !== 'TSK_CANCELLED') || t.status === 'COMPLETED';
+      const isCancelled = t.statusCode === 'CANCELLED' || t.statusCode === 'TSK_CANCELLED' || t.status === 'CANCELLED';
+      const isTerminal = isCompleted || isCancelled || t.statusIsTerminal === 1;
       const actionDate = toLocalDateStr(t.dueDate);
       const completedDate = toLocalDateStr(t.completedAt);
 
@@ -128,9 +132,9 @@ salesRoutes.get('/agenda', async (req, res) => {
 
     // Process Visits
     visitRows.forEach((v: any) => {
-      const isCompleted = v.status === 'COMPLETED';
-      const isCancelled = v.status === 'CANCELLED';
-      const isTerminal = isCompleted || isCancelled;
+      const isCompleted = v.statusCode === 'COMPLETED' || (v.statusIsTerminal === 1 && v.statusCode !== 'CANCELLED') || v.status === 'COMPLETED';
+      const isCancelled = v.statusCode === 'CANCELLED' || v.status === 'CANCELLED';
+      const isTerminal = isCompleted || isCancelled || v.statusIsTerminal === 1;
       const actionDate = toLocalDateStr(v.visitDate);
       const completedDate = toLocalDateStr(v.completedAt);
 
@@ -252,7 +256,7 @@ salesRoutes.get('/agenda', async (req, res) => {
       LEFT JOIN users u ON u.id = p.picId
       LEFT JOIN project_stages ps ON ps.id = p.stageId AND ps.tenantId = p.tenantId
       ${projWhere.replace(/WHERE tenantId/g, 'WHERE p.tenantId')}
-      AND (ps.commercialOutcome = 'OPEN' OR (ps.commercialOutcome IS NULL AND p.stageId NOT IN ('WON', 'LOST', 'PS-6', 'PS-7')))
+      AND (COALESCE(ps.commercialOutcome, 'NONE') NOT IN ('WON', 'LOST', 'CANCELLED') AND COALESCE(ps.isTerminal, 0) = 0)
     `, projParams);
 
     const pendingProjectIds = new Set([
@@ -325,8 +329,9 @@ salesRoutes.get('/attention', async (req, res) => {
     // 2. Scoped query for authorized Customers
     const { where: custWhere, params: custParams } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'c.picId');
     const [custRows]: any = await pool.query(`
-      SELECT c.*, u.name as picName
+      SELECT c.*, cs.code as statusCode, u.name as picName
       FROM customers c
+      LEFT JOIN customer_statuses cs ON cs.id = c.statusId AND cs.tenantId = c.tenantId
       LEFT JOIN users u ON u.id = c.picId
       ${custWhere.replace(/WHERE tenantId/g, 'WHERE c.picId')}
       ORDER BY c.name ASC
@@ -340,14 +345,18 @@ salesRoutes.get('/attention', async (req, res) => {
     const [overdueOpsRows]: any = await pool.query(`
       SELECT 'TASK' as opType, t.id, t.customerId, t.relatedProjectId as projectId, t.dueDate as actionDate, t.picId
       FROM tasks t
+      LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
       ${taskWhere.replace(/WHERE tenantId/g, 'WHERE t.tenantId')}
-      AND t.statusId NOT IN ('COMPLETED', 'CANCELLED')
+      AND COALESCE(ts.isTerminal, 0) = 0
+      AND COALESCE(ts.code, t.statusId) NOT IN ('COMPLETED', 'CANCELLED', 'TSK_COMPLETED', 'TSK_CANCELLED')
       AND t.dueDate < ?
       UNION ALL
       SELECT 'VISIT' as opType, v.id, v.customerId, v.relatedProjectId as projectId, v.visitDate as actionDate, v.picId
       FROM visits v
+      LEFT JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
       ${visitWhere.replace(/WHERE tenantId/g, 'WHERE v.tenantId')}
-      AND v.statusId NOT IN ('COMPLETED', 'CANCELLED')
+      AND COALESCE(vs.isTerminal, 0) = 0
+      AND COALESCE(vs.code, v.statusId) NOT IN ('COMPLETED', 'CANCELLED')
       AND v.visitDate < ?
       UNION ALL
       SELECT 'FOLLOW_UP' as opType, f.id, f.customerId, f.relatedProjectId as projectId, f.followUpDate as actionDate, f.picId
@@ -375,9 +384,21 @@ salesRoutes.get('/attention', async (req, res) => {
 
     // 4. Batch query for all open operational actions (for Missing Next Action detection)
     const [openOpsRows]: any = await pool.query(`
-      SELECT relatedProjectId as projectId FROM tasks WHERE tenantId = ? AND statusId NOT IN ('COMPLETED', 'CANCELLED') AND relatedProjectId IS NOT NULL
+      SELECT t.relatedProjectId as projectId 
+      FROM tasks t
+      LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
+      WHERE t.tenantId = ? 
+        AND COALESCE(ts.isTerminal, 0) = 0
+        AND COALESCE(ts.code, t.statusId) NOT IN ('COMPLETED', 'CANCELLED', 'TSK_COMPLETED', 'TSK_CANCELLED')
+        AND t.relatedProjectId IS NOT NULL
       UNION ALL
-      SELECT relatedProjectId as projectId FROM visits WHERE tenantId = ? AND statusId NOT IN ('COMPLETED', 'CANCELLED') AND relatedProjectId IS NOT NULL
+      SELECT v.relatedProjectId as projectId 
+      FROM visits v
+      LEFT JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
+      WHERE v.tenantId = ? 
+        AND COALESCE(vs.isTerminal, 0) = 0
+        AND COALESCE(vs.code, v.statusId) NOT IN ('COMPLETED', 'CANCELLED')
+        AND v.relatedProjectId IS NOT NULL
       UNION ALL
       SELECT relatedProjectId as projectId FROM follow_ups WHERE tenantId = ? AND status NOT IN ('COMPLETED', 'CANCELLED') AND relatedProjectId IS NOT NULL
     `, [targetTenant, targetTenant, targetTenant]);
@@ -526,7 +547,7 @@ salesRoutes.get('/attention', async (req, res) => {
     const customerAttentionList: any[] = [];
     for (const cust of custRows) {
       const cSignals: any[] = [];
-      const isInactive = cust.statusId === 'INACTIVE' || cust.status === 'INACTIVE';
+      const isInactive = cust.statusCode === 'INACTIVE' || cust.statusId === 'INACTIVE' || cust.status === 'INACTIVE';
       const custOverdue = overdueByCustomer[cust.id] || [];
 
       // Customer PIC Check (Suppressed for INACTIVE customers with zero overdue/open work)

@@ -630,12 +630,12 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
 
     // Status transition enforcement:
     // 1. COMPLETED visits cannot be mutated
-    if (current.statusCode === 'COMPLETED' || current.statusIsTerminal === 1 || current.statusId === 'VS-2') {
+    if (current.statusCode === 'COMPLETED' || (current.statusIsTerminal === 1 && current.statusCode !== 'CANCELLED')) {
       return res.status(400).json({ error: 'Completed visits cannot be modified', code: 'VISIT_ALREADY_COMPLETED' });
     }
 
     // 2. CANCELLED visits cannot be modified via standard PUT (must use /reschedule)
-    if (current.statusCode === 'CANCELLED' || current.statusId === 'VS-3') {
+    if (current.statusCode === 'CANCELLED') {
       return res.status(400).json({ error: 'Cancelled visits cannot be edited. Use /reschedule to reactivate this visit.', code: 'VISIT_ALREADY_CANCELLED' });
     }
 
@@ -731,7 +731,7 @@ visitsRoutes.put('/:id', async (req: any, res: any) => {
     }
 
     const [currStatusRows]: any = await pool.query('SELECT id, code, isTerminal FROM visit_statuses WHERE id = ? AND tenantId = ?', [statusId, targetTenant]);
-    const isCompletedStatus = currStatusRows.length > 0 && (currStatusRows[0].code === 'COMPLETED' || currStatusRows[0].isTerminal === 1 || statusId === 'VS-2');
+    const isCompletedStatus = currStatusRows.length > 0 && (currStatusRows[0].code === 'COMPLETED' || (currStatusRows[0].isTerminal === 1 && currStatusRows[0].code !== 'CANCELLED'));
     const completedAtVal = (isCompletedStatus && !current.completedAt) ? new Date() : current.completedAt;
 
     await pool.query(`
@@ -848,13 +848,13 @@ visitsRoutes.post('/:id/cancel', async (req: any, res: any) => {
     const currCode = currStatusRows[0]?.code;
 
     // 1. Cannot cancel already cancelled visit -> 409 Conflict
-    if (currCode === 'CANCELLED' || current.statusId === 'VS-3') {
+    if (currCode === 'CANCELLED') {
       await conn.rollback();
       return res.status(409).json({ error: 'Visit is already cancelled' });
     }
 
     // 2. Cannot cancel completed visit -> 400 Bad Request
-    if (currCode === 'COMPLETED' || current.statusId === 'VS-2') {
+    if (currCode === 'COMPLETED') {
       await conn.rollback();
       return res.status(400).json({ error: 'Completed visits cannot be cancelled', code: 'CANNOT_CANCEL_COMPLETED_VISIT' });
     }
@@ -961,11 +961,12 @@ visitsRoutes.post('/:id/reschedule', async (req: any, res: any) => {
     const current = rows[0];
 
     // Transition invariant: Completed visits cannot be rescheduled
-    const [currStatusRows]: any = await conn.query('SELECT id, code FROM visit_statuses WHERE id = ? AND tenantId = ?', [current.statusId, targetTenant]);
+    const [currStatusRows]: any = await conn.query('SELECT id, code, isTerminal FROM visit_statuses WHERE id = ? AND tenantId = ?', [current.statusId, targetTenant]);
     const currCode = currStatusRows[0]?.code;
-    if (currCode === 'COMPLETED' || current.statusId === 'VS-2') {
+    const currIsTerminal = currStatusRows[0]?.isTerminal;
+    if (currCode === 'COMPLETED' || currIsTerminal === 1) {
       await conn.rollback();
-      return res.status(400).json({ error: 'Completed visits cannot be rescheduled' });
+      return res.status(400).json({ error: 'Completed visits cannot be rescheduled', code: 'CANNOT_RESCHEDULE_COMPLETED_VISIT' });
     }
 
     const oldDate = current.formattedVisitDate;
@@ -1095,9 +1096,9 @@ visitsRoutes.get('/:id/tasks', async (req: any, res: any) => {
         COALESCE(ts.name, t.statusId) as statusName,
         ts.color as statusColor,
         CASE 
-          WHEN ts.id = 'TS-3' OR t.statusId IN ('COMPLETED', 'TSK_COMPLETED') THEN 'COMPLETED'
-          WHEN ts.id = 'TS-2' OR t.statusId IN ('IN_PROGRESS', 'TSK_INPROGRESS') THEN 'IN_PROGRESS'
-          WHEN ts.id = 'TS-4' OR t.statusId IN ('CANCELLED', 'TSK_CANCELLED') THEN 'CANCELLED'
+          WHEN ts.code IN ('COMPLETED', 'TSK_COMPLETED') OR ts.isTerminal = 1 OR t.statusId IN ('COMPLETED', 'TSK_COMPLETED') THEN 'COMPLETED'
+          WHEN ts.code IN ('CANCELLED', 'TSK_CANCELLED') OR t.statusId IN ('CANCELLED', 'TSK_CANCELLED') THEN 'CANCELLED'
+          WHEN ts.code IN ('IN_PROGRESS', 'TSK_INPROGRESS') OR t.statusId IN ('IN_PROGRESS', 'TSK_INPROGRESS') THEN 'IN_PROGRESS'
           ELSE 'TODO'
         END as status,
         COALESCE(tp.id, t.priorityId) as priorityId,
@@ -1105,11 +1106,11 @@ visitsRoutes.get('/:id/tasks', async (req: any, res: any) => {
         COALESCE(tp.name, t.priorityId) as priorityName,
         tp.color as priorityColor,
         CASE
-          WHEN tp.id = 'TP-1' OR t.priorityId IN ('URGENT', 'PRI_URGENT') THEN 'URGENT'
-          WHEN tp.id = 'TP-2' OR t.priorityId IN ('HIGH', 'PRI_HIGH') THEN 'HIGH'
-          WHEN tp.id = 'TP-4' OR t.priorityId IN ('LOW', 'PRI_LOW') THEN 'LOW'
-          WHEN tp.id = 'TP-3' OR t.priorityId IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') THEN 'MEDIUM'
-          ELSE COALESCE(t.priorityId, 'MEDIUM')
+          WHEN tp.code IN ('URGENT', 'PRI_URGENT') OR t.priorityId IN ('URGENT', 'PRI_URGENT') THEN 'URGENT'
+          WHEN tp.code IN ('HIGH', 'PRI_HIGH') OR t.priorityId IN ('HIGH', 'PRI_HIGH') THEN 'HIGH'
+          WHEN tp.code IN ('LOW', 'PRI_LOW') OR t.priorityId IN ('LOW', 'PRI_LOW') THEN 'LOW'
+          WHEN tp.code IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') OR t.priorityId IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') THEN 'MEDIUM'
+          ELSE COALESCE(tp.code, t.priorityId, 'MEDIUM')
         END as priority,
         t.picId,
         COALESCE(u.name, 'Unassigned') as picName,

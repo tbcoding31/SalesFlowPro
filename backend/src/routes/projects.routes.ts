@@ -1088,20 +1088,12 @@ projectsRoutes.get('/:id/next-action', async (req: any, res: any) => {
         'TASK' as type, u.name as picName, t.picId,
         COALESCE(ts.name, 'Pending') as statusName
       FROM tasks t
-      LEFT JOIN task_statuses ts ON (
-        ts.id = t.statusId 
-        OR ts.code = t.statusId 
-        OR ts.code = CONCAT('TSK_', t.statusId)
-        OR (t.statusId = 'PENDING' AND ts.id = 'TS-1')
-        OR (t.statusId = 'TODO' AND ts.id = 'TS-1')
-        OR (t.statusId = 'IN_PROGRESS' AND ts.id = 'TS-2')
-        OR (t.statusId = 'COMPLETED' AND ts.id = 'TS-3')
-        OR (t.statusId = 'CANCELLED' AND ts.id = 'TS-4')
-      )
+      LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
       LEFT JOIN users u ON u.id = t.picId
       WHERE t.tenantId = ? 
         AND t.relatedProjectId = ? 
         AND t.completedAt IS NULL
+        AND COALESCE(ts.isTerminal, 0) = 0
         AND COALESCE(ts.code, t.statusId) NOT IN ('TSK_COMPLETED', 'TSK_CANCELLED', 'COMPLETED', 'CANCELLED')
         AND t.dueDate IS NOT NULL
         AND t.dueDate >= CURDATE()
@@ -1128,12 +1120,13 @@ projectsRoutes.get('/:id/next-action', async (req: any, res: any) => {
         v.startTime, 'VISIT' as type, u.name as picName, v.picId,
         COALESCE(vs.name, 'Planned') as statusName
       FROM visits v
-      LEFT JOIN visit_statuses vs ON (vs.id = v.statusId OR vs.code = v.statusId) AND vs.tenantId = v.tenantId
+      LEFT JOIN visit_statuses vs ON vs.id = v.statusId AND vs.tenantId = v.tenantId
       LEFT JOIN users u ON u.id = v.picId
       WHERE v.tenantId = ? 
         AND v.relatedProjectId = ? 
         AND v.completedAt IS NULL
-        AND COALESCE(vs.code, v.statusId) NOT IN ('COMPLETED', 'CANCELLED', 'VS-2', 'VS-3')
+        AND COALESCE(vs.isTerminal, 0) = 0
+        AND COALESCE(vs.code, v.statusId) NOT IN ('COMPLETED', 'CANCELLED')
         AND v.visitDate IS NOT NULL
         AND v.visitDate >= CURDATE()
       ORDER BY v.visitDate ASC, v.startTime ASC, v.createdAt ASC
@@ -1263,9 +1256,9 @@ projectsRoutes.get('/:id/summary', async (req: any, res: any) => {
         COALESCE(ts.name, t.statusId) as statusName,
         ts.color as statusColor,
         CASE 
-          WHEN ts.id = 'TS-3' OR t.statusId IN ('COMPLETED', 'TSK_COMPLETED') THEN 'COMPLETED'
-          WHEN ts.id = 'TS-2' OR t.statusId IN ('IN_PROGRESS', 'TSK_INPROGRESS') THEN 'IN_PROGRESS'
-          WHEN ts.id = 'TS-4' OR t.statusId IN ('CANCELLED', 'TSK_CANCELLED') THEN 'CANCELLED'
+          WHEN ts.code IN ('COMPLETED', 'TSK_COMPLETED') OR ts.isTerminal = 1 OR t.statusId IN ('COMPLETED', 'TSK_COMPLETED') THEN 'COMPLETED'
+          WHEN ts.code IN ('CANCELLED', 'TSK_CANCELLED') OR t.statusId IN ('CANCELLED', 'TSK_CANCELLED') THEN 'CANCELLED'
+          WHEN ts.code IN ('IN_PROGRESS', 'TSK_INPROGRESS') OR t.statusId IN ('IN_PROGRESS', 'TSK_INPROGRESS') THEN 'IN_PROGRESS'
           ELSE 'TODO'
         END as status,
         COALESCE(tp.id, t.priorityId) as priorityId,
@@ -1273,11 +1266,11 @@ projectsRoutes.get('/:id/summary', async (req: any, res: any) => {
         COALESCE(tp.name, t.priorityId) as priorityName,
         tp.color as priorityColor,
         CASE
-          WHEN tp.id = 'TP-1' OR t.priorityId IN ('URGENT', 'PRI_URGENT') THEN 'URGENT'
-          WHEN tp.id = 'TP-2' OR t.priorityId IN ('HIGH', 'PRI_HIGH') THEN 'HIGH'
-          WHEN tp.id = 'TP-4' OR t.priorityId IN ('LOW', 'PRI_LOW') THEN 'LOW'
-          WHEN tp.id = 'TP-3' OR t.priorityId IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') THEN 'MEDIUM'
-          ELSE COALESCE(t.priorityId, 'MEDIUM')
+          WHEN tp.code IN ('URGENT', 'PRI_URGENT') OR t.priorityId IN ('URGENT', 'PRI_URGENT') THEN 'URGENT'
+          WHEN tp.code IN ('HIGH', 'PRI_HIGH') OR t.priorityId IN ('HIGH', 'PRI_HIGH') THEN 'HIGH'
+          WHEN tp.code IN ('LOW', 'PRI_LOW') OR t.priorityId IN ('LOW', 'PRI_LOW') THEN 'LOW'
+          WHEN tp.code IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') OR t.priorityId IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') THEN 'MEDIUM'
+          ELSE COALESCE(tp.code, t.priorityId, 'MEDIUM')
         END as priority,
         t.picId,
         COALESCE(u.name, 'Unassigned') as picName,
@@ -1366,9 +1359,9 @@ projectsRoutes.get('/:id/tasks', async (req: any, res: any) => {
         COALESCE(ts.name, t.statusId) as statusName,
         ts.color as statusColor,
         CASE 
-          WHEN ts.id = 'TS-3' OR t.statusId IN ('COMPLETED', 'TSK_COMPLETED') THEN 'COMPLETED'
-          WHEN ts.id = 'TS-2' OR t.statusId IN ('IN_PROGRESS', 'TSK_INPROGRESS') THEN 'IN_PROGRESS'
-          WHEN ts.id = 'TS-4' OR t.statusId IN ('CANCELLED', 'TSK_CANCELLED') THEN 'CANCELLED'
+          WHEN ts.code IN ('COMPLETED', 'TSK_COMPLETED') OR ts.isTerminal = 1 OR t.statusId IN ('COMPLETED', 'TSK_COMPLETED') THEN 'COMPLETED'
+          WHEN ts.code IN ('CANCELLED', 'TSK_CANCELLED') OR t.statusId IN ('CANCELLED', 'TSK_CANCELLED') THEN 'CANCELLED'
+          WHEN ts.code IN ('IN_PROGRESS', 'TSK_INPROGRESS') OR t.statusId IN ('IN_PROGRESS', 'TSK_INPROGRESS') THEN 'IN_PROGRESS'
           ELSE 'TODO'
         END as status,
         COALESCE(tp.id, t.priorityId) as priorityId,
@@ -1376,11 +1369,11 @@ projectsRoutes.get('/:id/tasks', async (req: any, res: any) => {
         COALESCE(tp.name, t.priorityId) as priorityName,
         tp.color as priorityColor,
         CASE
-          WHEN tp.id = 'TP-1' OR t.priorityId IN ('URGENT', 'PRI_URGENT') THEN 'URGENT'
-          WHEN tp.id = 'TP-2' OR t.priorityId IN ('HIGH', 'PRI_HIGH') THEN 'HIGH'
-          WHEN tp.id = 'TP-4' OR t.priorityId IN ('LOW', 'PRI_LOW') THEN 'LOW'
-          WHEN tp.id = 'TP-3' OR t.priorityId IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') THEN 'MEDIUM'
-          ELSE COALESCE(t.priorityId, 'MEDIUM')
+          WHEN tp.code IN ('URGENT', 'PRI_URGENT') OR t.priorityId IN ('URGENT', 'PRI_URGENT') THEN 'URGENT'
+          WHEN tp.code IN ('HIGH', 'PRI_HIGH') OR t.priorityId IN ('HIGH', 'PRI_HIGH') THEN 'HIGH'
+          WHEN tp.code IN ('LOW', 'PRI_LOW') OR t.priorityId IN ('LOW', 'PRI_LOW') THEN 'LOW'
+          WHEN tp.code IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') OR t.priorityId IN ('MEDIUM', 'PRI_MEDIUM', 'NORMAL') THEN 'MEDIUM'
+          ELSE COALESCE(tp.code, t.priorityId, 'MEDIUM')
         END as priority,
         t.picId,
         COALESCE(u.name, 'Unassigned') as picName,
@@ -1398,26 +1391,8 @@ projectsRoutes.get('/:id/tasks', async (req: any, res: any) => {
         t.updatedAt,
         t.completedAt
       FROM tasks t
-      LEFT JOIN task_statuses ts ON (
-        ts.id = t.statusId 
-        OR ts.code = t.statusId 
-        OR ts.code = CONCAT('TSK_', t.statusId)
-        OR (t.statusId = 'PENDING' AND ts.id = 'TS-1')
-        OR (t.statusId = 'TODO' AND ts.id = 'TS-1')
-        OR (t.statusId = 'IN_PROGRESS' AND ts.id = 'TS-2')
-        OR (t.statusId = 'COMPLETED' AND ts.id = 'TS-3')
-        OR (t.statusId = 'CANCELLED' AND ts.id = 'TS-4')
-      )
-      LEFT JOIN task_priorities tp ON (
-        tp.id = t.priorityId
-        OR tp.code = t.priorityId
-        OR tp.code = CONCAT('PRI_', t.priorityId)
-        OR (t.priorityId = 'URGENT' AND tp.id = 'TP-1')
-        OR (t.priorityId = 'HIGH' AND tp.id = 'TP-2')
-        OR (t.priorityId = 'NORMAL' AND tp.id = 'TP-3')
-        OR (t.priorityId = 'MEDIUM' AND tp.id = 'TP-3')
-        OR (t.priorityId = 'LOW' AND tp.id = 'TP-4')
-      )
+      LEFT JOIN task_statuses ts ON ts.id = t.statusId AND ts.tenantId = t.tenantId
+      LEFT JOIN task_priorities tp ON tp.id = t.priorityId AND tp.tenantId = t.tenantId
       LEFT JOIN users u ON u.id = t.picId
       LEFT JOIN customers c ON c.id = t.customerId
       LEFT JOIN visits v ON v.id = t.relatedVisitId

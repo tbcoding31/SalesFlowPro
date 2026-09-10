@@ -522,13 +522,65 @@ customersRoutes.get('/:id/contacts', async (req: any, res: any) => {
   const { id } = req.params;
 
   try {
+    const [custRows]: any = await pool.query('SELECT id FROM customers WHERE id = ? AND tenantId = ?', [id, targetTenant]);
+    if (custRows.length === 0) {
+      return res.status(404).json({ error: 'Customer not found or access denied', code: 'CUSTOMER_NOT_FOUND' });
+    }
+
     const [contacts]: any = await pool.query(
-      'SELECT * FROM customer_contacts WHERE customerId = ? ORDER BY isPrimary DESC, createdAt ASC',
-      [id]
+      'SELECT * FROM customer_contacts WHERE customerId = ? AND tenantId = ? ORDER BY isPrimary DESC, createdAt ASC',
+      [id, targetTenant]
     );
     res.json(contacts);
   } catch (err: any) {
     console.error(`GET /api/customers/${id}/contacts error:`, err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// POST /api/customers/:id/contacts - Add contact to customer
+customersRoutes.post('/:id/contacts', async (req: any, res: any) => {
+  const actorRole = (req as any).userRole;
+  const actorTenant = (req as any).userTenantId;
+  const isPlatformUser = (req as any).isPlatformUser;
+
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+
+  const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
+  if (targetTenant === false) return;
+
+  const { id } = req.params;
+  const data = req.body || {};
+
+  try {
+    const [custRows]: any = await pool.query('SELECT id FROM customers WHERE id = ? AND tenantId = ?', [id, targetTenant]);
+    if (custRows.length === 0) {
+      return res.status(404).json({ error: 'Customer not found or access denied', code: 'CUSTOMER_NOT_FOUND' });
+    }
+
+    if (!data.name || !String(data.name).trim()) {
+      return res.status(400).json({ error: 'Contact name is required', code: 'VALIDATION_ERROR' });
+    }
+
+    const contactId = 'CON-' + Date.now() + '-' + crypto.randomBytes(4).toString('hex');
+    await pool.query(
+      `INSERT INTO customer_contacts (id, tenantId, customerId, name, position, email, phone, isPrimary, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+      [
+        contactId,
+        targetTenant,
+        id,
+        String(data.name).trim(),
+        data.position ? String(data.position).trim() : 'Contact',
+        data.email ? String(data.email).trim() : null,
+        data.phone ? String(data.phone).trim() : null,
+        data.isPrimary ? 1 : 0
+      ]
+    );
+
+    res.status(201).json({ success: true, id: contactId });
+  } catch (err: any) {
+    console.error(`POST /api/customers/${id}/contacts error:`, err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
