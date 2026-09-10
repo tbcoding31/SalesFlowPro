@@ -552,6 +552,18 @@ export const MENUS_SEED: MenuItemDef[] = [
     menuType: 'ITEM',
     displayOrder: 601,
     roles: ['TENANT_ADMIN', 'SUPERVISOR', 'SALES_MANAGER', 'SALES_REP']
+  },
+  {
+    id: 'MENU-TNT-VISIT-REMINDERS',
+    code: 'TENANT_VISIT_REMINDERS',
+    label: 'Visit Reminder Settings',
+    route: '/settings/visit-reminders',
+    iconKey: 'notifications_active',
+    parentId: 'MENU-TNT-SYSTEM',
+    menuScope: 'TENANT',
+    menuType: 'ITEM',
+    displayOrder: 602,
+    roles: ['TENANT_ADMIN']
   }
 ];
 

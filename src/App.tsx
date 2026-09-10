@@ -121,11 +121,13 @@ const DashboardResolver: React.FC = () => {
 function ProtectedRoute({
   children,
   requiredPermission,
-  requiredPlatformUser
+  requiredPlatformUser,
+  requiredRoles
 }: {
   children: React.ReactNode;
   requiredPermission?: string;
   requiredPlatformUser?: boolean;
+  requiredRoles?: string[];
 }) {
   const { isAuthenticated, isLoading, hasPermission, currentUser } = useAuth();
 
@@ -155,6 +157,13 @@ function ProtectedRoute({
 
   if (requiredPermission && !hasPermission(requiredPermission)) {
     return <Navigate to="/dashboard" replace />;
+  }
+
+  if (requiredRoles && requiredRoles.length > 0) {
+    const role = normalizeRole(currentUser?.role || (currentUser as any)?.roleCode);
+    if (!requiredRoles.includes(role) && !isSuperAdmin) {
+      return <Navigate to="/dashboard" replace />;
+    }
   }
 
   return <Layout>{children}</Layout>;
@@ -557,6 +566,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <UserProfilePage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/settings/visit-reminders"
+            element={
+              <ProtectedRoute requiredRoles={['TENANT_ADMIN', 'SUPER_ADMIN']}>
+                <NotificationSettingsPage />
               </ProtectedRoute>
             }
           />

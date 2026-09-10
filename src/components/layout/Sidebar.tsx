@@ -18,6 +18,7 @@ const ICON_REGISTRY: Record<string, string> = {
   security: 'security',
   database: 'database',
   notifications: 'notifications',
+  notifications_active: 'notifications_active',
   assignment: 'assignment',
   settings: 'settings',
   menu_open: 'menu_open',

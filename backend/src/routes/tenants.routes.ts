@@ -457,6 +457,10 @@ tenantsRoutes.get('/:id/visit-reminders', async (req: any, res: any) => {
     return res.status(403).json({ error: 'Access denied. You may only view your own tenant reminder settings.' });
   }
 
+  if (actorRole !== 'SUPER_ADMIN' && actorRole !== 'TENANT_ADMIN') {
+    return res.status(403).json({ error: 'Access denied. Tenant Admin capability required.' });
+  }
+
   try {
     const [rows]: any = await pool.query(
       'SELECT * FROM tenant_visit_reminder_settings WHERE tenantId = ?',
