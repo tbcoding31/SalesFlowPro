@@ -60,6 +60,7 @@ export const MasterDataPage: React.FC = () => {
 
   const categories: { id: MasterDataItem['category'] | 'visit_reminder_defaults'; name: string; icon: string }[] = [
     { id: 'task_types', name: 'Task Types', icon: 'label' },
+    { id: 'follow_up_types', name: 'Follow-up Types', icon: 'call' },
     { id: 'task_priorities', name: 'Task Priorities', icon: 'priority_high' },
     { id: 'customer_types', name: 'Customer Types', icon: 'category' },
     { id: 'customer_status', name: 'Customer Statuses', icon: 'toggle_on' },
@@ -127,7 +128,7 @@ export const MasterDataPage: React.FC = () => {
     setLabel('');
     setCodeValue('');
     setIndicator('');
-    setIcon(selectedCategory === 'task_types' ? 'task' : selectedCategory === 'task_priorities' ? 'flag' : '');
+    setIcon(selectedCategory === 'task_types' ? 'task' : selectedCategory === 'follow_up_types' ? 'call' : selectedCategory === 'task_priorities' ? 'flag' : '');
     setColor(
       selectedCategory === 'task_priorities' ? '#EF4444' :
       selectedCategory === 'task_statuses' ? '#3B82F6' :
@@ -157,7 +158,7 @@ export const MasterDataPage: React.FC = () => {
       (item.codeValue === 'NORMAL' || item.codeValue === 'MEDIUM') ? 'remove' :
       item.codeValue === 'HIGH' ? 'arrow_upward' :
       (item.codeValue === 'URGENT' || item.codeValue === 'CRITICAL') ? 'double_arrow' : 'flag';
-    setIcon(item.icon || (!isColorValue(item.indicator) && item.indicator ? item.indicator : (selectedCategory === 'task_priorities' ? defaultPriorityIcon : '')));
+    setIcon(item.icon || (!isColorValue(item.indicator) && item.indicator ? item.indicator : (selectedCategory === 'task_priorities' ? defaultPriorityIcon : (selectedCategory === 'follow_up_types' ? 'call' : ''))));
     setColor(item.color || (isColorValue(item.indicator) ? item.indicator || '#6366F1' : '#6366F1'));
     setDescription(item.description || item.codeValue || '');
     setLevel(item.level !== undefined ? item.level : 1);
@@ -183,7 +184,7 @@ export const MasterDataPage: React.FC = () => {
     }
 
     const isColorCategory = ['task_statuses', 'customer_status', 'customer_statuses', 'visit_statuses'].includes(selectedCategory);
-    const isIconAndColorCategory = ['task_types', 'task_priorities'].includes(selectedCategory);
+    const isIconAndColorCategory = ['task_types', 'task_priorities', 'follow_up_types'].includes(selectedCategory);
 
     const isNew = !editingItem;
     const itemToSave: MasterDataItem = {
@@ -194,7 +195,7 @@ export const MasterDataPage: React.FC = () => {
       indicator: isIconAndColorCategory ? (icon || color) : isColorCategory ? color : undefined,
       icon: isIconAndColorCategory ? (icon || undefined) : undefined,
       color: (isColorCategory || isIconAndColorCategory) ? (color || undefined) : undefined,
-      description: ['departments', 'visit_purposes'].includes(selectedCategory) ? description : undefined,
+      description: ['departments', 'visit_purposes', 'follow_up_types'].includes(selectedCategory) ? description : undefined,
       level: selectedCategory === 'positions' ? level : undefined,
       isDefault,
       displayOrder: editingItem ? editingItem.displayOrder : (selectedCategory === 'positions' ? level : items.length + 1),
@@ -891,6 +892,95 @@ export const MasterDataPage: React.FC = () => {
                             className="flex-1 px-3 py-1.5 border border-[#E1E1E1] rounded text-xs font-mono"
                           />
                         </div>
+                      </div>
+                    </>
+                  )}
+
+                  {selectedCategory === 'follow_up_types' && (
+                    <>
+                      <div>
+                        <label className="block text-xs font-bold text-[#1a1c1c] mb-1">
+                          Material Icon Identifier *
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={icon}
+                            onChange={(e) => {
+                              setIcon(e.target.value);
+                              setIndicator(e.target.value || color);
+                            }}
+                            placeholder="e.g. call, chat, groups, mail"
+                            className="flex-1 px-3 py-1.5 border border-[#E1E1E1] rounded text-xs font-mono"
+                          />
+                          {icon && (
+                            <div className="w-8 h-8 rounded border border-slate-200 flex items-center justify-center bg-slate-50 shrink-0">
+                              <span className="material-symbols-outlined text-[18px]" style={{ color }}>
+                                {icon}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {['call', 'chat', 'groups', 'video_call', 'mail', 'directions_walk', 'description', 'sms', 'videocam', 'share', 'more_horiz'].map((sugg) => (
+                            <button
+                              key={sugg}
+                              type="button"
+                              onClick={() => {
+                                setIcon(sugg);
+                                setIndicator(sugg || color);
+                              }}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono border transition-colors ${
+                                icon === sugg
+                                  ? 'bg-[#4744e5]/10 text-[#4744e5] border-[#4744e5]/30 font-semibold'
+                                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                              }`}
+                            >
+                              <span className="material-symbols-outlined text-[13px]">{sugg}</span>
+                              {sugg}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Theme Color (HEX)</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="color"
+                            value={color && color.startsWith('#') ? color : '#6366F1'}
+                            onChange={(e) => {
+                              setColor(e.target.value);
+                              if (!icon) setIndicator(e.target.value);
+                            }}
+                            className="w-8 h-8 p-0.5 border border-[#E1E1E1] rounded cursor-pointer shrink-0"
+                          />
+                          <input
+                            type="text"
+                            value={color}
+                            onChange={(e) => {
+                              setColor(e.target.value);
+                              if (!icon) setIndicator(e.target.value);
+                            }}
+                            placeholder="#6366F1"
+                            className="flex-1 px-3 py-1.5 border border-[#E1E1E1] rounded text-xs font-mono"
+                          />
+                          <span
+                            className="w-6 h-6 rounded-full border border-black/15 shrink-0"
+                            style={{ backgroundColor: color }}
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Description</label>
+                        <textarea
+                          value={description}
+                          onChange={(e) => setDescription(e.target.value)}
+                          placeholder="Provide details or operational scope for this follow-up type"
+                          rows={2}
+                          className="w-full px-3 py-1.5 border border-[#E1E1E1] rounded text-xs resize-none"
+                        />
                       </div>
                     </>
                   )}

@@ -28,6 +28,7 @@ pnpm-debug.log*
 # Temporary / ad-hoc scripts
 *.cjs
 !backend/test_uat_bug_065.cjs
+!backend/test_uat_followup_feature.cjs
 *.patch
 FETCH_HEAD
 scratch/
@@ -57,3 +58,4 @@ tmp/
 temp/
 .cache/
 .vite/
+backend/storage/

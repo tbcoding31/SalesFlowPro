@@ -53,6 +53,7 @@ app.use('/api/customers', authMiddleware, tenantMiddleware, customersRoutes);
 app.use('/api/projects', authMiddleware, tenantMiddleware, projectsRoutes);
 app.use('/api/tasks', authMiddleware, tenantMiddleware, tasksRoutes);
 app.use('/api/visits', authMiddleware, tenantMiddleware, visitsRoutes);
+app.use('/api/follow-ups', authMiddleware, tenantMiddleware, followupsRoutes);
 app.use('/api/followups', authMiddleware, tenantMiddleware, followupsRoutes);
 app.use('/api/follow_ups', authMiddleware, tenantMiddleware, followupsRoutes);
 app.use('/api/timeline', authMiddleware, tenantMiddleware, timelineRoutes);

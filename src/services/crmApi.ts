@@ -188,25 +188,6 @@ export const crmApi = {
     }
   },
 
-  fetchFollowUps: async (params?: QueryPaginationParams): Promise<PaginatedResponse<FollowUp>> => {
-    const q = new URLSearchParams();
-    if (params) {
-      if (params.page) q.set('page', String(params.page));
-      if (params.pageSize) q.set('pageSize', String(params.pageSize));
-      if (params.search) q.set('search', params.search.trim());
-      if (params.sortBy) q.set('sortBy', params.sortBy);
-      if (params.sortOrder) q.set('sortOrder', params.sortOrder);
-      if (params.status && params.status !== 'ALL') q.set('status', params.status);
-      if (params.picId && params.picId !== 'ALL') q.set('picId', params.picId);
-      if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
-      if (params.customerId && params.customerId !== 'ALL') q.set('customerId', params.customerId);
-    }
-    const url = `${API_BASE}/follow_ups${q.toString() ? '?' + q.toString() : ''}`;
-    const res = await fetch(url, { headers: getAuthHeaders() });
-    if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch follow_ups`);
-    return await res.json();
-  },
-
   fetchCustomerTimeline: async (customerId: string, page: number = 1, pageSize: number = 25): Promise<PaginatedResponse<CustomerTimelineEvent>> => {
     const url = `${API_BASE}/customers/${customerId}/timeline?page=${page}&pageSize=${pageSize}`;
     const res = await fetch(url, { headers: getAuthHeaders() });
@@ -1279,6 +1260,174 @@ export const crmApi = {
     } catch (err) {
       console.error('[crmApi.fetchPolicyRevisions error]', err);
       return null;
+    }
+  },
+
+  // --- Follow-up API Endpoints ---
+  fetchFollowUps: async (params?: QueryPaginationParams & {
+    dueDateFrom?: string;
+    dueDateTo?: string;
+    isOverdue?: boolean;
+    isDueToday?: boolean;
+  }): Promise<PaginatedResponse<FollowUp> | { data: FollowUp[]; pagination: any }> => {
+    const q = new URLSearchParams();
+    if (params) {
+      if (params.page) q.set('page', String(params.page));
+      if (params.pageSize) q.set('pageSize', String(params.pageSize));
+      if (params.search) q.set('search', params.search.trim());
+      if (params.status && params.status !== 'ALL') q.set('status', params.status);
+      if (params.priority && params.priority !== 'ALL') q.set('priority', params.priority);
+      if (params.customerId && params.customerId !== 'ALL') q.set('customerId', params.customerId);
+      if (params.picId && params.picId !== 'ALL') q.set('picId', params.picId);
+      if (params.typeId && params.typeId !== 'ALL') q.set('typeId', params.typeId);
+      if (params.projectId && params.projectId !== 'ALL') q.set('projectId', params.projectId);
+      if (params.relatedProjectId && params.relatedProjectId !== 'ALL') q.set('relatedProjectId', params.relatedProjectId);
+      if (params.relatedVisitId && params.relatedVisitId !== 'ALL') q.set('relatedVisitId', params.relatedVisitId);
+      if (params.dueDateFrom) q.set('dueDateFrom', params.dueDateFrom);
+      if (params.dueDateTo) q.set('dueDateTo', params.dueDateTo);
+      if (params.isOverdue) q.set('isOverdue', 'true');
+      if (params.isDueToday) q.set('isDueToday', 'true');
+    }
+    const url = `${API_BASE}/follow-ups${q.toString() ? '?' + q.toString() : ''}`;
+    const res = await fetch(url, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to fetch follow-ups`);
+    const data = await res.json();
+    if (Array.isArray(data)) {
+      return {
+        data,
+        pagination: {
+          page: 1,
+          pageSize: data.length,
+          totalItems: data.length,
+          totalPages: 1
+        }
+      };
+    }
+    return data;
+  },
+
+  fetchFollowUpById: async (id: string): Promise<FollowUp | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/follow-ups/${id}`, { headers: getAuthHeaders() });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch (err) {
+      console.error('[crmApi.fetchFollowUpById error]', err);
+      return null;
+    }
+  },
+
+  createFollowUp: async (data: Partial<FollowUp>): Promise<{ success: boolean; data?: FollowUp; error?: string; code?: string }> => {
+    try {
+      const res = await fetch(`${API_BASE}/follow-ups`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(data)
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: json.error || 'Failed to create follow-up', code: json.code };
+      }
+      return { success: true, data: json.data || json };
+    } catch (err: any) {
+      console.error('[crmApi.createFollowUp error]', err);
+      return { success: false, error: err.message || 'Network error' };
+    }
+  },
+
+  updateFollowUp: async (id: string, data: Partial<FollowUp>): Promise<{ success: boolean; error?: string; code?: string }> => {
+    try {
+      const res = await fetch(`${API_BASE}/follow-ups/${id}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(data)
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: json.error || 'Failed to update follow-up', code: json.code };
+      }
+      return { success: true };
+    } catch (err: any) {
+      console.error('[crmApi.updateFollowUp error]', err);
+      return { success: false, error: err.message || 'Network error' };
+    }
+  },
+
+  completeFollowUp: async (id: string, outcome?: string): Promise<{ success: boolean; data?: any; error?: string; code?: string }> => {
+    try {
+      const res = await fetch(`${API_BASE}/follow-ups/${id}/complete`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ outcome })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: json.error || 'Failed to complete follow-up', code: json.code };
+      }
+      return { success: true, data: json.data };
+    } catch (err: any) {
+      console.error('[crmApi.completeFollowUp error]', err);
+      return { success: false, error: err.message || 'Network error' };
+    }
+  },
+
+  cancelFollowUp: async (id: string, cancellationReason: string): Promise<{ success: boolean; data?: any; error?: string; code?: string }> => {
+    try {
+      const res = await fetch(`${API_BASE}/follow-ups/${id}/cancel`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ cancellationReason })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: json.error || 'Failed to cancel follow-up', code: json.code };
+      }
+      return { success: true, data: json.data };
+    } catch (err: any) {
+      console.error('[crmApi.cancelFollowUp error]', err);
+      return { success: false, error: err.message || 'Network error' };
+    }
+  },
+
+  uploadFollowUpEvidence: async (followUpId: string, file: File): Promise<{ success: boolean; data?: any; error?: string; code?: string }> => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const token = localStorage.getItem('sfp_auth_token') || '';
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch(`${API_BASE}/follow-ups/${followUpId}/evidences`, {
+        method: 'POST',
+        headers,
+        body: formData
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: json.error || 'Failed to upload evidence', code: json.code };
+      }
+      return { success: true, data: json.data };
+    } catch (err: any) {
+      console.error('[crmApi.uploadFollowUpEvidence error]', err);
+      return { success: false, error: err.message || 'Network error' };
+    }
+  },
+
+  deleteFollowUpEvidence: async (followUpId: string, evidenceId: string): Promise<{ success: boolean; error?: string; code?: string }> => {
+    try {
+      const res = await fetch(`${API_BASE}/follow-ups/${followUpId}/evidences/${evidenceId}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: json.error || 'Failed to delete evidence', code: json.code };
+      }
+      return { success: true };
+    } catch (err: any) {
+      console.error('[crmApi.deleteFollowUpEvidence error]', err);
+      return { success: false, error: err.message || 'Network error' };
     }
   }
 };

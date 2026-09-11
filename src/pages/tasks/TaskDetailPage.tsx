@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { Task, Activity, User } from '../../types';
 import { crmApi } from '../../services/crmApi';
 import { usersApi } from '../../services/usersApi';
+import { CreateFollowUpModal } from '../../components/followups/CreateFollowUpModal';
 
 export const TaskDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -14,6 +15,7 @@ export const TaskDetailPage: React.FC = () => {
   const [task, setTask] = useState<Task | null>(null);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [comment, setComment] = useState('');
+  const [isFollowUpModalOpen, setIsFollowUpModalOpen] = useState(false);
 
   // Reassign Modal State
   const [showReassignModal, setShowReassignModal] = useState(false);
@@ -182,6 +184,14 @@ export const TaskDetailPage: React.FC = () => {
           <button onClick={() => setShowReassignModal(true)} className="px-4 py-2 bg-white border border-[#E1E1E1] text-[#464555] rounded-xl text-xs font-bold hover:bg-[#f3f3f3] transition-colors flex items-center gap-2 cursor-pointer">
             <span className="material-symbols-outlined text-[16px]">assignment_ind</span>
             Reassign PIC
+          </button>
+
+          <button
+            onClick={() => setIsFollowUpModalOpen(true)}
+            className="px-3.5 py-2 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-xl text-xs font-bold hover:bg-indigo-100 transition-colors flex items-center gap-1.5 cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-[16px] text-indigo-600">add_task</span>
+            + Add Follow-up
           </button>
 
           {task.status !== 'COMPLETED' && (
@@ -621,6 +631,20 @@ export const TaskDetailPage: React.FC = () => {
 
           </div>
         </div>
+      )}
+
+      {isFollowUpModalOpen && task && (
+        <CreateFollowUpModal
+          isOpen={isFollowUpModalOpen}
+          onClose={() => setIsFollowUpModalOpen(false)}
+          onSuccess={() => loadData()}
+          initialTaskId={task.id}
+          initialTaskTitle={task.title}
+          initialCustomerId={task.customerId}
+          initialCustomerName={task.customerName}
+          initialProjectId={task.relatedProjectId}
+          sourceType="TASK"
+        />
       )}
 
     </div>

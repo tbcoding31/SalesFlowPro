@@ -272,8 +272,22 @@ export type FollowUpType =
   | 'OTHER'
   | string;
 
-export type FollowUpStatus = 'SCHEDULED' | 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+export type FollowUpStatus = 'OPEN' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED' | 'SCHEDULED' | 'PENDING';
 export type FollowUpPriority = 'URGENT' | 'HIGH' | 'MEDIUM' | 'LOW';
+
+export interface FollowUpEvidence {
+  id: string;
+  followUpId: string;
+  tenantId: string;
+  originalFileName: string;
+  storedFileName: string;
+  filePath: string;
+  mimeType: string;
+  fileSizeBytes: number;
+  uploadedById: string;
+  uploadedByName?: string;
+  createdAt: string;
+}
 
 export interface FollowUp {
   id: string;
@@ -281,24 +295,40 @@ export interface FollowUp {
   title?: string;
   customerId: string;
   customerName: string;
-  customerCode: string;
-  relatedVisitId?: string;
-  relatedProjectId?: string;
-  relatedTaskId?: string;
+  customerCode?: string;
+  relatedVisitId?: string | null;
+  relatedProjectId?: string | null;
+  relatedTaskId?: string | null;
+  projectName?: string | null;
+  projectCode?: string | null;
+  visitTitle?: string | null;
+  taskTitle?: string | null;
   picId: string;
   picName: string;
   picAvatar?: string;
   followUpDate: string;
   reminderDate?: string;
-  type: FollowUpType;
+  type?: FollowUpType;
+  typeId?: string | null;
+  typeCode?: string | null;
+  typeName?: string | null;
+  typeIcon?: string | null;
+  typeColor?: string | null;
+  sourceType?: 'DIRECT' | 'VISIT' | 'PROJECT' | 'TASK';
   priority?: FollowUpPriority;
   notes?: string;
   outcome?: string;
+  cancellationReason?: string | null;
+  completedById?: string | null;
+  completedByName?: string | null;
   status: FollowUpStatus;
   createdAt: string;
+  updatedAt?: string;
   completedAt?: string;
   rescheduledFromDate?: string;
   rescheduleReason?: string;
+  evidences?: FollowUpEvidence[];
+  evidenceCount?: number;
 }
 
 export type ProjectStage = string;
@@ -696,7 +726,7 @@ export interface ProjectInterventionsResponse {
 export interface MasterDataItem {
   id: string;
   tenantId?: string; // empty if global
-  category: 'customer_types' | 'customer_status' | 'customer_statuses' | 'visit_purposes' | 'task_priorities' | 'task_statuses' | 'project_stages' | 'departments' | 'positions' | 'task_types';
+  category: 'customer_types' | 'customer_status' | 'customer_statuses' | 'visit_purposes' | 'task_priorities' | 'task_statuses' | 'project_stages' | 'departments' | 'positions' | 'task_types' | 'follow_up_types';
   label: string;
   codeValue: string;
   code_value?: string;

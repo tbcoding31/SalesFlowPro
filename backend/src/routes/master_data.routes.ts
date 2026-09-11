@@ -15,7 +15,8 @@ const ALLOWED_PLATFORM_CATEGORIES = [
   'task_statuses',
   'project_stages',
   'departments',
-  'positions'
+  'positions',
+  'follow_up_types'
 ];
 
 const TYPE_B_CATEGORIES = [
@@ -78,6 +79,9 @@ masterDataRoutes.post('/platform/:category', async (req: any, res: any) => {
     } else if (category === 'activity_types') {
       query = 'INSERT INTO activity_types (id, tenantId, sourceType, platformMasterId, code, name, icon, color, isActive, displayOrder) VALUES (?, NULL, \'PLATFORM\', NULL, ?, ?, ?, ?, ?, ?)';
       params = [data.id, data.code, data.name, data.icon || null, data.color || null, data.isActive !== undefined ? (data.isActive ? 1 : 0) : 1, data.displayOrder || 0];
+    } else if (category === 'follow_up_types') {
+      query = 'INSERT INTO follow_up_types (id, tenantId, sourceType, platformMasterId, code, name, description, icon, color, isActive, displayOrder) VALUES (?, NULL, \'PLATFORM\', NULL, ?, ?, ?, ?, ?, ?, ?)';
+      params = [data.id, data.code, data.name, data.description || null, data.icon || null, data.color || null, data.isActive !== undefined ? (data.isActive ? 1 : 0) : 1, data.displayOrder || 0];
     } else if (category === 'customer_statuses' || category === 'task_statuses') {
       query = `INSERT INTO ${category} (id, tenantId, sourceType, platformMasterId, code, name, color, isActive, displayOrder) VALUES (?, NULL, 'PLATFORM', NULL, ?, ?, ?, ?, ?)`;
       params = [data.id, data.code, data.name, data.color || null, data.isActive !== undefined ? (data.isActive ? 1 : 0) : 1, data.displayOrder || 0];
@@ -164,6 +168,9 @@ masterDataRoutes.put('/platform/:category/:id', async (req: any, res: any) => {
     } else if (category === 'activity_types') {
       query = 'UPDATE activity_types SET name = ?, icon = ?, color = ?, isActive = ?, displayOrder = ? WHERE id = ? AND tenantId IS NULL';
       params = [data.name || current.name, data.icon !== undefined ? data.icon : current.icon, data.color !== undefined ? data.color : current.color, data.isActive !== undefined ? (data.isActive ? 1 : 0) : current.isActive, data.displayOrder !== undefined ? Number(data.displayOrder) : current.displayOrder, id];
+    } else if (category === 'follow_up_types') {
+      query = 'UPDATE follow_up_types SET name = ?, description = ?, icon = ?, color = ?, isActive = ?, displayOrder = ? WHERE id = ? AND tenantId IS NULL';
+      params = [data.name || current.name, data.description !== undefined ? data.description : current.description, data.icon !== undefined ? data.icon : current.icon, data.color !== undefined ? data.color : current.color, data.isActive !== undefined ? (data.isActive ? 1 : 0) : current.isActive, data.displayOrder !== undefined ? Number(data.displayOrder) : current.displayOrder, id];
     } else if (category === 'task_priorities') {
       const prioVal = data.icon !== undefined ? data.icon : (data.color !== undefined ? data.color : current.color);
       query = 'UPDATE task_priorities SET name = ?, color = ?, isActive = ?, displayOrder = ? WHERE id = ? AND tenantId IS NULL';
@@ -333,6 +340,9 @@ const handleTenantPostMasterData = async (req: any, res: any) => {
     } else if (category === 'activity_types') {
       query = 'INSERT INTO activity_types (id, tenantId, sourceType, platformMasterId, code, name, icon, color, isActive, displayOrder) VALUES (?, ?, \'TENANT\', NULL, ?, ?, ?, ?, 1, ?)';
       params = [data.id, targetTenant, code, data.name || data.label, data.icon || data.indicator || null, data.color || data.indicator || null, data.displayOrder || 0];
+    } else if (category === 'follow_up_types') {
+      query = 'INSERT INTO follow_up_types (id, tenantId, sourceType, platformMasterId, code, name, description, icon, color, isActive, displayOrder) VALUES (?, ?, \'TENANT\', NULL, ?, ?, ?, ?, ?, 1, ?)';
+      params = [data.id, targetTenant, code, data.name || data.label, data.description || null, data.icon || data.indicator || null, data.color || null, data.displayOrder || 0];
     } else if (category === 'task_priorities') {
       query = 'INSERT INTO task_priorities (id, tenantId, sourceType, platformMasterId, code, name, color, isActive, displayOrder) VALUES (?, ?, \'TENANT\', NULL, ?, ?, ?, 1, ?)';
       const prioVal = data.icon !== undefined ? data.icon : (data.color !== undefined ? data.color : (data.indicator || null));
@@ -487,6 +497,17 @@ const handleTenantPutMasterData = async (req: any, res: any) => {
         'UPDATE activity_types SET name = ?, icon = ?, color = ?, displayOrder = ?, isActive = ? WHERE id = ? AND tenantId = ?',
         [name, icon, color, displayOrder, isActive, id, targetTenant]
       );
+    } else if (category === 'follow_up_types') {
+      const name = data.name || data.label || current.name;
+      const description = data.description !== undefined ? data.description : current.description;
+      const icon = data.icon !== undefined ? data.icon : (data.indicator !== undefined ? data.indicator : current.icon);
+      const color = data.color !== undefined ? data.color : current.color;
+      const displayOrder = data.displayOrder !== undefined ? Number(data.displayOrder) : current.displayOrder;
+      const isActive = data.isActive !== undefined ? (data.isActive ? 1 : 0) : current.isActive;
+      await pool.query(
+        'UPDATE follow_up_types SET name = ?, description = ?, icon = ?, color = ?, displayOrder = ?, isActive = ? WHERE id = ? AND tenantId = ?',
+        [name, description, icon, color, displayOrder, isActive, id, targetTenant]
+      );
     } else if (category === 'task_priorities') {
       const name = data.name || data.label || current.name;
       const color = data.icon !== undefined ? data.icon : (data.color !== undefined ? data.color : (data.indicator !== undefined ? data.indicator : current.color));
@@ -608,6 +629,10 @@ const handleTenantDeleteMasterData = async (req: any, res: any) => {
       const [vRows]: any = await pool.query('SELECT COUNT(*) as cnt FROM visits WHERE statusId = ? AND tenantId = ?', [id, targetTenant]);
       details.visits = vRows[0].cnt;
       usageCount = vRows[0].cnt;
+    } else if (category === 'follow_up_types') {
+      const [fRows]: any = await pool.query('SELECT COUNT(*) as cnt FROM follow_ups WHERE typeId = ? AND tenantId = ?', [id, targetTenant]);
+      details.followUps = fRows[0].cnt;
+      usageCount = fRows[0].cnt;
     }
 
     if (usageCount > 0) {
@@ -692,6 +717,11 @@ const handleTenantResetMasterData = async (req: any, res: any) => {
             'UPDATE activity_types SET name = ?, icon = ?, color = ?, isActive = ?, displayOrder = ? WHERE id = ? AND tenantId = ?',
             [plat.name, plat.icon, plat.color, plat.isActive, plat.displayOrder, existingClone.id, targetTenant]
           );
+        } else if (category === 'follow_up_types') {
+          await pool.query(
+            'UPDATE follow_up_types SET name = ?, description = ?, icon = ?, color = ?, isActive = ?, displayOrder = ? WHERE id = ? AND tenantId = ?',
+            [plat.name, plat.description, plat.icon, plat.color, plat.isActive, plat.displayOrder, existingClone.id, targetTenant]
+          );
         } else if (category === 'task_priorities') {
           await pool.query(
             'UPDATE task_priorities SET name = ?, color = ?, isActive = ?, displayOrder = ? WHERE id = ? AND tenantId = ?',
@@ -741,6 +771,11 @@ const handleTenantResetMasterData = async (req: any, res: any) => {
           await pool.query(
             'INSERT INTO activity_types (id, tenantId, sourceType, platformMasterId, code, name, icon, color, isActive, displayOrder) VALUES (?, ?, \'PLATFORM\', ?, ?, ?, ?, ?, ?, ?)',
             [newId, targetTenant, plat.id, plat.code, plat.name, plat.icon, plat.color, plat.isActive, plat.displayOrder]
+          );
+        } else if (category === 'follow_up_types') {
+          await pool.query(
+            'INSERT INTO follow_up_types (id, tenantId, sourceType, platformMasterId, code, name, description, icon, color, isActive, displayOrder) VALUES (?, ?, \'PLATFORM\', ?, ?, ?, ?, ?, ?, ?, ?)',
+            [newId, targetTenant, plat.id, plat.code, plat.name, plat.description, plat.icon, plat.color, plat.isActive, plat.displayOrder]
           );
         } else if (category === 'task_priorities' || category === 'task_statuses' || category === 'customer_statuses') {
           await pool.query(

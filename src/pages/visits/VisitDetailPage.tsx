@@ -5,6 +5,7 @@ import { Visit, VisitStatus } from '../../types';
 import { crmApi } from '../../services/crmApi';
 import { formatDate, formatTime, formatDuration, formatDateTime } from '../../utils/formatters';
 import { resolveVisitOrigin, buildVisitsUrl, buildVisitEditUrl } from '../../utils/visitNavigation';
+import { CreateFollowUpModal } from '../../components/followups/CreateFollowUpModal';
 
 export const VisitDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -21,6 +22,7 @@ export const VisitDetailPage: React.FC = () => {
   // Modals & Action States
   const [currentStatus, setCurrentStatus] = useState<VisitStatus>('PLANNED');
   const [notes, setNotes] = useState<string>('');
+  const [isFollowUpModalOpen, setIsFollowUpModalOpen] = useState(false);
 
   // Reschedule state
   const [isRescheduleOpen, setIsRescheduleOpen] = useState(false);
@@ -286,6 +288,14 @@ export const VisitDetailPage: React.FC = () => {
                 <span>Cancel Visit</span>
               </button>
             )}
+
+            <button
+              onClick={() => setIsFollowUpModalOpen(true)}
+              className="px-3.5 py-2 border border-indigo-200 bg-indigo-50/50 hover:bg-indigo-50 text-indigo-700 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 font-['Hanken_Grotesk'] cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[16px] text-indigo-600">add_task</span>
+              <span>+ Add Follow-up</span>
+            </button>
           </div>
         </div>
 
@@ -784,6 +794,21 @@ export const VisitDetailPage: React.FC = () => {
           </div>
         </div>
       )}
+      {isFollowUpModalOpen && visit && (
+        <CreateFollowUpModal
+          isOpen={isFollowUpModalOpen}
+          onClose={() => setIsFollowUpModalOpen(false)}
+          onSuccess={() => {}}
+          initialVisitId={visit.id}
+          initialVisitTitle={visit.title}
+          initialCustomerId={visit.customerId}
+          initialCustomerName={visit.customerName}
+          initialProjectId={visit.projectId}
+          initialProjectName={visit.projectName}
+          sourceType="VISIT"
+        />
+      )}
+
     </div>
   );
 };

@@ -104,6 +104,13 @@ const mapToDb = (category: MasterDataItem['category'], item: MasterDataItem, ten
         icon: resolvedIcon || null,
         color: resolvedColor || null
       };
+    case 'follow_up_types':
+      return {
+        ...base,
+        description: item.description || null,
+        icon: resolvedIcon || null,
+        color: resolvedColor || null
+      };
     case 'task_priorities':
       return {
         ...base,

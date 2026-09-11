@@ -9,6 +9,7 @@ import { useAuth } from '../../context/AuthContext';
 import { Project, Customer, Task, Visit, FollowUp, Activity, ProjectStage, MasterDataItem } from '../../types';
 import { crmApi } from '../../services/crmApi';
 import { masterDataApi } from '../../services/masterDataApi';
+import { CreateFollowUpModal } from '../../components/followups/CreateFollowUpModal';
 
 export const ProjectDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -25,6 +26,7 @@ export const ProjectDetailPage: React.FC = () => {
   const [visits, setVisits] = useState<Visit[]>([]);
   const [followups, setFollowups] = useState<FollowUp[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
+  const [showFollowUpModal, setShowFollowUpModal] = useState(false);
   const [timelinePage, setTimelinePage] = useState(1);
   const [timelineHasMore, setTimelineHasMore] = useState(false);
   const [isLoadingTimeline, setIsLoadingTimeline] = useState(false);
@@ -492,22 +494,8 @@ const loadData = async () => {
                               + Task
                             </button>
                             <button
-                              onClick={() => {
-                                const title = prompt('Enter follow-up topic:');
-                                if (title) {
-                                  crmApi.createRecord('follow_ups', {
-                                    id: `FLW-${Date.now()}`,
-                                    tenantId,
-                                    title,
-                                    customerId: project.customerId,
-                                    relatedProjectId: project.id,
-                                    followUpDate: new Date().toISOString().split('T')[0],
-                                    typeId: 'CALL',
-                                    status: 'PENDING'
-                                  }).then(() => loadData());
-                                }
-                              }}
-                              className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold rounded"
+                              onClick={() => setShowFollowUpModal(true)}
+                              className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold rounded cursor-pointer"
                             >
                               + Follow-up
                             </button>
@@ -621,6 +609,15 @@ const loadData = async () => {
             >
               <span className="material-symbols-outlined text-[16px] text-blue-500">chat_bubble</span>
               Comments
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowFollowUpModal(true)}
+              className="col-span-2 px-3 py-2 bg-indigo-50/80 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl shadow-2xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+              title="Add Follow-up for this project"
+            >
+              <span className="material-symbols-outlined text-[16px] text-indigo-600">add_task</span>
+              + Add Follow-up
             </button>
           </div>
         </div>
@@ -1184,6 +1181,19 @@ const loadData = async () => {
             </div>
           </div>
         </div>
+      )}
+
+      {showFollowUpModal && project && (
+        <CreateFollowUpModal
+          isOpen={showFollowUpModal}
+          onClose={() => setShowFollowUpModal(false)}
+          onSuccess={() => loadData()}
+          initialProjectId={project.id}
+          initialProjectName={project.name}
+          initialCustomerId={project.customerId}
+          initialCustomerName={customer?.name || project.customerName}
+          sourceType="PROJECT"
+        />
       )}
 
     </div>

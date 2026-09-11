@@ -1,38 +1,38 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { FollowUp, FollowUpStatus, Customer, Task, Visit, Project } from '../../types';
+import { FollowUp, FollowUpEvidence } from '../../types';
 import { crmApi } from '../../services/crmApi';
+import { CompleteFollowUpModal } from '../../components/followups/CompleteFollowUpModal';
+import { CancelFollowUpModal } from '../../components/followups/CancelFollowUpModal';
 
 export const FollowupDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { currentTenant } = useAuth();
-  const tenantId = currentTenant?.id ;
+  const tenantId = currentTenant?.id || '';
 
   const [followup, setFollowup] = useState<FollowUp | null>(null);
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [visits, setVisits] = useState<Visit[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [evidences, setEvidences] = useState<FollowUpEvidence[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // Modals
+  const [showCompleteModal, setShowCompleteModal] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadData = async () => {
     if (!id) return;
     setIsLoading(true);
     try {
-      const [f, cList, tList, vList, pList] = await Promise.all([
-        crmApi.fetchRecordById<FollowUp>('follow_ups', id),
-        crmApi.fetchCollection<Customer>('customers', tenantId),
-        crmApi.fetchCollection<Task>('tasks', tenantId),
-        crmApi.fetchCollection<Visit>('visits', tenantId),
-        crmApi.fetchCollection<Project>('projects', tenantId),
-      ]);
-      if (f) setFollowup(f);
-      setCustomers(cList);
-      setTasks(tList);
-      setVisits(vList);
-      setProjects(pList);
+      const data = await crmApi.fetchFollowUpById(id);
+      if (data) {
+        setFollowup(data);
+        setEvidences(data.evidences || []);
+      }
     } catch (err) {
       console.error('Error loading followup detail:', err);
     } finally {
@@ -44,29 +44,64 @@ export const FollowupDetailPage: React.FC = () => {
     loadData();
   }, [id, tenantId]);
 
-  const handleComplete = async () => {
-    if (!followup) return;
-    const isCompleted = followup.status === 'COMPLETED';
-    const updated = { 
-      ...followup, 
-      status: (isCompleted ? 'PENDING' : 'COMPLETED') as FollowUpStatus,
-      completedAt: isCompleted ? undefined : new Date().toISOString()
-    };
-    await crmApi.updateRecord('follow_ups', followup.id, updated);
-    loadData();
+  const handleUploadEvidence = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !id) return;
+
+    setUploadError(null);
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      setUploadError('Only JPEG, PNG, and WEBP images are allowed.');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setUploadError('File size must be 5MB or smaller.');
+      return;
+    }
+    if (evidences.length >= 5) {
+      setUploadError('Maximum 5 evidence files allowed.');
+      return;
+    }
+
+    setIsUploading(true);
+    try {
+      const res = await crmApi.uploadFollowUpEvidence(id, file);
+      if (res.success) {
+        await loadData();
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      } else {
+        setUploadError(res.error || 'Upload failed.');
+      }
+    } catch (err: any) {
+      setUploadError(err.message || 'Upload failed.');
+    } finally {
+      setIsUploading(false);
+    }
   };
 
-  const customer = useMemo(() => followup ? customers.find(c => c.id === followup.customerId) : undefined, [customers, followup]);
-  const relatedTask = useMemo(() => followup ? tasks.find(t => t.id === followup.relatedTaskId) : undefined, [tasks, followup]);
-  const relatedVisit = useMemo(() => followup ? visits.find(v => v.id === followup.relatedVisitId) : undefined, [visits, followup]);
-  const relatedProject = useMemo(() => followup ? projects.find(o => o.id === followup.relatedProjectId) : undefined, [projects, followup]);
+  const handleDeleteEvidence = async (evidenceId: string) => {
+    if (!id) return;
+    if (!window.confirm('Delete this evidence file?')) return;
+    try {
+      const res = await crmApi.deleteFollowUpEvidence(id, evidenceId);
+      if (res.success) {
+        setEvidences((prev) => prev.filter((e) => e.id !== evidenceId));
+        await loadData();
+      } else {
+        alert(res.error || 'Failed to delete evidence.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete evidence.');
+    }
+  };
 
   const today = new Date().toISOString().split('T')[0];
   const derivedStatus = useMemo(() => {
     if (!followup) return 'SCHEDULED';
     if (followup.status !== 'COMPLETED' && followup.status !== 'CANCELLED') {
-      if (followup.followUpDate < today) return 'OVERDUE';
-      if (followup.followUpDate === today) return 'DUE_TODAY';
+      const fDate = followup.followUpDate ? followup.followUpDate.split('T')[0] : '';
+      if (fDate && fDate < today) return 'OVERDUE';
+      if (fDate && fDate === today) return 'DUE_TODAY';
       return 'SCHEDULED';
     }
     return followup.status as string;
@@ -75,34 +110,54 @@ export const FollowupDetailPage: React.FC = () => {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'DUE_TODAY':
-        return <span className="px-2.5 py-1 bg-amber-100 text-amber-700 text-xs font-bold rounded-lg uppercase tracking-wider border border-amber-200">Due Today</span>;
+        return (
+          <span className="px-2.5 py-1 bg-amber-100 text-amber-700 text-xs font-bold rounded-lg uppercase tracking-wider border border-amber-200">
+            Due Today
+          </span>
+        );
       case 'OVERDUE':
-        return <span className="px-2.5 py-1 bg-rose-100 text-rose-700 text-xs font-bold rounded-lg uppercase tracking-wider border border-rose-200">Overdue</span>;
+        return (
+          <span className="px-2.5 py-1 bg-rose-100 text-rose-700 text-xs font-bold rounded-lg uppercase tracking-wider border border-rose-200">
+            Overdue
+          </span>
+        );
       case 'COMPLETED':
-        return <span className="px-2.5 py-1 bg-emerald-100 text-emerald-700 text-xs font-bold rounded-lg uppercase tracking-wider border border-emerald-200">Completed</span>;
+        return (
+          <span className="px-2.5 py-1 bg-emerald-100 text-emerald-700 text-xs font-bold rounded-lg uppercase tracking-wider border border-emerald-200">
+            Completed
+          </span>
+        );
       case 'CANCELLED':
-        return <span className="px-2.5 py-1 bg-slate-100 text-slate-700 text-xs font-bold rounded-lg uppercase tracking-wider border border-slate-200">Cancelled</span>;
+        return (
+          <span className="px-2.5 py-1 bg-slate-100 text-slate-700 text-xs font-bold rounded-lg uppercase tracking-wider border border-slate-200">
+            Cancelled
+          </span>
+        );
+      case 'IN_PROGRESS':
+        return (
+          <span className="px-2.5 py-1 bg-blue-100 text-blue-700 text-xs font-bold rounded-lg uppercase tracking-wider border border-blue-200">
+            In Progress
+          </span>
+        );
       case 'SCHEDULED':
+      case 'OPEN':
       default:
-        return <span className="px-2.5 py-1 bg-indigo-100 text-indigo-700 text-xs font-bold rounded-lg uppercase tracking-wider border border-indigo-200">Scheduled</span>;
-    }
-  };
-
-  const getTypeStyle = (type: string) => {
-    switch(type) {
-      case 'CALL': return 'bg-blue-50 text-blue-700 border-blue-200';
-      case 'EMAIL': return 'bg-violet-50 text-violet-700 border-violet-200';
-      case 'MEETING': return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-      case 'WHATSAPP': return 'bg-green-50 text-green-700 border-green-200';
-      default: return 'bg-slate-50 text-slate-700 border-slate-200';
+        return (
+          <span className="px-2.5 py-1 bg-indigo-100 text-indigo-700 text-xs font-bold rounded-lg uppercase tracking-wider border border-indigo-200">
+            Scheduled
+          </span>
+        );
     }
   };
 
   if (!followup && !isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center h-full">
+      <div className="flex flex-col items-center justify-center min-h-[400px]">
         <h2 className="text-xl font-bold text-slate-800">Follow-up not found</h2>
-        <button onClick={() => navigate('/followups')} className="mt-4 text-[#4744e5] hover:underline">
+        <button
+          onClick={() => navigate('/followups')}
+          className="mt-4 px-4 py-2 bg-[#4744e5] text-white rounded-xl text-xs font-bold"
+        >
           Back to Follow-ups
         </button>
       </div>
@@ -112,7 +167,9 @@ export const FollowupDetailPage: React.FC = () => {
   if (!followup) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
-        <span className="material-symbols-outlined text-4xl text-[#4744e5] animate-spin">progress_activity</span>
+        <span className="material-symbols-outlined text-4xl text-[#4744e5] animate-spin">
+          progress_activity
+        </span>
       </div>
     );
   }
@@ -120,288 +177,383 @@ export const FollowupDetailPage: React.FC = () => {
   return (
     <div className="max-w-6xl mx-auto space-y-6 font-['Inter',sans-serif] pb-12">
       {/* Back navigation */}
-      <button 
+      <button
         onClick={() => navigate('/followups')}
-        className="flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-slate-800 transition-colors"
+        className="flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
       >
         <span className="material-symbols-outlined text-[18px]">arrow_back</span>
         Back to Follow-ups
       </button>
 
-      {/* Header Actions */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-2xl border border-[#E1E1E1] shadow-2xs">
+      {/* Header Banner */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-6 rounded-2xl border border-[#E1E1E1] shadow-2xs">
         <div>
-          <div className="flex items-center gap-3 mb-1">
-            <span className={`px-2 py-0.5 rounded-md border text-[10px] font-bold uppercase tracking-wider ${getTypeStyle(followup.type)}`}>
-              {followup.type}
+          <div className="flex items-center gap-3 mb-1.5">
+            <span
+              className="px-2.5 py-1 rounded-md border text-xs font-bold flex items-center gap-1.5"
+              style={{
+                backgroundColor: `${followup.typeColor || '#4744e5'}15`,
+                borderColor: `${followup.typeColor || '#4744e5'}40`,
+                color: followup.typeColor || '#4744e5'
+              }}
+            >
+              <span className="material-symbols-outlined text-[16px]">
+                {followup.typeIcon || 'call'}
+              </span>
+              <span>{followup.typeName || followup.type || 'Follow-up'}</span>
             </span>
-            <span className="text-sm font-bold text-slate-400">{followup.id}</span>
+            <span className="text-xs font-mono font-bold text-slate-400">{followup.id}</span>
           </div>
+
           <h1 className="text-2xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk'] tracking-tight">
-            {followup.title || followup.type}
+            {followup.title}
           </h1>
         </div>
-        <div className="flex items-center gap-2">
-          {followup.status !== 'COMPLETED' && (
-            <button
-              onClick={handleComplete}
-              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold rounded-xl shadow-xs transition-colors flex items-center gap-1.5"
-            >
-              <span className="material-symbols-outlined text-[18px]">check_circle</span>
-              Complete Follow-up
-            </button>
-          )}
-          <button className="px-4 py-2.5 bg-white border border-[#E1E1E1] text-[#464555] hover:bg-slate-50 text-xs font-extrabold rounded-xl shadow-2xs transition-colors flex items-center gap-1.5">
-            <span className="material-symbols-outlined text-[18px]">edit</span>
-            Edit
-          </button>
-          <button className="px-4 py-2.5 bg-white border border-[#E1E1E1] text-amber-600 hover:bg-amber-50 text-xs font-extrabold rounded-xl shadow-2xs transition-colors flex items-center gap-1.5">
-            <span className="material-symbols-outlined text-[18px]">assignment_ind</span>
-            Reassign
-          </button>
-          {followup.status !== 'CANCELLED' && followup.status !== 'COMPLETED' && (
-            <button className="px-4 py-2.5 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-extrabold rounded-xl shadow-2xs transition-colors flex items-center gap-1.5">
-              <span className="material-symbols-outlined text-[18px]">cancel</span>
-              Cancel
-            </button>
+
+        <div className="flex items-center gap-2 shrink-0">
+          {followup.status !== 'COMPLETED' && followup.status !== 'CANCELLED' && (
+            <>
+              <button
+                onClick={() => setShowCompleteModal(true)}
+                className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[18px]">check_circle</span>
+                <span>Complete</span>
+              </button>
+              <button
+                onClick={() => setShowCancelModal(true)}
+                className="px-4 py-2.5 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-extrabold rounded-xl shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[18px]">cancel</span>
+                <span>Cancel</span>
+              </button>
+            </>
           )}
         </div>
       </div>
 
+      {/* Cancellation Notice */}
+      {followup.status === 'CANCELLED' && (
+        <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-start gap-3">
+          <span className="material-symbols-outlined text-rose-600 text-[24px] shrink-0 mt-0.5">
+            cancel
+          </span>
+          <div>
+            <h4 className="text-xs font-bold text-rose-900 uppercase tracking-wider">
+              Follow-up Cancelled
+            </h4>
+            <p className="text-xs text-rose-700 mt-0.5">
+              Reason: <strong>{followup.cancellationReason || 'No reason provided'}</strong>
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Completion Notice */}
+      {followup.status === 'COMPLETED' && (
+        <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-start gap-3">
+          <span className="material-symbols-outlined text-emerald-600 text-[24px] shrink-0 mt-0.5">
+            check_circle
+          </span>
+          <div>
+            <h4 className="text-xs font-bold text-emerald-900 uppercase tracking-wider">
+              Follow-up Completed
+            </h4>
+            <p className="text-xs text-emerald-800 mt-0.5">
+              Completed by <strong>{followup.completedByName || 'Assigned Agent'}</strong> on{' '}
+              {followup.completedAt ? new Date(followup.completedAt).toLocaleString() : 'N/A'}.
+            </p>
+            {followup.outcome && (
+              <p className="text-xs text-emerald-900 mt-1 italic">
+                Outcome: "{followup.outcome}"
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
         {/* LEFT COLUMN - MAIN CONTENT */}
         <div className="lg:col-span-2 space-y-6">
-          
           {/* Notes Section */}
           <div className="bg-white rounded-2xl border border-[#E1E1E1] shadow-2xs p-6">
-            <h3 className="text-sm font-extrabold text-[#1a1c1c] uppercase tracking-wider mb-4 flex items-center gap-2">
-              <span className="material-symbols-outlined text-slate-400">subject</span>
-              Notes
+            <h3 className="text-xs font-extrabold text-[#1a1c1c] uppercase tracking-wider mb-3 flex items-center gap-2">
+              <span className="material-symbols-outlined text-slate-400 text-[18px]">subject</span>
+              <span>Instructions & Notes</span>
             </h3>
-            <div className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
+            <div className="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">
               {followup.notes || <span className="italic text-slate-400">No notes provided.</span>}
             </div>
           </div>
 
-          {/* Activity History */}
-          <div className="bg-white rounded-2xl border border-[#E1E1E1] shadow-2xs p-6">
-            <h3 className="text-sm font-extrabold text-[#1a1c1c] uppercase tracking-wider mb-6 flex items-center gap-2">
-              <span className="material-symbols-outlined text-slate-400">history</span>
-              Activity History
-            </h3>
-            
-            <div className="relative pl-4 space-y-6 before:absolute before:inset-0 before:ml-[23px] before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-slate-200 before:to-transparent">
-              <div className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
-                <div className="flex items-center justify-center w-8 h-8 rounded-full border-2 border-white bg-indigo-100 text-indigo-600 shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 absolute left-0 md:left-1/2 -translate-x-[4px]">
-                  <span className="material-symbols-outlined text-[16px]">add</span>
-                </div>
-                <div className="w-[calc(100%-2.5rem)] md:w-[calc(50%-2.5rem)] pl-4 md:pl-0 pt-1">
-                  <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
-                    <div className="flex items-center justify-between mb-1">
-                      <h4 className="text-xs font-bold text-slate-900">Follow-up Created</h4>
-                      <time className="text-[10px] font-medium text-slate-500">{new Date(followup.createdAt).toLocaleDateString()}</time>
-                    </div>
-                    <p className="text-[11px] text-slate-600">Created by System/User</p>
-                  </div>
-                </div>
-              </div>
-              
-              {followup.status === 'COMPLETED' && followup.completedAt && (
-                <div className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
-                  <div className="flex items-center justify-center w-8 h-8 rounded-full border-2 border-white bg-emerald-100 text-emerald-600 shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 absolute left-0 md:left-1/2 -translate-x-[4px]">
-                    <span className="material-symbols-outlined text-[16px]">check</span>
-                  </div>
-                  <div className="w-[calc(100%-2.5rem)] md:w-[calc(50%-2.5rem)] pl-4 md:pl-0 pt-1">
-                    <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100">
-                      <div className="flex items-center justify-between mb-1">
-                        <h4 className="text-xs font-bold text-emerald-900">Follow-up Completed</h4>
-                        <time className="text-[10px] font-medium text-emerald-600">{new Date(followup.completedAt).toLocaleDateString()}</time>
-                      </div>
-                      <p className="text-[11px] text-emerald-700">Action marked as completed.</p>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Customer Activity */}
+          {/* Evidence Gallery Card */}
           <div className="bg-white rounded-2xl border border-[#E1E1E1] shadow-2xs p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-extrabold text-[#1a1c1c] uppercase tracking-wider flex items-center gap-2">
-                <span className="material-symbols-outlined text-slate-400">store</span>
-                Customer Activity
-              </h3>
-              <button className="text-xs font-bold text-indigo-600 hover:text-indigo-800">View Full Profile</button>
+              <div>
+                <h3 className="text-xs font-extrabold text-[#1a1c1c] uppercase tracking-wider flex items-center gap-2">
+                  <span className="material-symbols-outlined text-slate-400 text-[18px]">
+                    photo_camera
+                  </span>
+                  <span>Execution Evidence Gallery</span>
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Proof photos required for audit and resolution ({evidences.length} / 5 files)
+                </p>
+              </div>
+
+              {evidences.length < 5 && followup.status !== 'COMPLETED' && followup.status !== 'CANCELLED' && (
+                <div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={handleUploadEvidence}
+                    className="hidden"
+                    id="detail-evidence-upload"
+                    disabled={isUploading}
+                  />
+                  <label
+                    htmlFor="detail-evidence-upload"
+                    className="px-3 py-1.5 bg-[#4744e5]/10 hover:bg-[#4744e5]/20 text-[#4744e5] text-xs font-bold rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">upload_file</span>
+                    <span>{isUploading ? 'Uploading...' : 'Upload Proof'}</span>
+                  </label>
+                </div>
+              )}
             </div>
-            <div className="p-4 bg-slate-50 rounded-xl border border-[#E1E1E1] text-center">
-              <span className="material-symbols-outlined text-slate-300 text-3xl mb-2">analytics</span>
-              <p className="text-xs text-slate-500 font-medium">Recent customer interactions will appear here.</p>
-            </div>
+
+            {uploadError && (
+              <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl mb-3 flex items-center gap-2">
+                <span className="material-symbols-outlined text-[16px]">error</span>
+                <span>{uploadError}</span>
+              </div>
+            )}
+
+            {evidences.length === 0 ? (
+              <div className="p-8 border-2 border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center text-center">
+                <span className="material-symbols-outlined text-4xl text-slate-300 mb-2">
+                  add_photo_alternate
+                </span>
+                <p className="text-xs font-bold text-slate-700">No evidence images attached yet</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Follow-up completion requires at least one verified image upload.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {evidences.map((ev) => (
+                  <div
+                    key={ev.id}
+                    className="group relative border border-slate-200 rounded-xl overflow-hidden bg-slate-50 flex flex-col"
+                  >
+                    <div className="aspect-video w-full bg-slate-200 overflow-hidden flex items-center justify-center">
+                      <img
+                        src={`/api/follow-ups/${followup.id}/evidences/${ev.id}/preview`}
+                        alt={ev.originalFileName}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                        onError={(e) => {
+                          (e.target as HTMLElement).style.display = 'none';
+                        }}
+                      />
+                    </div>
+                    <div className="p-2 flex-1 flex flex-col justify-between text-[10px]">
+                      <div className="font-semibold text-slate-800 truncate" title={ev.originalFileName}>
+                        {ev.originalFileName}
+                      </div>
+                      <div className="text-slate-400 flex items-center justify-between mt-1">
+                        <span>{(ev.fileSizeBytes / 1024).toFixed(1)} KB</span>
+                        <span>{new Date(ev.createdAt).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+                    <div className="absolute top-1.5 right-1.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <a
+                        href={`/api/follow-ups/${followup.id}/evidences/${ev.id}/preview`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="p-1 bg-black/60 hover:bg-black/80 text-white rounded-md transition-colors"
+                        title="Open Fullscreen"
+                      >
+                        <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                      </a>
+                      {followup.status !== 'COMPLETED' && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteEvidence(ev.id)}
+                          className="p-1 bg-rose-600/80 hover:bg-rose-600 text-white rounded-md transition-colors"
+                          title="Delete Evidence"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">delete</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-          
+
+          {/* Outcome Notes Section (if completed) */}
+          {followup.outcome && (
+            <div className="bg-white rounded-2xl border border-emerald-200 shadow-2xs p-6 bg-emerald-50/20">
+              <h3 className="text-xs font-extrabold text-emerald-900 uppercase tracking-wider mb-2 flex items-center gap-2">
+                <span className="material-symbols-outlined text-emerald-600 text-[18px]">
+                  task_alt
+                </span>
+                <span>Final Resolution Outcome</span>
+              </h3>
+              <div className="text-xs text-slate-800 leading-relaxed">
+                {followup.outcome}
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* RIGHT COLUMN - SUMMARY PANEL */}
+        {/* RIGHT COLUMN - METADATA & RELATIONS */}
         <div className="lg:col-span-1 space-y-6">
-          
-          {/* Status & Ownership */}
-          <div className="bg-white rounded-2xl border border-[#E1E1E1] shadow-2xs overflow-hidden">
-            <div className="p-5 border-b border-[#E1E1E1] bg-slate-50 flex items-center justify-between">
-              <h3 className="text-sm font-extrabold text-[#1a1c1c] uppercase tracking-wider">Summary</h3>
+          {/* Status & Timing */}
+          <div className="bg-white rounded-2xl border border-[#E1E1E1] shadow-2xs p-6 space-y-4">
+            <h3 className="text-xs font-extrabold text-[#1a1c1c] uppercase tracking-wider">
+              Status & Due Date
+            </h3>
+
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-slate-500">Status</span>
               {getStatusBadge(derivedStatus)}
             </div>
-            
-            <div className="p-5 space-y-5">
-              
-              {/* Due Date */}
-              <div>
-                <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5 block">
-                  Due Date
-                </label>
-                <div className="flex items-center gap-2">
-                  <span className="material-symbols-outlined text-slate-400 text-[18px]">calendar_today</span>
-                  <span className={`text-sm font-bold ${derivedStatus === 'OVERDUE' ? 'text-rose-600' : 'text-[#1a1c1c]'}`}>
-                    {new Date(followup.followUpDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
-                  </span>
-                </div>
-              </div>
 
-              {/* Priority */}
-              <div>
-                <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1.5 block">
-                  Priority
-                </label>
-                <div className="flex items-center gap-2">
-                  <span className="material-symbols-outlined text-slate-400 text-[18px]">flag</span>
-                  <span className="text-sm font-bold text-[#1a1c1c]">
-                    {followup.priority || 'Medium'}
-                  </span>
-                </div>
-              </div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-slate-500">Priority</span>
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-700">
+                {followup.priority || 'MEDIUM'}
+              </span>
+            </div>
 
-              {/* PIC */}
-              <div className="pt-4 border-t border-slate-100">
-                <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-2 block">
-                  Assigned PIC
-                </label>
-                <div className="flex items-center gap-3">
-                  {followup.picAvatar ? (
-                    <img src={followup.picAvatar} alt={followup.picName} className="w-10 h-10 rounded-full object-cover border border-slate-200" />
-                  ) : (
-                    <div className="w-10 h-10 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-sm font-bold border border-slate-300">
-                      {followup.picName.charAt(0)}
-                    </div>
-                  )}
-                  <div>
-                    <div className="text-sm font-bold text-[#1a1c1c]">{followup.picName}</div>
-                    <div className="text-xs text-indigo-600 font-medium">Sales Rep</div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-slate-500">Due Date</span>
+              <span className="text-xs font-bold text-slate-800">
+                {followup.followUpDate ? followup.followUpDate.split('T')[0] : '-'}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-slate-500">Assigned PIC</span>
+              <div className="flex items-center gap-1.5">
+                {followup.picAvatar ? (
+                  <img
+                    src={followup.picAvatar}
+                    alt={followup.picName}
+                    className="w-5 h-5 rounded-full object-cover"
+                  />
+                ) : (
+                  <div className="w-5 h-5 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-[9px] font-bold">
+                    {(followup.picName || 'U').charAt(0)}
                   </div>
-                </div>
+                )}
+                <span className="text-xs font-bold text-slate-800">
+                  {followup.picName || 'Unassigned'}
+                </span>
               </div>
-
-              {/* Customer */}
-              <div className="pt-4 border-t border-slate-100">
-                <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-2 block">
-                  Customer
-                </label>
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400">
-                    <span className="material-symbols-outlined">domain</span>
-                  </div>
-                  <div>
-                    <div className="text-sm font-bold text-[#1a1c1c]">{followup.customerName}</div>
-                    <div className="text-xs text-slate-500 font-medium">{customer?.code || followup.customerCode}</div>
-                  </div>
-                </div>
-              </div>
-
             </div>
           </div>
 
-          {/* Related Items */}
-          <div className="bg-white rounded-2xl border border-[#E1E1E1] shadow-2xs overflow-hidden">
-            <div className="p-5 border-b border-[#E1E1E1] bg-slate-50">
-              <h3 className="text-sm font-extrabold text-[#1a1c1c] uppercase tracking-wider flex items-center gap-2">
-                <span className="material-symbols-outlined text-slate-400 text-[18px]">link</span>
-                Related Items
-              </h3>
+          {/* Contextual Relations */}
+          <div className="bg-white rounded-2xl border border-[#E1E1E1] shadow-2xs p-6 space-y-3.5">
+            <h3 className="text-xs font-extrabold text-[#1a1c1c] uppercase tracking-wider">
+              Contextual Relationships
+            </h3>
+
+            {/* Customer */}
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+              <div className="text-[10px] uppercase font-bold text-slate-400 mb-1 flex items-center gap-1">
+                <span className="material-symbols-outlined text-[14px]">domain</span>
+                <span>Customer</span>
+              </div>
+              <div className="font-bold text-slate-800 text-xs">
+                {followup.customerName}
+              </div>
+              {followup.customerCode && (
+                <div className="text-[10px] text-slate-500 font-mono mt-0.5">
+                  {followup.customerCode}
+                </div>
+              )}
             </div>
-            
-            <div className="p-0">
-              
-              {/* Visit */}
-              {followup.relatedVisitId && (
-                <div className="p-4 border-b border-slate-100 hover:bg-slate-50 transition-colors group cursor-pointer">
-                  <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1 block">
-                    Related Visit
-                  </label>
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="text-xs font-bold text-[#1a1c1c] group-hover:text-indigo-600 transition-colors">
-                        {relatedVisit?.title || followup.relatedVisitId}
-                      </div>
-                      <div className="text-[11px] text-slate-500 mt-0.5">
-                        {(relatedVisit?.visitDate || relatedVisit?.date) ? new Date(relatedVisit.visitDate || relatedVisit.date!).toLocaleDateString() : 'View visit details'}
-                      </div>
-                    </div>
-                    <span className="material-symbols-outlined text-slate-300 group-hover:text-indigo-600 text-[16px] transition-colors">open_in_new</span>
-                  </div>
-                </div>
-              )}
 
-              {/* Task */}
-              {followup.relatedTaskId && (
-                <div className="p-4 border-b border-slate-100 hover:bg-slate-50 transition-colors group cursor-pointer">
-                  <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1 block">
-                    Related Task
-                  </label>
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="text-xs font-bold text-[#1a1c1c] group-hover:text-indigo-600 transition-colors">
-                        {relatedTask?.title || followup.relatedTaskId}
-                      </div>
-                      <div className="text-[11px] text-slate-500 mt-0.5">
-                        {relatedTask?.dueDate ? `Due ${new Date(relatedTask.dueDate).toLocaleDateString()}` : 'View task details'}
-                      </div>
-                    </div>
-                    <span className="material-symbols-outlined text-slate-300 group-hover:text-indigo-600 text-[16px] transition-colors">open_in_new</span>
-                  </div>
+            {/* Related Project */}
+            {followup.relatedProjectId && (
+              <div
+                onClick={() => navigate(`/projects/${followup.relatedProjectId}`)}
+                className="p-3 bg-indigo-50/50 hover:bg-indigo-50 rounded-xl border border-indigo-100 cursor-pointer transition-colors"
+              >
+                <div className="text-[10px] uppercase font-bold text-indigo-600 mb-1 flex items-center gap-1">
+                  <span className="material-symbols-outlined text-[14px]">monetization_on</span>
+                  <span>Related Project</span>
                 </div>
-              )}
-
-              {/* Project */}
-              {followup.relatedProjectId && (
-                <div className="p-4 hover:bg-slate-50 transition-colors group cursor-pointer">
-                  <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider mb-1 block">
-                    Related Project
-                  </label>
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="text-xs font-bold text-[#1a1c1c] group-hover:text-indigo-600 transition-colors">
-                        {relatedProject?.name || followup.relatedProjectId}
-                      </div>
-                      <div className="text-[11px] text-slate-500 mt-0.5">
-                        {relatedProject?.stage ? `Stage: ${relatedProject.stage}` : 'View project details'}
-                      </div>
-                    </div>
-                    <span className="material-symbols-outlined text-slate-300 group-hover:text-indigo-600 text-[16px] transition-colors">open_in_new</span>
-                  </div>
+                <div className="font-bold text-slate-800 text-xs truncate">
+                  {followup.projectName || followup.relatedProjectId}
                 </div>
-              )}
+              </div>
+            )}
 
-              {!followup.relatedVisitId && !followup.relatedTaskId && !followup.relatedProjectId && (
-                <div className="p-5 text-center">
-                  <p className="text-xs text-slate-500 font-medium">No related items attached to this follow-up.</p>
+            {/* Related Visit */}
+            {followup.relatedVisitId && (
+              <div
+                onClick={() => navigate(`/visits/${followup.relatedVisitId}`)}
+                className="p-3 bg-indigo-50/50 hover:bg-indigo-50 rounded-xl border border-indigo-100 cursor-pointer transition-colors"
+              >
+                <div className="text-[10px] uppercase font-bold text-indigo-600 mb-1 flex items-center gap-1">
+                  <span className="material-symbols-outlined text-[14px]">directions_walk</span>
+                  <span>Related Visit</span>
                 </div>
-              )}
+                <div className="font-bold text-slate-800 text-xs truncate">
+                  {followup.visitTitle || followup.relatedVisitId}
+                </div>
+              </div>
+            )}
 
-            </div>
+            {/* Related Task */}
+            {followup.relatedTaskId && (
+              <div
+                onClick={() => navigate(`/tasks/${followup.relatedTaskId}`)}
+                className="p-3 bg-indigo-50/50 hover:bg-indigo-50 rounded-xl border border-indigo-100 cursor-pointer transition-colors"
+              >
+                <div className="text-[10px] uppercase font-bold text-indigo-600 mb-1 flex items-center gap-1">
+                  <span className="material-symbols-outlined text-[14px]">task_alt</span>
+                  <span>Related Task</span>
+                </div>
+                <div className="font-bold text-slate-800 text-xs truncate">
+                  {followup.taskTitle || followup.relatedTaskId}
+                </div>
+              </div>
+            )}
           </div>
-
         </div>
       </div>
+
+      {/* MODALS */}
+      {showCompleteModal && (
+        <CompleteFollowUpModal
+          followUp={followup}
+          isOpen={showCompleteModal}
+          onClose={() => setShowCompleteModal(false)}
+          onSuccess={() => {
+            setShowCompleteModal(false);
+            loadData();
+          }}
+        />
+      )}
+
+      {showCancelModal && (
+        <CancelFollowUpModal
+          followUp={followup}
+          isOpen={showCancelModal}
+          onClose={() => setShowCancelModal(false)}
+          onSuccess={() => {
+            setShowCancelModal(false);
+            loadData();
+          }}
+        />
+      )}
     </div>
   );
 };

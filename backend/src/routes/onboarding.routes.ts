@@ -260,6 +260,17 @@ onboardingRoutes.post('/tenant', async (req, res) => {
         );
       }
 
+      // 6.11 Follow-up Types
+      const [blueprintFollowUpTypes]: any = await connection.query("SELECT * FROM follow_up_types WHERE tenantId IS NULL");
+      for (const fut of blueprintFollowUpTypes) {
+        const newId = `FUT-${tPart}-${fut.id}`;
+        await connection.query(
+          `INSERT INTO follow_up_types (id, tenantId, sourceType, platformMasterId, code, name, description, icon, color, isActive, displayOrder)
+           VALUES (?, ?, 'PLATFORM', ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [newId, tenantId, fut.id, fut.code, fut.name, fut.description || null, fut.icon || null, fut.color || null, fut.isActive !== undefined ? fut.isActive : 1, fut.displayOrder || 0]
+        );
+      }
+
       // 7. Atomic Visit Reminder Settings Initialization (Snapshot Copy from Active Platform Default)
       const [defaultRows]: any = await connection.query(
         'SELECT * FROM visit_reminder_defaults WHERE isActive = 1 ORDER BY createdAt DESC LIMIT 1 FOR UPDATE'
