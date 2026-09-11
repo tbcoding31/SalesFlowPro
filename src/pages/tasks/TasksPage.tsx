@@ -92,6 +92,13 @@ export const TasksPage: React.FC = () => {
   // Follow-up modal state
   const [selectedTaskForFollowUp, setSelectedTaskForFollowUp] = useState<Task | null>(null);
   const [isFollowUpModalOpen, setIsFollowUpModalOpen] = useState(false);
+  const [activeActionMenuId, setActiveActionMenuId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleOutsideClick = () => setActiveActionMenuId(null);
+    window.addEventListener('click', handleOutsideClick);
+    return () => window.removeEventListener('click', handleOutsideClick);
+  }, []);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -830,38 +837,79 @@ export const TasksPage: React.FC = () => {
 
                       {/* Actions */}
                       <td className="px-5 py-4 text-right">
-                        <div className="flex items-center justify-end gap-1">
+                        <div className="relative inline-block text-left" onClick={(e) => e.stopPropagation()}>
                           <button
-                            title="View Task Details"
-                            onClick={() => navigate(`/tasks/${t.id}`)}
-                            className="p-1.5 text-[#767587] hover:text-[#4744e5] hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                            type="button"
+                            onClick={() => setActiveActionMenuId(activeActionMenuId === t.id ? null : t.id)}
+                            title="Actions"
+                            className="p-1.5 text-[#767587] hover:text-[#1a1c1c] hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
                           >
-                            <span className="material-symbols-outlined text-[18px]">visibility</span>
+                            <span className="material-symbols-outlined text-[18px]">more_vert</span>
                           </button>
-                          <button
-                            title="Edit Task"
-                            onClick={() => navigate(`/tasks/${t.id}/edit`)}
-                            className="p-1.5 text-[#767587] hover:text-[#4744e5] hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
-                          >
-                            <span className="material-symbols-outlined text-[18px]">edit</span>
-                          </button>
-                          <button
-                            title="Add Follow-up"
-                            onClick={() => {
-                              setSelectedTaskForFollowUp(t);
-                              setIsFollowUpModalOpen(true);
-                            }}
-                            className="p-1.5 text-[#4744e5] hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
-                          >
-                            <span className="material-symbols-outlined text-[18px]">add_task</span>
-                          </button>
-                          <button
-                            title="Delete Task"
-                            onClick={() => handleDelete(t.id)}
-                            className="p-1.5 text-[#767587] hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                          >
-                            <span className="material-symbols-outlined text-[18px]">delete</span>
-                          </button>
+
+                          {activeActionMenuId === t.id && (
+                            <div 
+                              className="absolute right-0 top-10 w-44 bg-white border border-[#E1E1E1] rounded-xl shadow-lg z-30 py-1 text-left text-xs font-semibold animate-fade-in"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {/* View Details */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveActionMenuId(null);
+                                  navigate(`/tasks/${t.id}`);
+                                }}
+                                className="w-full px-3 py-2 flex items-center gap-2 hover:bg-slate-50 text-[#1a1c1c] cursor-pointer"
+                              >
+                                <span className="material-symbols-outlined text-[16px] text-[#4744e5]">visibility</span>
+                                <span>View Details</span>
+                              </button>
+
+                              {/* Edit Task */}
+                              {!['COMPLETED', 'CANCELLED', 'TSK_COMPLETED', 'TSK_CANCELLED'].includes(String(t.status || (t as any).statusCode || '').toUpperCase()) && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveActionMenuId(null);
+                                    navigate(`/tasks/${t.id}/edit`);
+                                  }}
+                                  className="w-full px-3 py-2 flex items-center gap-2 hover:bg-slate-50 text-[#1a1c1c] cursor-pointer"
+                                >
+                                  <span className="material-symbols-outlined text-[16px] text-slate-600">edit</span>
+                                  <span>Edit Task</span>
+                                </button>
+                              )}
+
+                              {/* Add Follow-up */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveActionMenuId(null);
+                                  setSelectedTaskForFollowUp(t);
+                                  setIsFollowUpModalOpen(true);
+                                }}
+                                className="w-full px-3 py-2 flex items-center gap-2 hover:bg-slate-50 text-[#4744e5] border-t border-slate-100 cursor-pointer"
+                              >
+                                <span className="material-symbols-outlined text-[16px] text-[#4744e5]">add_task</span>
+                                <span>Add Follow-up</span>
+                              </button>
+
+                              {/* Delete Task */}
+                              {!['COMPLETED', 'CANCELLED', 'TSK_COMPLETED', 'TSK_CANCELLED'].includes(String(t.status || (t as any).statusCode || '').toUpperCase()) && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveActionMenuId(null);
+                                    handleDelete(t.id);
+                                  }}
+                                  className="w-full px-3 py-2 flex items-center gap-2 hover:bg-rose-50 text-rose-600 border-t border-slate-100 cursor-pointer"
+                                >
+                                  <span className="material-symbols-outlined text-[16px] text-rose-600">delete</span>
+                                  <span>Delete Task</span>
+                                </button>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </td>
                     </tr>

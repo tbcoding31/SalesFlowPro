@@ -75,10 +75,22 @@ const checkPermission = (req: any, permissionCode: string): boolean => {
   return perms.includes(permissionCode) || perms.includes('ALL') || perms.includes('MANAGE_TENANT');
 };
 
+export function normalizeSemanticRole(role?: string | null, isPlatformUser?: boolean): string {
+  if (isPlatformUser) return 'SUPER_ADMIN';
+  if (!role) return 'SALES_REP';
+  const upper = String(role).toUpperCase();
+  if (upper === 'SUPER_ADMIN' || upper.endsWith('SUPER_ADMIN')) return 'SUPER_ADMIN';
+  if (upper === 'TENANT_ADMIN' || upper.endsWith('TENANT_ADMIN') || upper.startsWith('ROL-ADM') || upper.includes('ADMIN')) return 'TENANT_ADMIN';
+  if (upper === 'SUPERVISOR' || upper.endsWith('SUPERVISOR') || upper.startsWith('ROL-SUP')) return 'SUPERVISOR';
+  if (upper === 'SALES_MANAGER' || upper.endsWith('SALES_MANAGER') || upper.includes('MANAGER')) return 'SALES_MANAGER';
+  if (upper === 'SALES_REP' || upper === 'SALES_REPRESENTATIVE' || upper.endsWith('SALES_REP') || upper.startsWith('ROL-REP')) return 'SALES_REP';
+  return upper;
+}
+
 // -------------------------------------------------------------------------
 // 1. GET /api/follow-ups - List follow-ups with filters & pagination
 // -------------------------------------------------------------------------
-followupsRoutes.get('/', async (req: any, res: any) => {
+async function handleFollowUpsList(req: any, res: any, forcedScope?: string) {
   const actorRole = (req as any).userRole;
   const actorTenant = (req as any).userTenantId;
   const actorUserId = (req as any).userId;
@@ -86,7 +98,7 @@ followupsRoutes.get('/', async (req: any, res: any) => {
   const actorPermissions = (req as any).userPermissions || [];
   const isPlatformUser = (req as any).isPlatformUser;
 
-  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized' });
+  if ((!actorTenant && !isPlatformUser) || !actorRole) return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
 
   const targetTenant = await validateTargetTenant(req, res, pool, actorTenant);
   if (targetTenant === false) return;
@@ -95,7 +107,60 @@ followupsRoutes.get('/', async (req: any, res: any) => {
     return res.status(403).json({ error: 'Access denied. Missing FOLLOW_UP_VIEW permission.', code: 'FORBIDDEN' });
   }
 
-  const { where, params } = buildReportScopeWhere(targetTenant, actorUserId, actorRole, actorDataScope, actorPermissions, 'f.picId');
+  const semanticRole = normalizeSemanticRole(actorRole, isPlatformUser);
+  const requestedScope = (forcedScope || req.query.scope || 'my').toLowerCase().trim();
+
+  // Validate Scope Authorization
+  let effectiveScope: 'all' | 'my' = 'my';
+  if (requestedScope === 'all') {
+    if (semanticRole !== 'TENANT_ADMIN' && semanticRole !== 'SUPERVISOR' && semanticRole !== 'SUPER_ADMIN') {
+      return res.status(403).json({
+        error: 'Access denied: All Follow-ups scope is restricted to Tenant Admin and Supervisor',
+        code: 'SCOPE_ACCESS_DENIED'
+      });
+    }
+    effectiveScope = 'all';
+  } else {
+    effectiveScope = 'my';
+  }
+
+  // Build Scope WHERE predicate
+  let where: string;
+  let params: any[];
+
+  if (effectiveScope === 'all') {
+    if (semanticRole === 'SUPER_ADMIN' || semanticRole === 'TENANT_ADMIN' || actorDataScope === 'ORGANIZATION' || actorPermissions.includes('ALL') || actorPermissions.includes('MANAGE_TENANT')) {
+      where = 'WHERE f.tenantId = ?';
+      params = [targetTenant];
+    } else {
+      // Supervisor TEAM Scope
+      where = `WHERE f.tenantId = ? AND (
+        f.picId IN (
+          SELECT tu.userId FROM tenant_users tu
+          JOIN team_members tm ON tm.tenantUserId = tu.id
+          WHERE tm.teamId IN (
+            SELECT tm2.teamId FROM team_members tm2
+            JOIN tenant_users tu2 ON tu2.id = tm2.tenantUserId
+            WHERE tu2.userId = ? AND tu2.tenantId = ? AND tu2.status = 'ACTIVE'
+          ) AND tu.tenantId = ? AND tu.status = 'ACTIVE'
+        )
+        OR f.createdById IN (
+          SELECT tu.userId FROM tenant_users tu
+          JOIN team_members tm ON tm.tenantUserId = tu.id
+          WHERE tm.teamId IN (
+            SELECT tm2.teamId FROM team_members tm2
+            JOIN tenant_users tu2 ON tu2.id = tm2.tenantUserId
+            WHERE tu2.userId = ? AND tu2.tenantId = ? AND tu2.status = 'ACTIVE'
+          ) AND tu.tenantId = ? AND tu.status = 'ACTIVE'
+        )
+      )`;
+      params = [targetTenant, actorUserId, targetTenant, targetTenant, actorUserId, targetTenant, targetTenant];
+    }
+  } else {
+    // MY Follow-ups: PIC is actor OR creator is actor
+    where = 'WHERE f.tenantId = ? AND (f.picId = ? OR f.createdById = ?)';
+    params = [targetTenant, actorUserId, actorUserId];
+  }
 
   try {
     let extraWhere = '';
@@ -125,24 +190,40 @@ followupsRoutes.get('/', async (req: any, res: any) => {
     } = req.query;
 
     if (customerId && customerId !== 'ALL') {
+      const [cCheck]: any = await pool.query('SELECT id FROM customers WHERE id = ? AND tenantId = ?', [customerId, targetTenant]);
+      if (cCheck.length === 0) {
+        return res.status(404).json({ error: 'Customer not found in company.', code: 'CUSTOMER_NOT_FOUND' });
+      }
       extraWhere += ' AND f.customerId = ?';
       extraParams.push(customerId);
     }
 
     const projId = projectId || relatedProjectId;
     if (projId && projId !== 'ALL') {
+      const [pCheck]: any = await pool.query('SELECT id FROM projects WHERE id = ? AND tenantId = ?', [projId, targetTenant]);
+      if (pCheck.length === 0) {
+        return res.status(404).json({ error: 'Project not found in company.', code: 'PROJECT_NOT_FOUND' });
+      }
       extraWhere += ' AND f.relatedProjectId = ?';
       extraParams.push(projId);
     }
 
     const visId = visitId || relatedVisitId;
     if (visId && visId !== 'ALL') {
+      const [vCheck]: any = await pool.query('SELECT id FROM visits WHERE id = ? AND tenantId = ?', [visId, targetTenant]);
+      if (vCheck.length === 0) {
+        return res.status(404).json({ error: 'Visit not found in company.', code: 'VISIT_NOT_FOUND' });
+      }
       extraWhere += ' AND f.relatedVisitId = ?';
       extraParams.push(visId);
     }
 
     const tskId = taskId || relatedTaskId;
     if (tskId && tskId !== 'ALL') {
+      const [tCheck]: any = await pool.query('SELECT id FROM tasks WHERE id = ? AND tenantId = ?', [tskId, targetTenant]);
+      if (tCheck.length === 0) {
+        return res.status(404).json({ error: 'Task not found in company.', code: 'TASK_NOT_FOUND' });
+      }
       extraWhere += ' AND f.relatedTaskId = ?';
       extraParams.push(tskId);
     }
@@ -171,7 +252,7 @@ followupsRoutes.get('/', async (req: any, res: any) => {
     }
 
     if (priority && priority !== 'ALL') {
-      extraWhere += ' AND f.priority = ?';
+      extraWhere += ' AND f.priorityId = ?';
       extraParams.push(priority);
     }
 
@@ -206,19 +287,16 @@ followupsRoutes.get('/', async (req: any, res: any) => {
       FROM follow_ups f
       LEFT JOIN follow_up_types ft ON ft.id = f.typeId
       LEFT JOIN customers c ON c.id = f.customerId
-      ${where.replace(/WHERE tenantId/g, 'WHERE f.tenantId')}
+      ${where}
       ${extraWhere}
     `;
     const [countRows]: any = await pool.query(countSql, [...params, ...extraParams]);
     const totalItems = countRows[0]?.total || 0;
 
-    let paginationClause = '';
-    const pNum = parseInt(page as string, 10);
-    const pSize = parseInt(pageSize as string, 10);
-    if (!isNaN(pNum) && !isNaN(pSize) && pNum > 0 && pSize > 0) {
-      const offset = (pNum - 1) * pSize;
-      paginationClause = ` LIMIT ${pSize} OFFSET ${offset}`;
-    }
+    const pNum = parseInt(page as string, 10) || 1;
+    const pSize = parseInt(pageSize as string, 10) || 20;
+    const offset = (pNum - 1) * pSize;
+    const paginationClause = ` LIMIT ${pSize} OFFSET ${offset}`;
 
     const selectSql = `
       SELECT 
@@ -226,6 +304,7 @@ followupsRoutes.get('/', async (req: any, res: any) => {
         f.priorityId as priority,
         ft.code as typeCode, ft.name as typeName, ft.icon as typeIcon, ft.color as typeColor,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
+        uc.name as createdByName,
         cu.name as completedByName,
         c.name as customerName, c.code as customerCode,
         p.title as projectName,
@@ -235,12 +314,13 @@ followupsRoutes.get('/', async (req: any, res: any) => {
       FROM follow_ups f
       LEFT JOIN follow_up_types ft ON ft.id = f.typeId
       LEFT JOIN users u ON u.id = f.picId
+      LEFT JOIN users uc ON uc.id = f.createdById
       LEFT JOIN users cu ON cu.id = f.completedById
       LEFT JOIN customers c ON c.id = f.customerId
       LEFT JOIN projects p ON p.id = f.relatedProjectId
       LEFT JOIN visits v ON v.id = f.relatedVisitId
       LEFT JOIN tasks t ON t.id = f.relatedTaskId
-      ${where.replace(/WHERE tenantId/g, 'WHERE f.tenantId')}
+      ${where}
       ${extraWhere}
       ORDER BY f.followUpDate DESC, f.createdAt DESC
       ${paginationClause}
@@ -248,25 +328,45 @@ followupsRoutes.get('/', async (req: any, res: any) => {
 
     const [rows]: any = await pool.query(selectSql, [...params, ...extraParams]);
 
-    if (!isNaN(pNum) && !isNaN(pSize) && pNum > 0 && pSize > 0) {
-      const totalPages = Math.ceil(totalItems / pSize) || 1;
-      res.json({
-        data: rows,
-        pagination: {
-          page: pNum,
-          pageSize: pSize,
-          totalItems,
-          totalPages
-        }
-      });
-    } else {
-      res.json(rows);
-    }
+    // Compute Summary across the exact same scope & tenant
+    const summarySql = `
+      SELECT 
+        SUM(CASE WHEN f.status IN ('OPEN', 'IN_PROGRESS', 'PENDING', 'SCHEDULED') AND DATE(f.followUpDate) = CURDATE() THEN 1 ELSE 0 END) as totalDueToday,
+        SUM(CASE WHEN f.status IN ('OPEN', 'IN_PROGRESS', 'PENDING', 'SCHEDULED') AND DATE(f.followUpDate) < CURDATE() THEN 1 ELSE 0 END) as totalOverdue,
+        SUM(CASE WHEN f.status IN ('OPEN', 'IN_PROGRESS', 'PENDING', 'SCHEDULED') AND DATE(f.followUpDate) > CURDATE() THEN 1 ELSE 0 END) as totalUpcoming,
+        SUM(CASE WHEN f.status = 'COMPLETED' THEN 1 ELSE 0 END) as totalCompleted
+      FROM follow_ups f
+      ${where}
+    `;
+    const [sumRows]: any = await pool.query(summarySql, params);
+    const sumRow = sumRows[0] || {};
+
+    const totalPages = Math.ceil(totalItems / pSize) || (totalItems === 0 ? 0 : 1);
+    res.json({
+      data: rows,
+      pagination: {
+        page: pNum,
+        pageSize: pSize,
+        totalItems,
+        totalPages
+      },
+      summary: {
+        totalDueToday: Number(sumRow.totalDueToday || 0),
+        totalOverdue: Number(sumRow.totalOverdue || 0),
+        totalUpcoming: Number(sumRow.totalUpcoming || 0),
+        totalCompleted: Number(sumRow.totalCompleted || 0),
+        scope: effectiveScope
+      }
+    });
   } catch (err: any) {
     console.error('GET /api/follow-ups error:', err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
-});
+}
+
+followupsRoutes.get('/my', (req: any, res: any) => handleFollowUpsList(req, res, 'my'));
+followupsRoutes.get('/all', (req: any, res: any) => handleFollowUpsList(req, res, 'all'));
+followupsRoutes.get('/', (req: any, res: any) => handleFollowUpsList(req, res, req.query.scope));
 
 // -------------------------------------------------------------------------
 // 2. GET /api/follow-ups/:id - Single detail with evidences
@@ -294,6 +394,7 @@ followupsRoutes.get('/:id', async (req: any, res: any) => {
         f.priorityId as priority,
         ft.code as typeCode, ft.name as typeName, ft.icon as typeIcon, ft.color as typeColor,
         u.name as picName, u.email as picEmail, u.avatar as picAvatar,
+        uc.name as createdByName,
         cu.name as completedByName,
         c.name as customerName, c.code as customerCode,
         p.title as projectName,
@@ -302,6 +403,7 @@ followupsRoutes.get('/:id', async (req: any, res: any) => {
       FROM follow_ups f
       LEFT JOIN follow_up_types ft ON ft.id = f.typeId
       LEFT JOIN users u ON u.id = f.picId
+      LEFT JOIN users uc ON uc.id = f.createdById
       LEFT JOIN users cu ON cu.id = f.completedById
       LEFT JOIN customers c ON c.id = f.customerId
       LEFT JOIN projects p ON p.id = f.relatedProjectId
@@ -455,9 +557,9 @@ followupsRoutes.post('/', async (req: any, res: any) => {
     const insertSql = `
       INSERT INTO follow_ups (
         id, tenantId, customerId, relatedProjectId, relatedVisitId, relatedTaskId,
-        picId, followUpDate, typeId, priorityId, title, notes, reminderDate,
+        picId, createdById, followUpDate, typeId, priorityId, title, notes, reminderDate,
         status, sourceType, createdAt, updatedAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, NOW(), NOW())
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, NOW(), NOW())
     `;
 
     await pool.query(insertSql, [
@@ -468,6 +570,7 @@ followupsRoutes.post('/', async (req: any, res: any) => {
       relatedVisitId || null,
       relatedTaskId || null,
       assignedPicId,
+      actorUserId,
       new Date(followUpDate),
       typeId,
       cleanPriority,
@@ -495,11 +598,13 @@ followupsRoutes.post('/', async (req: any, res: any) => {
         f.priorityId as priority,
         ft.code as typeCode, ft.name as typeName, ft.icon as typeIcon, ft.color as typeColor,
         u.name as picName,
+        uc.name as createdByName,
         c.name as customerName, c.code as customerCode,
         0 as evidenceCount
        FROM follow_ups f
        LEFT JOIN follow_up_types ft ON ft.id = f.typeId
        LEFT JOIN users u ON u.id = f.picId
+       LEFT JOIN users uc ON uc.id = f.createdById
        LEFT JOIN customers c ON c.id = f.customerId
        WHERE f.id = ?`,
       [id]

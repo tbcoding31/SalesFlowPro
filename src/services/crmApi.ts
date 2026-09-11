@@ -360,6 +360,7 @@ export const crmApi = {
       if (params.typeId && params.typeId !== 'ALL') q.set('typeId', params.typeId);
       if (params.tenantId && params.tenantId !== 'ALL') q.set('tenantId', params.tenantId);
       if (params.customerId && params.customerId !== 'ALL') q.set('customerId', params.customerId);
+      if (params.scope) q.set('scope', params.scope);
     }
     const url = `${API_BASE}/activities${q.toString() ? '?' + q.toString() : ''}`;
     const res = await fetch(url, { headers: getAuthHeaders() });
@@ -1311,6 +1312,7 @@ export const crmApi = {
       if (params.dueDateTo) q.set('dueDateTo', params.dueDateTo);
       if (params.isOverdue) q.set('isOverdue', 'true');
       if (params.isDueToday) q.set('isDueToday', 'true');
+      if (params.scope) q.set('scope', params.scope);
     }
     const url = `${API_BASE}/follow-ups${q.toString() ? '?' + q.toString() : ''}`;
     const res = await fetch(url, { headers: getAuthHeaders() });

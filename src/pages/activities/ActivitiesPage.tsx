@@ -1,16 +1,31 @@
 import React, { useState, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { Activity, Customer, User } from '../../types';
+import { Customer, User } from '../../types';
 import { crmApi } from '../../services/crmApi';
 import { usersApi } from '../../services/usersApi';
 
 export const ActivitiesPage: React.FC = () => {
   const navigate = useNavigate();
-  const { currentTenant } = useAuth();
-  const tenantId = currentTenant?.id ;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { currentTenant, currentUser } = useAuth();
+  const tenantId = currentTenant?.id;
+
+  // Scope Enforcement (All vs My)
+  const canAccessAll = currentUser?.role === 'TENANT_ADMIN' || currentUser?.role === 'SUPERVISOR' || currentUser?.role === 'SUPER_ADMIN';
+  const requestedScope = searchParams.get('scope') || 'my';
+  const activeScope = (canAccessAll && requestedScope === 'all') ? 'all' : 'my';
+
+  const handleScopeChange = (newScope: 'my' | 'all') => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('scope', newScope);
+      return next;
+    });
+    setCurrentPage(1);
+  };
   
-  const [activities, setActivities] = useState<Activity[]>([]);
+  const [activities, setActivities] = useState<any[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -38,16 +53,18 @@ export const ActivitiesPage: React.FC = () => {
           customerId: selectedCustomer !== 'ALL' ? selectedCustomer : undefined,
           userId: selectedUser !== 'ALL' ? selectedUser : undefined,
           typeId: activityType !== 'ALL' ? activityType : undefined,
-          tenantId
+          tenantId,
+          scope: activeScope
         }),
         crmApi.fetchCollection<Customer>('customers', tenantId),
         usersApi.fetchUsers(tenantId)
       ]);
-      setActivities(aRes.data || []);
-      setTotalItems(aRes.pagination?.totalItems || 0);
-      setTotalPages(aRes.pagination?.totalPages || 0);
-      setCustomers(cList);
-      setUsers(uList);
+      const list = (aRes as any)?.data || (Array.isArray(aRes) ? aRes : []);
+      setActivities(list);
+      setTotalItems((aRes as any)?.pagination?.totalItems || list.length);
+      setTotalPages((aRes as any)?.pagination?.totalPages || 1);
+      setCustomers(cList || []);
+      setUsers(uList || []);
     } catch (err) {
       console.error('Failed to load activities from database:', err);
     } finally {
@@ -57,7 +74,7 @@ export const ActivitiesPage: React.FC = () => {
 
   React.useEffect(() => {
     loadData(currentPage);
-  }, [tenantId, currentPage, pageSize, selectedCustomer, selectedUser, activityType]);
+  }, [tenantId, currentPage, pageSize, selectedCustomer, selectedUser, activityType, activeScope]);
   
   const activityTypesList = [
     'Customer Created',
@@ -75,33 +92,47 @@ export const ActivitiesPage: React.FC = () => {
   const filteredActivities = useMemo(() => {
     return activities.filter(a => {
       if (selectedCustomer !== 'ALL' && a.customerId !== selectedCustomer) return false;
-      if (selectedUser !== 'ALL' && a.userId !== selectedUser) return false;
+      const actorId = a.actorUserId || a.userId;
+      if (selectedUser !== 'ALL' && actorId !== selectedUser) return false;
+      if (selectedPic !== 'ALL' && a.picId !== selectedPic) return false;
       
       if (activityType !== 'ALL') {
-        const typeStr = (activityType || '').toLowerCase();
-        // Since our mock data doesn't perfectly align with the new standard activity types, 
-        // we'll do a loose match or just let them pass if they have relevant keywords.
-        const subjMatch = (a.subject || '').toLowerCase().includes(typeStr.replace(' created', '').replace(' updated', '').replace(' completed', ''));
+        const typeStr = (activityType || '').toLowerCase().replace(/_/g, ' ');
+        const aType = String(a.eventType || a.typeId || a.type || '').toLowerCase().replace(/_/g, ' ');
+        const subjMatch = (a.title || a.subject || '').toLowerCase().includes(typeStr.replace(' created', '').replace(' updated', '').replace(' completed', ''));
         const descMatch = (a.description || '').toLowerCase().includes(typeStr);
-        if (!subjMatch && !descMatch) return false;
+        if (!aType.includes(typeStr) && !subjMatch && !descMatch) return false;
       }
 
       return true;
     });
-  }, [activities, selectedCustomer, selectedUser, activityType, dateRange]);
+  }, [activities, selectedCustomer, selectedUser, selectedPic, activityType]);
 
   // Helper to determine icon and color based on activity type or subject
-  const getActivityStyling = (activity: Activity) => {
-    const subj = (activity.subject || '').toLowerCase();
-    const type = (activity.type || '').toLowerCase();
+  const getActivityStyling = (activity: any) => {
+    const evType = String(activity.eventType || '').toUpperCase();
+    const entity = String(activity.entity || activity.entityType || '').toUpperCase();
+    const subj = String(activity.title || activity.subject || '').toLowerCase();
+    const type = String(activity.type || '').toLowerCase();
     
-    if (subj.includes('visit') || type === 'visit') return { icon: 'location_on', color: 'bg-emerald-100 text-emerald-600', borderColor: 'border-emerald-200' };
-    if (subj.includes('task') || type === 'task') return { icon: 'task_alt', color: 'bg-amber-100 text-amber-600', borderColor: 'border-amber-200' };
-    if (subj.includes('project') || subj.includes('deal') || type === 'project') return { icon: 'monitoring', color: 'bg-indigo-100 text-indigo-600', borderColor: 'border-indigo-200' };
-    if (subj.includes('customer') || type === 'system') return { icon: 'domain', color: 'bg-blue-100 text-blue-600', borderColor: 'border-blue-200' };
+    if (evType.includes('FOLLOW_UP') || entity === 'FOLLOW_UP' || subj.includes('follow-up') || subj.includes('follow up')) {
+      return { icon: 'call', color: 'bg-indigo-100 text-indigo-600', borderColor: 'border-indigo-200' };
+    }
+    if (evType.includes('VISIT') || entity === 'VISIT' || subj.includes('visit') || type === 'visit') {
+      return { icon: 'location_on', color: 'bg-emerald-100 text-emerald-600', borderColor: 'border-emerald-200' };
+    }
+    if (evType.includes('TASK') || entity === 'TASK' || subj.includes('task') || type === 'task') {
+      return { icon: 'task_alt', color: 'bg-amber-100 text-amber-600', borderColor: 'border-amber-200' };
+    }
+    if (evType.includes('PROJECT') || entity === 'PROJECT' || subj.includes('project') || subj.includes('deal') || type === 'project') {
+      return { icon: 'monitoring', color: 'bg-blue-100 text-blue-600', borderColor: 'border-blue-200' };
+    }
+    if (evType.includes('CUSTOMER') || entity === 'CUSTOMER' || subj.includes('customer')) {
+      return { icon: 'person_add', color: 'bg-purple-100 text-purple-600', borderColor: 'border-purple-200' };
+    }
     if (type === 'call') return { icon: 'call', color: 'bg-teal-100 text-teal-600', borderColor: 'border-teal-200' };
     if (type === 'meeting') return { icon: 'groups', color: 'bg-purple-100 text-purple-600', borderColor: 'border-purple-200' };
-    if (type === 'note' || subj.includes('comment') || subj.includes('follow')) return { icon: 'chat', color: 'bg-slate-100 text-slate-600', borderColor: 'border-slate-200' };
+    if (type === 'note' || subj.includes('comment')) return { icon: 'chat', color: 'bg-slate-100 text-slate-600', borderColor: 'border-slate-200' };
     
     return { icon: 'history', color: 'bg-slate-100 text-slate-600', borderColor: 'border-slate-200' };
   };
@@ -110,13 +141,44 @@ export const ActivitiesPage: React.FC = () => {
     <div className="space-y-6 font-['Inter',sans-serif] max-w-5xl mx-auto pb-10">
       
       {/* Header */}
-      <div className="flex flex-col gap-1 mb-8">
-        <h1 className="text-3xl font-extrabold text-slate-900 font-['Hanken_Grotesk'] tracking-tight">
-          Activity History
-        </h1>
-        <p className="text-sm font-medium text-slate-500">
-          Track changes and activities across customers and sales operations.
-        </p>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
+        <div>
+          <h1 className="text-3xl font-extrabold text-slate-900 font-['Hanken_Grotesk'] tracking-tight">
+            Activity History
+          </h1>
+          <p className="text-sm font-medium text-slate-500">
+            Track changes and activities across customers and sales operations.
+          </p>
+        </div>
+
+        {canAccessAll && (
+          <div className="flex bg-[#f3f3f3] p-1 rounded-xl">
+            <button
+              type="button"
+              onClick={() => handleScopeChange('my')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                activeScope === 'my'
+                  ? 'bg-white shadow-xs text-[#4744e5]'
+                  : 'text-[#767587] hover:text-[#1a1c1c]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[15px]">person</span>
+              <span>My Activities</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleScopeChange('all')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                activeScope === 'all'
+                  ? 'bg-white shadow-xs text-[#4744e5]'
+                  : 'text-[#767587] hover:text-[#1a1c1c]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[15px]">group</span>
+              <span>All Activities</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Filter Bar */}

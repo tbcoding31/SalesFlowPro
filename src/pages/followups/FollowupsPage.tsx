@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { FollowUp, Customer, User } from '../../types';
 import { crmApi } from '../../services/crmApi';
@@ -9,8 +9,23 @@ import { CancelFollowUpModal } from '../../components/followups/CancelFollowUpMo
 
 export const FollowupsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { currentTenant } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { currentTenant, currentUser } = useAuth();
   const tenantId = currentTenant?.id || '';
+
+  // Scope Enforcement (All vs My)
+  const canAccessAll = currentUser?.role === 'TENANT_ADMIN' || currentUser?.role === 'SUPERVISOR' || currentUser?.role === 'SUPER_ADMIN';
+  const requestedScope = searchParams.get('scope') || 'my';
+  const activeScope = (canAccessAll && requestedScope === 'all') ? 'all' : 'my';
+
+  const handleScopeChange = (newScope: 'my' | 'all') => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('scope', newScope);
+      return next;
+    });
+    setCurrentPage(1);
+  };
 
   const [followups, setFollowups] = useState<FollowUp[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -50,7 +65,8 @@ export const FollowupsPage: React.FC = () => {
           dueDateTo: dateEnd || undefined,
           status: statusFilter !== 'ALL' ? statusFilter : undefined,
           customerId: customerFilter !== 'ALL' ? customerFilter : undefined,
-          picId: picFilter !== 'ALL' ? picFilter : undefined
+          picId: picFilter !== 'ALL' ? picFilter : undefined,
+          scope: activeScope
         }),
         crmApi.fetchCollection<Customer>('customers', tenantId),
         crmApi.fetchCollection<User>('users', tenantId)
@@ -78,7 +94,7 @@ export const FollowupsPage: React.FC = () => {
 
   useEffect(() => {
     loadData(1);
-  }, [tenantId, pageSize, searchQuery, customerFilter, picFilter, statusFilter, dateStart, dateEnd]);
+  }, [tenantId, pageSize, searchQuery, customerFilter, picFilter, statusFilter, dateStart, dateEnd, activeScope]);
 
   // Derive status presentation
   const enrichedFollowUps = useMemo(() => {
@@ -168,13 +184,44 @@ export const FollowupsPage: React.FC = () => {
             Manage your daily cadences, calls, emails, and client touchpoints.
           </p>
         </div>
-        <button
-          onClick={() => setShowCreateModal(true)}
-          className="px-4 py-2.5 bg-[#4744e5] hover:bg-[#322fce] text-white text-xs font-extrabold rounded-xl shadow-xs transition-all flex items-center gap-1.5 font-['Hanken_Grotesk'] shrink-0 cursor-pointer"
-        >
-          <span className="material-symbols-outlined text-[18px]">add</span>
-          <span>Create Follow-up</span>
-        </button>
+        <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
+          {canAccessAll && (
+            <div className="flex bg-[#f3f3f3] p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => handleScopeChange('my')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  activeScope === 'my'
+                    ? 'bg-white shadow-xs text-[#4744e5]'
+                    : 'text-[#767587] hover:text-[#1a1c1c]'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[15px]">person</span>
+                <span>My Follow-ups</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleScopeChange('all')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  activeScope === 'all'
+                    ? 'bg-white shadow-xs text-[#4744e5]'
+                    : 'text-[#767587] hover:text-[#1a1c1c]'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[15px]">group</span>
+                <span>All Follow-ups</span>
+              </button>
+            </div>
+          )}
+
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="px-4 py-2.5 bg-[#4744e5] hover:bg-[#322fce] text-white text-xs font-extrabold rounded-xl shadow-xs transition-all flex items-center gap-1.5 font-['Hanken_Grotesk'] shrink-0 cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-[18px]">add</span>
+            <span>Create Follow-up</span>
+          </button>
+        </div>
       </div>
 
       {/* TABS */}
