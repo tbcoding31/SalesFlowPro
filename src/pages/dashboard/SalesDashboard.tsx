@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { Customer, Visit, Task, Project, Activity } from '../../types';
 import { crmApi } from '../../services/crmApi';
+import { Avatar } from '../../components/common/Avatar';
 
 export const SalesDashboard: React.FC = () => {
   const { currentUser, currentTenant } = useAuth();
@@ -589,10 +590,11 @@ export const SalesDashboard: React.FC = () => {
         <div className="space-y-3">
           {activities.slice(0, 5).map((a) => (
             <div key={a.id} className="flex items-start gap-3 p-3 bg-[#f9f9f9] rounded-lg border border-[#E1E1E1]">
-              <img
-                src={a.userAvatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'}
-                alt={a.userName}
-                className="w-8 h-8 rounded-full object-cover shrink-0 border border-[#E1E1E1]"
+              <Avatar
+                src={a.userAvatar}
+                name={a.userName}
+                userId={a.userId}
+                size="sm"
               />
               <div className="flex-1 min-w-0">
                 <div className="flex justify-between items-baseline">

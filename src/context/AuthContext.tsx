@@ -19,7 +19,8 @@ interface AuthContextType {
   switchUser: (userId: string) => void;
   switchTenant: (tenantId: string) => void;
   refreshTenant: () => void;
-  refreshUser: () => void;
+  refreshUser: () => Promise<void>;
+  updateCurrentUser: (partialUser: Partial<User>) => void;
   hasPermission: (permissionCode: string) => boolean;
 }
 
@@ -272,7 +273,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const refreshTenant = () => {};
-  const refreshUser = () => {};
+
+  const refreshUser = async () => {
+    const savedToken = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (!savedToken) return;
+    try {
+      const res = await fetch('/api/auth/me', {
+        headers: { Authorization: `Bearer ${savedToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.user) {
+          setCurrentUser(data.user);
+        }
+      }
+    } catch (err) {
+      console.error('[AuthContext] Failed to refresh user:', err);
+    }
+  };
+
+  const updateCurrentUser = (partialUser: Partial<User>) => {
+    setCurrentUser((prev) => {
+      if (!prev) return null;
+      return { ...prev, ...partialUser };
+    });
+  };
 
   const hasPermission = (permissionCode: string): boolean => {
     if (!currentUser || !currentUser.permissions) return false;
@@ -294,6 +319,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         switchTenant,
         refreshTenant,
         refreshUser,
+        updateCurrentUser,
         hasPermission,
       }}
     >

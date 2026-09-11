@@ -6,11 +6,15 @@ import { resolveUserAccessContext } from '../auth-context';
 export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const authHeader = req.headers.authorization;
-    if (!authHeader) {
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'Unauthorized: No token provided' });
     }
 
     const token = authHeader.replace('Bearer ', '').trim();
+    if (!token) {
+      return res.status(401).json({ error: 'Unauthorized: No token provided' });
+    }
+
     const [sessions]: any = await pool.query('SELECT * FROM auth_sessions WHERE token = ?', [token]);
     if (sessions.length === 0) {
       return res.status(401).json({ error: 'Unauthorized: Invalid or expired session', code: 'SESSION_REVOKED' });

@@ -5,6 +5,7 @@ import { navigationApi } from '../../services/navigationApi';
 import { AppMenuItem } from '../../types';
 import { resolveActiveMenuAndAncestors } from '../../utils/navigationResolution';
 import { normalizeSemanticRole } from '../../utils/roleUtils';
+import { Avatar } from '../common/Avatar';
 
 interface SidebarProps {
   isOpen?: boolean;
@@ -348,10 +349,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => 
         <div className="px-4 mt-auto pt-4 border-t border-[#E1E1E1]">
           <div className="flex items-center justify-between p-2 bg-[#f3f3f3] rounded-lg border border-[#E1E1E1]">
             <div className="flex items-center gap-3 min-w-0">
-              <img
-                src={currentUser?.avatarUrl || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'}
-                alt={currentUser?.name}
-                className="w-9 h-9 rounded-full object-cover shrink-0 border border-[#E1E1E1]"
+              <Avatar
+                src={currentUser?.avatarUrl}
+                name={currentUser?.name}
+                userId={currentUser?.id}
+                size="md"
               />
               <div className="flex flex-col min-w-0">
                 <span className="font-semibold text-xs text-[#1a1c1c] truncate">{currentUser?.name}</span>

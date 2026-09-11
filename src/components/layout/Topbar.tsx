@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { Link } from 'react-router-dom';
+import { Avatar } from '../common/Avatar';
 
 interface TopbarProps {
   onToggleSidebar?: () => void;
@@ -102,10 +103,11 @@ export const Topbar: React.FC<TopbarProps> = ({ onToggleSidebar, isSidebarOpen =
             onClick={() => setShowProfileMenu(!showProfileMenu)}
             className="flex items-center gap-2 p-1 hover:bg-[#f3f3f3] rounded-lg transition-colors"
           >
-            <img
-              src={currentUser?.avatarUrl || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'}
-              alt={currentUser?.name}
-              className="w-8 h-8 rounded-full object-cover border border-[#E1E1E1]"
+            <Avatar
+              src={currentUser?.avatarUrl}
+              name={currentUser?.name}
+              userId={currentUser?.id}
+              size="sm"
             />
             <span className="material-symbols-outlined text-[16px] text-[#767587]">expand_more</span>
           </button>

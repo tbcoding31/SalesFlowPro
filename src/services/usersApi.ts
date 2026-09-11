@@ -120,5 +120,105 @@ export const usersApi = {
       console.error('[usersApi.transferOwnership error]', err);
       return { success: false, error: err.message || 'Network error' };
     }
+  },
+
+  fetchMyProfile: async (): Promise<{ success: boolean; profile?: any; error?: string; code?: string }> => {
+    try {
+      const res = await fetch(`${API_BASE}/users/me/profile`, {
+        headers: getAuthHeaders()
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to fetch profile', code: data.code };
+      }
+      return data;
+    } catch (err: any) {
+      console.error('[usersApi.fetchMyProfile error]', err);
+      return { success: false, error: err.message || 'Network error' };
+    }
+  },
+
+  updateProfile: async (payload: {
+    name: string;
+    phone?: string;
+    location?: string;
+    timezone?: string;
+    email?: string;
+  }): Promise<{ success: boolean; profile?: any; message?: string; error?: string; code?: string }> => {
+    try {
+      const res = await fetch(`${API_BASE}/users/me/profile`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to update profile', code: data.code };
+      }
+      return data;
+    } catch (err: any) {
+      console.error('[usersApi.updateProfile error]', err);
+      return { success: false, error: err.message || 'Network error' };
+    }
+  },
+
+  uploadAvatar: async (file: File): Promise<{
+    success: boolean;
+    avatarUrl?: string;
+    filename?: string;
+    message?: string;
+    error?: string;
+    code?: string;
+  }> => {
+    try {
+      const token = localStorage.getItem('sfp_auth_token') || '';
+      const formData = new FormData();
+      formData.append('avatar', file);
+
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const res = await fetch(`${API_BASE}/users/me/avatar`, {
+        method: 'POST',
+        headers,
+        body: formData
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to upload avatar', code: data.code };
+      }
+      return data;
+    } catch (err: any) {
+      console.error('[usersApi.uploadAvatar error]', err);
+      return { success: false, error: err.message || 'Network error' };
+    }
+  },
+
+  changePassword: async (payload: {
+    currentPassword: string;
+    newPassword: string;
+    confirmPassword: string;
+  }): Promise<{
+    success: boolean;
+    message?: string;
+    passwordChangedAt?: string;
+    error?: string;
+    code?: string;
+  }> => {
+    try {
+      const res = await fetch(`${API_BASE}/users/me/change-password`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Failed to change password', code: data.code };
+      }
+      return data;
+    } catch (err: any) {
+      console.error('[usersApi.changePassword error]', err);
+      return { success: false, error: err.message || 'Network error' };
+    }
   }
 };

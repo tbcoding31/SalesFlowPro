@@ -87,6 +87,8 @@ export interface User {
   email: string;
   username: string;
   phone?: string;
+  location?: string;
+  timezone?: string;
   avatarUrl?: string;
   avatar?: string;
   role: UserRole;
@@ -99,6 +101,7 @@ export interface User {
   activeTasksCount?: number;
   taskCount?: number;
   lastLoginAt?: string;
+  passwordChangedAt?: string;
   permissions?: string[];
   dataScope?: string;
   createdAt: string;

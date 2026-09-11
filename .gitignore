@@ -31,6 +31,7 @@ pnpm-debug.log*
 !backend/test_uat_followup_feature.cjs
 !backend/test_uat_067_navigation_scope.cjs
 !backend/test_uat_team_members.cjs
+!backend/test_uat_user_profile_security.cjs
 *.patch
 FETCH_HEAD
 scratch/
