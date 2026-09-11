@@ -2,6 +2,7 @@ const http = require('http');
 const { pool } = require('./dist/db.js');
 const { app } = require('./dist/server.js');
 const { runUat067TeamsMigration } = require('./dist/migrations/migrate_uat_067_teams.js');
+const { normalizeSemanticRole } = require('./dist/routes/navigation.routes.js');
 
 async function runTeamMembersTests() {
   let passed = 0;
@@ -18,13 +19,15 @@ async function runTeamMembersTests() {
   }
 
   console.log('================================================================');
-  console.log('SALESFLOW PRO: UAT-067 TEAM MEMBERS CRUD & TEAM AUTHORIZATION');
+  console.log('SALESFLOW PRO: UAT-067 TEAM MEMBERS CRUD & AUTHORIZATION SUITE');
   console.log('================================================================\n');
 
   let server;
   let baseUrl;
   const cleanupSessions = [];
   const cleanupTeams = [];
+  const cleanupUsers = [];
+  const cleanupRoles = [];
 
   try {
     server = http.createServer(app);
@@ -49,7 +52,7 @@ async function runTeamMembersTests() {
 
     // Helper to create tokens
     async function createToken(userId) {
-      const token = 'UAT_TEAM_' + userId.replace(/[^a-zA-Z0-9]/g, '_') + '_' + Date.now();
+      const token = 'UAT_TEAM_' + userId.replace(/[^a-zA-Z0-9]/g, '_') + '_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
       await pool.query(`
         INSERT INTO auth_sessions (id, userId, token, expiresAt, createdAt)
         VALUES (UUID(), ?, ?, DATE_ADD(NOW(), INTERVAL 1 DAY), NOW())
@@ -96,25 +99,131 @@ async function runTeamMembersTests() {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // TEST 1: Migration Rerun Without Duplication
+    // SUITE 1: Migration Idempotency, Transaction Rollback & Actual FK Metadata
     // ─────────────────────────────────────────────────────────────
-    console.log('--- 1. Testing Database Migration Idempotency ---');
+    console.log('--- 1. Testing Database Migration Idempotency & Transaction Control ---');
+    // Ensure any stale duplicate test rows are cleared
+    await pool.query('DELETE FROM teams WHERE name LIKE "Conflict Dup Team%" OR id LIKE "temp-dup-%"');
+
+    // Ensure initial baseline migration is executed
+    await runUat067TeamsMigration();
+
+    // Test rerun for true idempotency
     const migReport = await runUat067TeamsMigration();
-    assert(
-      migReport.success === true,
-      'Migration rerun succeeds idempotently',
-      `teamsTenantIndexAdded=${migReport.teamsTenantIndexAdded}`
-    );
+    assert(migReport.success === true, '1.1 Migration rerun succeeds idempotently', `transactionStatus=${migReport.transactionStatus}`);
+    assert(migReport.transactionStatus === 'COMMITTED', '1.2 Transaction status is COMMITTED');
     assert(
       migReport.teamsTenantIndexAdded === false && migReport.uniqueTenantNameConstraintAdded === false,
-      'Migration rerun does not re-add existing constraints or indexes',
-      'No duplication'
+      '1.3 Migration rerun does not re-add existing constraints or indexes',
+      'No duplicate indexes'
     );
 
+    // Actual Foreign Key metadata test
+    console.log('\n--- 2. Testing Actual Database Foreign Key Metadata ---');
+    assert(Array.isArray(migReport.foreignKeysActual), '2.1 foreignKeysActual is an array from database metadata');
+    const [dbFkCheck] = await pool.query(`
+      SELECT COUNT(*) as count 
+      FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
+      WHERE k.TABLE_SCHEMA = DATABASE() 
+        AND k.TABLE_NAME IN ('teams', 'team_members') 
+        AND k.REFERENCED_TABLE_NAME IS NOT NULL
+    `);
+    const actualFkCountInDb = dbFkCheck[0]?.count || 0;
+    assert(
+      migReport.foreignKeysActual.length === actualFkCountInDb,
+      '2.2 Migration reported actual FK count matches information_schema query exactly',
+      `count=${actualFkCountInDb}`
+    );
+
+    // Test migration failure and rollback when duplicate team names exist
+    // Drop unique index first so we can insert duplicates to test migration detection
+    const [existingIdx] = await pool.query('SHOW INDEX FROM teams WHERE Key_name = "uq_teams_tenant_name"');
+    if (existingIdx.length > 0) {
+      await pool.query('DROP INDEX uq_teams_tenant_name ON teams');
+    }
+
+    await pool.query('DELETE FROM teams WHERE id LIKE "temp-dup-%"');
+    const dupTestName = 'Conflict Dup Team ' + Date.now();
+    const dupId1 = 'temp-dup-' + Date.now() + '-1';
+    const dupId2 = 'temp-dup-' + Date.now() + '-2';
+    await pool.query('INSERT INTO teams (id, tenantId, name) VALUES (?, ?, ?)', [dupId1, tenantAId, dupTestName]);
+    await pool.query('INSERT INTO teams (id, tenantId, name) VALUES (?, ?, ?)', [dupId2, tenantAId, dupTestName]);
+
+    const migFailReport = await runUat067TeamsMigration();
+    assert(migFailReport.success === false, '3.1 Migration returns success=false when duplicates exist');
+    assert(migFailReport.constraintPending === true, '3.2 Migration sets constraintPending=true');
+    assert(migFailReport.transactionStatus === 'ROLLED_BACK', '3.3 Transaction status is ROLLED_BACK');
+    assert(
+      Array.isArray(migFailReport.duplicatesFound) && migFailReport.duplicatesFound.length > 0,
+      '3.4 Migration report includes duplicate groups list',
+      `groups=${migFailReport.duplicatesFound.length}`
+    );
+
+    // Clean up temporary duplicates and re-run migration to restore constraint
+    await pool.query('DELETE FROM teams WHERE id IN (?, ?)', [dupId1, dupId2]);
+    const migRestoreReport = await runUat067TeamsMigration();
+    assert(migRestoreReport.success === true, '3.5 Migration succeeds and restores constraint after duplicates are resolved');
+    assert(migRestoreReport.transactionStatus === 'COMMITTED', '3.6 Restored migration committed successfully');
+
     // ─────────────────────────────────────────────────────────────
-    // TEST 2: Create Team (Admin)
+    // SUITE 2: Unified Role Normalization (Prefixed & Legacy Roles)
     // ─────────────────────────────────────────────────────────────
-    console.log('\n--- 2. Testing Create Team ---');
+    console.log('\n--- 4. Testing Unified Role Normalization ---');
+    assert(normalizeSemanticRole('ROLE_TENANT_ADMIN') === 'TENANT_ADMIN', '4.1 normalizeSemanticRole handles ROLE_TENANT_ADMIN');
+    assert(normalizeSemanticRole('ROL-ADM-001') === 'TENANT_ADMIN', '4.2 normalizeSemanticRole handles ROL-ADM-*');
+    assert(normalizeSemanticRole('ROLE_SUPER_ADMIN') === 'SUPER_ADMIN', '4.3 normalizeSemanticRole handles ROLE_SUPER_ADMIN');
+    assert(normalizeSemanticRole('ROLE_SUPERVISOR') === 'SUPERVISOR', '4.4 normalizeSemanticRole handles ROLE_SUPERVISOR');
+    assert(normalizeSemanticRole('ROL-SUP-01') === 'SUPERVISOR', '4.5 normalizeSemanticRole handles ROL-SUP-*');
+    assert(normalizeSemanticRole('ROLE_SALES_MANAGER') === 'SALES_MANAGER', '4.6 normalizeSemanticRole handles ROLE_SALES_MANAGER');
+    assert(normalizeSemanticRole('ROL-MGR-01') === 'SALES_MANAGER', '4.7 normalizeSemanticRole handles ROL-MGR-*');
+    assert(normalizeSemanticRole('ROLE_SALES_REP') === 'SALES_REP', '4.8 normalizeSemanticRole handles ROLE_SALES_REP');
+    assert(normalizeSemanticRole('ROL-REP-01') === 'SALES_REP', '4.9 normalizeSemanticRole handles ROL-REP-*');
+
+    // Test E2E HTTP with custom role code
+    const legacyRoleCode = 'ROL-ADM-LEGACY-TEST';
+    const legacyRoleId = 'ROLE-LEGACY-TEST-' + Date.now();
+    await pool.query(`
+      INSERT INTO roles (id, tenantId, name, code, scope)
+      VALUES (?, ?, 'Legacy Admin', ?, 'TENANT')
+    `, [legacyRoleId, tenantAId, legacyRoleCode]);
+    cleanupRoles.push(legacyRoleId);
+
+    const legacyUserId = 'USR-LEGACY-' + Date.now();
+    await pool.query(`
+      INSERT INTO users (id, name, email, passwordHash, status)
+      VALUES (?, 'Legacy Admin User', 'legacy_admin@test.com', 'hash', 'ACTIVE')
+    `, [legacyUserId]);
+    cleanupUsers.push(legacyUserId);
+
+    const legacyTuId = 'TU-LEGACY-' + Date.now();
+    await pool.query(`
+      INSERT INTO tenant_users (id, tenantId, userId, status, isPrimary)
+      VALUES (?, ?, ?, 'ACTIVE', 1)
+    `, [legacyTuId, tenantAId, legacyUserId]);
+
+    await pool.query(`
+      INSERT INTO tenant_user_roles (id, tenantUserId, roleId)
+      VALUES (UUID(), ?, ?)
+    `, [legacyTuId, legacyRoleId]);
+
+    const legacyToken = await createToken(legacyUserId);
+    const headersLegacyAdmin = { 'Authorization': `Bearer ${legacyToken}`, 'Content-Type': 'application/json' };
+
+    const legacyCreateRes = await request('/api/teams', {
+      method: 'POST',
+      headers: headersLegacyAdmin,
+      body: {
+        name: 'Legacy Admin Created Team ' + Date.now(),
+        description: 'Testing prefixed role authorization'
+      }
+    });
+    assert(legacyCreateRes.status === 201, '4.10 User with ROL-ADM-* role successfully authorized to create team (201)', `status=${legacyCreateRes.status}`);
+    if (legacyCreateRes.body.teamId) cleanupTeams.push(legacyCreateRes.body.teamId);
+
+    // ─────────────────────────────────────────────────────────────
+    // SUITE 3: Create Team & Validations
+    // ─────────────────────────────────────────────────────────────
+    console.log('\n--- 5. Testing Create Team & Validations ---');
     const teamNameA = 'Alpha Sales Unit ' + Date.now();
     const createRes = await request('/api/teams', {
       method: 'POST',
@@ -125,112 +234,95 @@ async function runTeamMembersTests() {
       }
     });
 
-    assert(createRes.status === 201, 'POST /api/teams returns 201 Created', `status=${createRes.status}`);
-    assert(!!createRes.body.teamId, 'Response contains generated teamId', `teamId=${createRes.body.teamId}`);
+    assert(createRes.status === 201, '5.1 POST /api/teams returns 201 Created', `status=${createRes.status}`);
+    assert(!!createRes.body.teamId, '5.2 Response contains generated teamId', `teamId=${createRes.body.teamId}`);
     const teamAId = createRes.body.teamId;
     if (teamAId) cleanupTeams.push(teamAId);
 
-    // Verify team exists via GET /api/teams/:id
+    // Verify detail
     const detailRes = await request(`/api/teams/${teamAId}`, {
       method: 'GET',
       headers: headersAdminA
     });
-    assert(detailRes.status === 200, 'GET /api/teams/:id returns 200', `name=${detailRes.body.name}`);
-    assert(detailRes.body.name === teamNameA, 'Team name matches payload', `name=${detailRes.body.name}`);
-    assert(Array.isArray(detailRes.body.members) && detailRes.body.members.length === 0, 'Team initially has 0 members');
+    assert(detailRes.status === 200, '5.3 GET /api/teams/:id returns 200', `name=${detailRes.body.name}`);
+    assert(detailRes.body.name === teamNameA, '5.4 Team name matches payload', `name=${detailRes.body.name}`);
+    assert(Array.isArray(detailRes.body.members) && detailRes.body.members.length === 0, '5.5 Team initially has 0 members');
 
-    // ─────────────────────────────────────────────────────────────
-    // TEST 3: Duplicate Team Name Rejection
-    // ─────────────────────────────────────────────────────────────
-    console.log('\n--- 3. Testing Duplicate Team Name in Same Tenant ---');
+    // Duplicate name test
     const dupRes = await request('/api/teams', {
       method: 'POST',
       headers: headersAdminA,
       body: {
-        name: teamNameA, // duplicate
-        description: 'Duplicate team attempt'
+        name: teamNameA,
+        description: 'Duplicate attempt'
       }
     });
-    assert(dupRes.status === 409, 'Duplicate team name returns 409 Conflict', `status=${dupRes.status}`);
-    assert(dupRes.body.code === 'DUPLICATE_TEAM_NAME', 'Error code is DUPLICATE_TEAM_NAME', `code=${dupRes.body.code}`);
+    assert(dupRes.status === 409, '5.6 Duplicate team name returns 409 Conflict', `status=${dupRes.status}`);
+    assert(dupRes.body.code === 'DUPLICATE_TEAM_NAME', '5.7 Error code is DUPLICATE_TEAM_NAME');
 
-    // ─────────────────────────────────────────────────────────────
-    // TEST 4: Invalid Leader & Cross-Tenant Leader Validation
-    // ─────────────────────────────────────────────────────────────
-    console.log('\n--- 4. Testing Leader Validation on Create/Update ---');
+    // Invalid leader
     const invalidLeaderRes = await request('/api/teams', {
       method: 'POST',
       headers: headersAdminA,
-      body: {
-        name: 'Beta Team ' + Date.now(),
-        leaderId: 'NON-EXISTENT-LEADER-ID'
-      }
+      body: { name: 'Beta Team ' + Date.now(), leaderId: 'NON-EXISTENT-LEADER' }
     });
-    assert(invalidLeaderRes.status === 400, 'Non-existent leader returns 400', `status=${invalidLeaderRes.status}`);
-    assert(invalidLeaderRes.body.code === 'INVALID_LEADER', 'Error code is INVALID_LEADER', `code=${invalidLeaderRes.body.code}`);
+    assert(invalidLeaderRes.status === 400, '5.8 Non-existent leader returns 400', `status=${invalidLeaderRes.status}`);
+    assert(invalidLeaderRes.body.code === 'INVALID_LEADER', '5.9 Error code is INVALID_LEADER');
 
-    // Cross-tenant leader (User from Tenant B assigned to Tenant A team)
+    // Cross-tenant leader
     const crossLeaderRes = await request('/api/teams', {
       method: 'POST',
       headers: headersAdminA,
-      body: {
-        name: 'Gamma Team ' + Date.now(),
-        leaderId: 'TU-1788421036333-0b5d97' // Tenant B user
-      }
+      body: { name: 'Gamma Team ' + Date.now(), leaderId: 'TU-1788421036333-0b5d97' }
     });
-    assert(crossLeaderRes.status === 400, 'Cross-tenant leader returns 400 Bad Request', `status=${crossLeaderRes.status}`);
-    assert(crossLeaderRes.body.code === 'INVALID_LEADER', 'Error code is INVALID_LEADER', `code=${crossLeaderRes.body.code}`);
+    assert(crossLeaderRes.status === 400, '5.10 Cross-tenant leader returns 400 Bad Request', `status=${crossLeaderRes.status}`);
+    assert(crossLeaderRes.body.code === 'INVALID_LEADER', '5.11 Error code is INVALID_LEADER');
 
     // ─────────────────────────────────────────────────────────────
-    // TEST 5: Assign Leader & Change Leader
+    // SUITE 4: Assign & Change Leader Synchronization
     // ─────────────────────────────────────────────────────────────
-    console.log('\n--- 5. Testing Assign Leader & Change Leader ---');
-    // Assign USR-004 (TU-004) as leader
+    console.log('\n--- 6. Testing Assign Leader & Change Leader ---');
     const assignLeaderRes = await request(`/api/teams/${teamAId}`, {
       method: 'PUT',
       headers: headersAdminA,
-      body: {
-        leaderId: 'TU-004'
-      }
+      body: { leaderId: 'TU-004' }
     });
-    assert(assignLeaderRes.status === 200, 'PUT /api/teams/:id updates leader', `status=${assignLeaderRes.status}`);
+    assert(assignLeaderRes.status === 200, '6.1 PUT /api/teams/:id updates leader — status=200');
 
     const verifyLeaderDetail = await request(`/api/teams/${teamAId}`, {
       method: 'GET',
       headers: headersAdminA
     });
-    assert(verifyLeaderDetail.body.leaderId === 'TU-004', 'Team leaderId updated to TU-004');
-    assert(verifyLeaderDetail.body.leaderName === 'Sales Supervisor', 'Leader name is joined from users table');
+    assert(verifyLeaderDetail.body.leaderId === 'TU-004', '6.2 Team leaderId updated to TU-004');
+    assert(verifyLeaderDetail.body.leaderName === 'Sales Supervisor', '6.3 Leader name joined from users table');
     assert(
       verifyLeaderDetail.body.members.some(m => m.tenantUserId === 'TU-004' && m.teamRole === 'LEADER'),
-      'Leader automatically synced into team_members with teamRole=LEADER'
+      '6.4 Leader automatically synced into team_members with teamRole=LEADER'
     );
 
-    // Change leader to Admin (TU-001)
+    // Change leader to TU-001 (Admin)
     const changeLeaderRes = await request(`/api/teams/${teamAId}`, {
       method: 'PUT',
       headers: headersAdminA,
-      body: {
-        leaderId: 'TU-001'
-      }
+      body: { leaderId: 'TU-001' }
     });
-    assert(changeLeaderRes.status === 200, 'PUT /api/teams/:id changes leader to TU-001', `status=${changeLeaderRes.status}`);
+    assert(changeLeaderRes.status === 200, '6.5 PUT /api/teams/:id changes leader to TU-001');
 
     const verifyChangedLeader = await request(`/api/teams/${teamAId}`, {
       method: 'GET',
       headers: headersAdminA
     });
-    assert(verifyChangedLeader.body.leaderId === 'TU-001', 'Team leaderId updated to TU-001');
+    assert(verifyChangedLeader.body.leaderId === 'TU-001', '6.6 Team leaderId updated to TU-001');
     assert(
       verifyChangedLeader.body.members.some(m => m.tenantUserId === 'TU-001' && m.teamRole === 'LEADER'),
-      'New leader synced as LEADER in team_members'
+      '6.7 New leader synced as LEADER in team_members'
     );
     assert(
       verifyChangedLeader.body.members.some(m => m.tenantUserId === 'TU-004' && m.teamRole === 'MEMBER'),
-      'Previous leader demoted to MEMBER in team_members'
+      '6.8 Previous leader demoted to MEMBER in team_members'
     );
 
-    // Change back leader to TU-004 (Supervisor) for supervisor tests
+    // Reassign back to TU-004 (Supervisor) for subsequent tests
     await request(`/api/teams/${teamAId}`, {
       method: 'PUT',
       headers: headersAdminA,
@@ -238,97 +330,72 @@ async function runTeamMembersTests() {
     });
 
     // ─────────────────────────────────────────────────────────────
-    // TEST 6: Add Member & Duplicate Member Rejection
+    // SUITE 5: Member Management & Constraints
     // ─────────────────────────────────────────────────────────────
-    console.log('\n--- 6. Testing Add Member & Duplicate Member ---');
-    // Add Sales Rep 1 (TU-002) as MEMBER
+    console.log('\n--- 7. Testing Member Management & Constraints ---');
     const addMemberRes = await request(`/api/teams/${teamAId}/members`, {
       method: 'POST',
       headers: headersAdminA,
-      body: {
-        tenantUserId: 'TU-002',
-        role: 'MEMBER'
-      }
+      body: { tenantUserId: 'TU-002', role: 'MEMBER' }
     });
-    assert(addMemberRes.status === 201, 'POST /api/teams/:id/members adds member', `status=${addMemberRes.status}`);
+    assert(addMemberRes.status === 201, '7.1 POST /api/teams/:id/members adds member — status=201');
 
-    // Try adding the exact same member again
     const dupMemberRes = await request(`/api/teams/${teamAId}/members`, {
       method: 'POST',
       headers: headersAdminA,
-      body: {
-        tenantUserId: 'TU-002',
-        role: 'MEMBER'
-      }
+      body: { tenantUserId: 'TU-002', role: 'MEMBER' }
     });
-    assert(dupMemberRes.status === 409, 'Duplicate team member returns 409 Conflict', `status=${dupMemberRes.status}`);
-    assert(dupMemberRes.body.code === 'DUPLICATE_TEAM_MEMBER', 'Error code is DUPLICATE_TEAM_MEMBER');
+    assert(dupMemberRes.status === 409, '7.2 Duplicate team member returns 409 Conflict');
+    assert(dupMemberRes.body.code === 'DUPLICATE_TEAM_MEMBER', '7.3 Error code is DUPLICATE_TEAM_MEMBER');
 
-    // ─────────────────────────────────────────────────────────────
-    // TEST 7: Cross-Tenant Member Addition Denied
-    // ─────────────────────────────────────────────────────────────
-    console.log('\n--- 7. Testing Cross-Tenant Member Addition Denied ---');
     const crossMemberRes = await request(`/api/teams/${teamAId}/members`, {
       method: 'POST',
       headers: headersAdminA,
-      body: {
-        tenantUserId: 'TU-1788421036333-0b5d97', // Tenant B user
-        role: 'MEMBER'
-      }
+      body: { tenantUserId: 'TU-1788421036333-0b5d97', role: 'MEMBER' }
     });
-    assert(crossMemberRes.status === 400, 'Cross-tenant member addition returns 400', `status=${crossMemberRes.status}`);
-    assert(crossMemberRes.body.code === 'CROSS_TENANT_USER_DENIED', 'Error code is CROSS_TENANT_USER_DENIED');
+    assert(crossMemberRes.status === 400, '7.4 Cross-tenant member addition returns 400');
+    assert(crossMemberRes.body.code === 'CROSS_TENANT_USER_DENIED', '7.5 Error code is CROSS_TENANT_USER_DENIED');
 
     // ─────────────────────────────────────────────────────────────
-    // TEST 8: Role Authorization (SALES_REP / SALES_MANAGER Denied)
+    // SUITE 6: Role Authorization & Boundaries
     // ─────────────────────────────────────────────────────────────
-    console.log('\n--- 8. Testing Role Authorization Guards ---');
-    // SALES_REP cannot create team
+    console.log('\n--- 8. Testing Role Authorization Boundaries ---');
     const repCreateRes = await request('/api/teams', {
       method: 'POST',
       headers: headersRepA1,
       body: { name: 'Illegal Rep Team' }
     });
-    assert(repCreateRes.status === 403, 'SALES_REP cannot create team (403)', `status=${repCreateRes.status}`);
-    assert(repCreateRes.body.code === 'FORBIDDEN', 'Error code is FORBIDDEN');
+    assert(repCreateRes.status === 403, '8.1 SALES_REP cannot create team (403)');
+    assert(repCreateRes.body.code === 'FORBIDDEN', '8.2 Error code is FORBIDDEN');
 
-    // SALES_MANAGER cannot delete team
     const mgrDeleteRes = await request(`/api/teams/${teamAId}`, {
       method: 'DELETE',
       headers: headersMgrA
     });
-    assert(mgrDeleteRes.status === 403, 'SALES_MANAGER cannot delete team (403)', `status=${mgrDeleteRes.status}`);
+    assert(mgrDeleteRes.status === 403, '8.3 SALES_MANAGER cannot delete team (403)');
 
-    // SALES_REP cannot add member
     const repAddMemberRes = await request(`/api/teams/${teamAId}/members`, {
       method: 'POST',
       headers: headersRepA1,
       body: { tenantUserId: 'TU-005', role: 'MEMBER' }
     });
-    assert(repAddMemberRes.status === 403, 'SALES_REP cannot add team member (403)', `status=${repAddMemberRes.status}`);
+    assert(repAddMemberRes.status === 403, '8.4 SALES_REP cannot add team member (403)');
 
-    // ─────────────────────────────────────────────────────────────
-    // TEST 9: Supervisor Permissions: Own Team vs Outside Team
-    // ─────────────────────────────────────────────────────────────
-    console.log('\n--- 9. Testing Supervisor Own Team vs Outside Team Permissions ---');
-    // Supervisor A (TU-004) is leader of teamAId.
-    // They CAN add TU-005 to teamAId as MEMBER
+    // Supervisor Permissions: Own Team vs Outside Team
     const supAddOwnRes = await request(`/api/teams/${teamAId}/members`, {
       method: 'POST',
       headers: headersSupA,
       body: { tenantUserId: 'TU-005', role: 'MEMBER' }
     });
-    assert(supAddOwnRes.status === 201, 'Supervisor can add member to their own team', `status=${supAddOwnRes.status}`);
+    assert(supAddOwnRes.status === 201, '8.5 Supervisor can add member to their own team');
 
-    // Supervisor CANNOT assign someone as LEADER
     const supAssignLeaderRes = await request(`/api/teams/${teamAId}/members`, {
       method: 'POST',
       headers: headersSupA,
       body: { tenantUserId: 'TU-IMG-1', role: 'LEADER' }
     });
-    assert(supAssignLeaderRes.status === 403, 'Supervisor cannot assign a LEADER (403)', `status=${supAssignLeaderRes.status}`);
+    assert(supAssignLeaderRes.status === 403, '8.6 Supervisor cannot assign a LEADER (403)');
 
-    // Create Team 2 where Supervisor A is NOT leader
     const team2Res = await request('/api/teams', {
       method: 'POST',
       headers: headersAdminA,
@@ -337,93 +404,79 @@ async function runTeamMembersTests() {
     const team2Id = team2Res.body.teamId;
     if (team2Id) cleanupTeams.push(team2Id);
 
-    // Supervisor A CANNOT add member to Team 2
     const supAddOtherRes = await request(`/api/teams/${team2Id}/members`, {
       method: 'POST',
       headers: headersSupA,
       body: { tenantUserId: 'TU-IMG-2', role: 'MEMBER' }
     });
-    assert(supAddOtherRes.status === 403, 'Supervisor cannot add member to a team they do not lead (403)', `status=${supAddOtherRes.status}`);
+    assert(supAddOtherRes.status === 403, '8.7 Supervisor cannot add member to a team they do not lead (403)');
 
     // ─────────────────────────────────────────────────────────────
-    // TEST 10: Tenant Isolation (Cross-Tenant Access Denied)
+    // SUITE 7: Tenant Isolation (BOLA Guard)
     // ─────────────────────────────────────────────────────────────
-    console.log('\n--- 10. Testing Tenant Isolation ---');
-    // Tenant B Admin tries to view Team A
+    console.log('\n--- 9. Testing Multi-Tenant Isolation ---');
     const tBViewTeamARes = await request(`/api/teams/${teamAId}`, {
       method: 'GET',
       headers: headersAdminB
     });
-    assert(tBViewTeamARes.status === 404, 'Tenant B cannot view Tenant A team (returns 404)', `status=${tBViewTeamARes.status}`);
+    assert(tBViewTeamARes.status === 404, '9.1 Tenant B cannot view Tenant A team (404)');
 
-    // Tenant B Admin tries to delete Team A
     const tBDeleteTeamARes = await request(`/api/teams/${teamAId}`, {
       method: 'DELETE',
       headers: headersAdminB
     });
-    assert(tBDeleteTeamARes.status === 404, 'Tenant B cannot delete Tenant A team (returns 404)', `status=${tBDeleteTeamARes.status}`);
+    assert(tBDeleteTeamARes.status === 404, '9.2 Tenant B cannot delete Tenant A team (404)');
 
     // ─────────────────────────────────────────────────────────────
-    // TEST 11: Remove Member & Leader Removal Protection
+    // SUITE 8: Leader Removal Guard & Team Deletion
     // ─────────────────────────────────────────────────────────────
-    console.log('\n--- 11. Testing Remove Member & Leader Removal Rules ---');
-    // Try to remove leader without allowLeaderRemoval
+    console.log('\n--- 10. Testing Leader Removal Guard & Deletion ---');
     const removeLeaderRes = await request(`/api/teams/${teamAId}/members/TU-004`, {
       method: 'DELETE',
       headers: headersAdminA
     });
-    assert(removeLeaderRes.status === 400, 'Removing leader without replacement is blocked (400)', `status=${removeLeaderRes.status}`);
-    assert(removeLeaderRes.body.code === 'CANNOT_REMOVE_LEADER', 'Error code is CANNOT_REMOVE_LEADER');
+    assert(removeLeaderRes.status === 400, '10.1 Removing leader without replacement is blocked (400)');
+    assert(removeLeaderRes.body.code === 'CANNOT_REMOVE_LEADER', '10.2 Error code is CANNOT_REMOVE_LEADER');
 
-    // Remove regular member TU-005
     const removeMemberRes = await request(`/api/teams/${teamAId}/members/TU-005`, {
       method: 'DELETE',
       headers: headersAdminA
     });
-    assert(removeMemberRes.status === 200, 'Regular member can be removed successfully', `status=${removeMemberRes.status}`);
+    assert(removeMemberRes.status === 200, '10.3 Regular member can be removed successfully (200)');
 
     const verifyAfterRemove = await request(`/api/teams/${teamAId}`, {
       method: 'GET',
       headers: headersAdminA
     });
-    assert(
-      !verifyAfterRemove.body.members.some(m => m.tenantUserId === 'TU-005'),
-      'TU-005 is no longer in team members list'
-    );
+    assert(!verifyAfterRemove.body.members.some(m => m.tenantUserId === 'TU-005'), '10.4 Removed member no longer in members array');
 
-    // ─────────────────────────────────────────────────────────────
-    // TEST 12: Delete Team (Has Members vs Force / Empty)
-    // ─────────────────────────────────────────────────────────────
-    console.log('\n--- 12. Testing Delete Team ---');
-    // teamAId currently still has members (TU-004 leader, TU-002, TU-001)
+    // Deleting team with members
     const deleteBlockedRes = await request(`/api/teams/${teamAId}`, {
       method: 'DELETE',
       headers: headersAdminA
     });
-    assert(deleteBlockedRes.status === 400, 'Deleting team with members returns 400', `status=${deleteBlockedRes.status}`);
-    assert(deleteBlockedRes.body.code === 'TEAM_HAS_MEMBERS', 'Error code is TEAM_HAS_MEMBERS');
+    assert(deleteBlockedRes.status === 400, '10.5 Deleting team with members returns 400');
+    assert(deleteBlockedRes.body.code === 'TEAM_HAS_MEMBERS', '10.6 Error code is TEAM_HAS_MEMBERS');
 
     // Force delete team2Id
     const deleteTeam2Res = await request(`/api/teams/${team2Id}?force=true`, {
       method: 'DELETE',
       headers: headersAdminA
     });
-    assert(deleteTeam2Res.status === 200, 'DELETE /api/teams/:id?force=true deletes team and relations in transaction');
+    assert(deleteTeam2Res.status === 200, '10.7 DELETE ?force=true deletes team and relations in transaction');
 
     const verifyTeam2Deleted = await request(`/api/teams/${team2Id}`, {
       method: 'GET',
       headers: headersAdminA
     });
-    assert(verifyTeam2Deleted.status === 404, 'Deleted team returns 404');
+    assert(verifyTeam2Deleted.status === 404, '10.8 Deleted team returns 404 Not Found');
 
     // ─────────────────────────────────────────────────────────────
-    // TEST 13: TEAM-Scoped Visibility Across Modules
+    // SUITE 9: TEAM-Scoped Data Visibility Integration
     // ─────────────────────────────────────────────────────────────
-    console.log('\n--- 13. Testing TEAM-Scoped Visibility Integration Across Modules ---');
-    // Supervisor A (USR-004) and Rep A1 (USR-002) are in teamAId.
-    // Let's create an activity and follow-up owned by Rep A1 (USR-002).
+    console.log('\n--- 11. Testing TEAM-Scoped Visibility Across Modules ---');
     const testFollowUpDate = '2026-09-30';
-    const [fuInsert] = await pool.query(`
+    await pool.query(`
       INSERT INTO follow_ups (id, tenantId, title, picId, createdById, followUpDate, status, notes)
       VALUES (UUID(), ?, 'Team UAT Customer', ?, ?, ?, 'PENDING', 'Team scope test note')
     `, [tenantAId, repA1Id, repA1Id, testFollowUpDate]);
@@ -433,25 +486,21 @@ async function runTeamMembersTests() {
       method: 'GET',
       headers: headersSupA
     });
-    assert(supTeamFuRes.status === 200, 'GET /api/follow_ups?scope=team returns 200 for Supervisor');
+    assert(supTeamFuRes.status === 200, '11.1 GET /api/follow_ups?scope=team returns 200 for Supervisor');
     const fuList = Array.isArray(supTeamFuRes.body) ? supTeamFuRes.body : supTeamFuRes.body.data || [];
     assert(
       fuList.some(f => f.title === 'Team UAT Customer' && f.picId === repA1Id),
-      'Supervisor sees teammate (Rep A1) follow-up under TEAM scope'
+      '11.2 Supervisor sees teammate (Rep A1) follow-up under TEAM scope'
     );
 
-    // Query activities as Supervisor A with scope=team
-    const supTeamActRes = await request('/api/sales/activities?scope=team', {
+    // Query activities as Supervisor A with scope=all / team
+    const supTeamActRes = await request('/api/activities?scope=all', {
       method: 'GET',
       headers: headersSupA
     });
-    assert(
-      supTeamActRes.status === 200 || supTeamActRes.status === 404,
-      'Supervisor team activities query handled cleanly',
-      `status=${supTeamActRes.status}`
-    );
+    assert(supTeamActRes.status === 200, '11.3 GET /api/activities?scope=all returns 200 for Supervisor');
 
-    // Query follow-ups as Tenant B Admin -> should NOT see Team UAT Customer
+    // Tenant B Admin CANNOT see Tenant A follow-up
     const tBFuRes = await request('/api/follow_ups?scope=all', {
       method: 'GET',
       headers: headersAdminB
@@ -459,13 +508,13 @@ async function runTeamMembersTests() {
     const tbList = Array.isArray(tBFuRes.body) ? tBFuRes.body : tBFuRes.body.data || [];
     assert(
       !tbList.some(f => f.title === 'Team UAT Customer'),
-      'Tenant B cannot see Tenant A follow-up under any scope'
+      '11.4 Tenant B cannot see Tenant A follow-up under any scope'
     );
 
     // Clean up test follow-up
     await pool.query('DELETE FROM follow_ups WHERE title = "Team UAT Customer" AND tenantId = ?', [tenantAId]);
 
-    // Clean up teamAId with force
+    // Force delete teamAId
     await request(`/api/teams/${teamAId}?force=true`, {
       method: 'DELETE',
       headers: headersAdminA
@@ -484,13 +533,22 @@ async function runTeamMembersTests() {
       await pool.query('DELETE FROM team_members WHERE teamId IN (?)', [cleanupTeams]);
       await pool.query('DELETE FROM teams WHERE id IN (?)', [cleanupTeams]);
     }
+    // Cleanup test users & roles
+    if (cleanupUsers.length > 0) {
+      await pool.query('DELETE FROM tenant_user_roles WHERE tenantUserId IN (SELECT id FROM tenant_users WHERE userId IN (?))', [cleanupUsers]);
+      await pool.query('DELETE FROM tenant_users WHERE userId IN (?)', [cleanupUsers]);
+      await pool.query('DELETE FROM users WHERE id IN (?)', [cleanupUsers]);
+    }
+    if (cleanupRoles.length > 0) {
+      await pool.query('DELETE FROM roles WHERE id IN (?)', [cleanupRoles]);
+    }
     if (server) {
       await new Promise((resolve) => server.close(resolve));
     }
   }
 
   console.log('\n================================================================');
-  console.log(`TEST SUMMARY: ${passed} PASSED, ${failed} FAILED`);
+  console.log(`TEST SUMMARY: ${passed} PASSED, ${failed} FAILED (TOTAL: ${passed + failed})`);
   console.log('================================================================\n');
 
   if (failed > 0) {

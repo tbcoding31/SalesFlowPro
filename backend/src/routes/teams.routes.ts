@@ -2,8 +2,19 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import { pool } from '../db';
 import { validateTargetTenant } from '../utils/scope';
+import { normalizeSemanticRole } from './navigation.routes';
 
 export const teamsRoutes = Router();
+
+// Helper to extract and normalize actor context
+function getActorContext(req: any) {
+  const rawRole = req.userRoleCode || req.userRole;
+  const isPlatformUser = Boolean(req.isPlatformUser);
+  const actorRole = normalizeSemanticRole(rawRole, isPlatformUser);
+  const actorTenant = req.userTenantId;
+  const actorUserId = req.userId;
+  return { actorRole, actorTenant, isPlatformUser, actorUserId };
+}
 
 // Helper to resolve actor tenantUserId
 async function getActorTenantUserId(userId: string, tenantId: string): Promise<string | null> {
@@ -19,9 +30,7 @@ async function getActorTenantUserId(userId: string, tenantId: string): Promise<s
 // 1. GET /api/teams — List Teams
 // ─────────────────────────────────────────────────────────────
 teamsRoutes.get('/', async (req: any, res: any) => {
-  const actorRole = req.userRole;
-  const actorTenant = req.userTenantId;
-  const isPlatformUser = req.isPlatformUser;
+  const { actorRole, actorTenant, isPlatformUser } = getActorContext(req);
 
   if ((!actorTenant && !isPlatformUser) || !actorRole) {
     return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
@@ -58,9 +67,7 @@ teamsRoutes.get('/', async (req: any, res: any) => {
 // 2. GET /api/teams/:id — Team Detail & Members
 // ─────────────────────────────────────────────────────────────
 teamsRoutes.get('/:id', async (req: any, res: any) => {
-  const actorRole = req.userRole;
-  const actorTenant = req.userTenantId;
-  const isPlatformUser = req.isPlatformUser;
+  const { actorRole, actorTenant, isPlatformUser } = getActorContext(req);
   const teamId = req.params.id;
 
   if ((!actorTenant && !isPlatformUser) || !actorRole) {
@@ -122,9 +129,7 @@ teamsRoutes.get('/:id', async (req: any, res: any) => {
 // 3. POST /api/teams — Create Team
 // ─────────────────────────────────────────────────────────────
 teamsRoutes.post('/', async (req: any, res: any) => {
-  const actorRole = req.userRole;
-  const actorTenant = req.userTenantId;
-  const isPlatformUser = req.isPlatformUser;
+  const { actorRole, actorTenant, isPlatformUser } = getActorContext(req);
 
   if ((!actorTenant && !isPlatformUser) || !actorRole) {
     return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
@@ -133,7 +138,7 @@ teamsRoutes.post('/', async (req: any, res: any) => {
   // Permission Guard: Only TENANT_ADMIN and SUPER_ADMIN may create teams
   if (actorRole !== 'SUPER_ADMIN' && actorRole !== 'TENANT_ADMIN') {
     return res.status(403).json({
-      error: 'Forbidden: Only administrators can create teams',
+      error: 'Forbidden: Insufficient permissions to create team',
       code: 'FORBIDDEN'
     });
   }
@@ -239,9 +244,7 @@ teamsRoutes.post('/', async (req: any, res: any) => {
 // 4. PUT /api/teams/:id — Update Team Details & Leader
 // ─────────────────────────────────────────────────────────────
 teamsRoutes.put('/:id', async (req: any, res: any) => {
-  const actorRole = req.userRole;
-  const actorTenant = req.userTenantId;
-  const isPlatformUser = req.isPlatformUser;
+  const { actorRole, actorTenant, isPlatformUser } = getActorContext(req);
   const teamId = req.params.id;
 
   if ((!actorTenant && !isPlatformUser) || !actorRole) {
@@ -394,9 +397,7 @@ teamsRoutes.put('/:id', async (req: any, res: any) => {
 // 5. DELETE /api/teams/:id — Delete Team
 // ─────────────────────────────────────────────────────────────
 teamsRoutes.delete('/:id', async (req: any, res: any) => {
-  const actorRole = req.userRole;
-  const actorTenant = req.userTenantId;
-  const isPlatformUser = req.isPlatformUser;
+  const { actorRole, actorTenant, isPlatformUser } = getActorContext(req);
   const teamId = req.params.id;
   const force = req.query.force === 'true';
 
@@ -462,10 +463,7 @@ teamsRoutes.delete('/:id', async (req: any, res: any) => {
 // 6. POST /api/teams/:id/members — Add Team Member
 // ─────────────────────────────────────────────────────────────
 teamsRoutes.post('/:id/members', async (req: any, res: any) => {
-  const actorRole = req.userRole;
-  const actorTenant = req.userTenantId;
-  const actorUserId = req.userId;
-  const isPlatformUser = req.isPlatformUser;
+  const { actorRole, actorTenant, isPlatformUser, actorUserId } = getActorContext(req);
   const teamId = req.params.id;
 
   if ((!actorTenant && !isPlatformUser) || !actorRole) {
@@ -612,10 +610,7 @@ teamsRoutes.post('/:id/members', async (req: any, res: any) => {
 // 7. DELETE /api/teams/:id/members/:targetId — Remove Member
 // ─────────────────────────────────────────────────────────────
 teamsRoutes.delete('/:id/members/:targetId', async (req: any, res: any) => {
-  const actorRole = req.userRole;
-  const actorTenant = req.userTenantId;
-  const actorUserId = req.userId;
-  const isPlatformUser = req.isPlatformUser;
+  const { actorRole, actorTenant, isPlatformUser, actorUserId } = getActorContext(req);
   const teamId = req.params.id;
   const targetId = req.params.targetId;
   const allowLeaderRemoval = req.query.allowLeaderRemoval === 'true';
