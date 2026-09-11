@@ -798,12 +798,16 @@ export const VisitDetailPage: React.FC = () => {
         <CreateFollowUpModal
           isOpen={isFollowUpModalOpen}
           onClose={() => setIsFollowUpModalOpen(false)}
-          onSuccess={() => {}}
+          onSuccess={async () => {
+            setIsFollowUpModalOpen(false);
+            await loadData();
+            showToast('Follow-up created successfully!');
+          }}
           initialVisitId={visit.id}
           initialVisitTitle={visit.title}
           initialCustomerId={visit.customerId}
           initialCustomerName={visit.customerName}
-          initialProjectId={visit.projectId}
+          initialProjectId={visit.relatedProjectId || (visit as any).projectId}
           initialProjectName={visit.projectName}
           sourceType="VISIT"
         />

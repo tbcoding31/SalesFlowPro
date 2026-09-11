@@ -601,6 +601,172 @@ async function runFollowupTestSuite() {
       'TC-21.3', 'New platform template was successfully reconciled/snapshotted to Tenant A');
     if (platSnapshot.length > 0) cleanupFollowUpTypes.push(platSnapshot[0].id);
 
+    // =========================================================================
+    // TC-22: Visit Activity History includes follow-up events with type=ACTIVITY
+    // =========================================================================
+    console.log('\n--- TC-22: Visit Activity History & Auto-refresh ---');
+    const fuVisitRes = await fetch(`${baseUrl}/api/follow-ups`, {
+      method: 'POST',
+      headers: headersA,
+      body: JSON.stringify({
+        customerId: custAId,
+        typeId: defaultTypeA.id,
+        title: 'Follow-up for Visit Alpha',
+        followUpDate: '2026-09-15',
+        relatedVisitId: visitAId,
+        priority: 'HIGH'
+      })
+    });
+    const fuVisitData = await fuVisitRes.json();
+    assert(fuVisitRes.status === 201 && fuVisitData.data && fuVisitData.data.id,
+      'TC-22.1', `Follow-up created for visit: ${fuVisitData.data?.id}`);
+    const visitFuId = fuVisitData.data?.id;
+    if (visitFuId) cleanupFollowUps.push(visitFuId);
+
+    const visitHistRes = await fetch(`${baseUrl}/api/visits/${visitAId}/history`, { headers: headersA });
+    const visitHistData = await visitHistRes.json();
+    const createdEvent = Array.isArray(visitHistData) ? visitHistData.find((h) => h.action === 'FOLLOW_UP_CREATED') : null;
+    assert(Boolean(createdEvent),
+      'TC-22.2', 'Visit activity history contains FOLLOW_UP_CREATED event');
+    assert(createdEvent && createdEvent.type === 'ACTIVITY',
+      'TC-22.3', 'Follow-up event in visit history has type = "ACTIVITY"');
+
+    const visitFuListRes = await fetch(`${baseUrl}/api/visits/${visitAId}/followups`, { headers: headersA });
+    const visitFuListData = await visitFuListRes.json();
+    assert(Array.isArray(visitFuListData) && visitFuListData.some((f) => f.id === visitFuId),
+      'TC-22.4', 'GET /api/visits/:id/followups returns newly created follow-up without manual refresh');
+
+    // =========================================================================
+    // TC-23: Project Activity History & Timeline includes follow-up events with type=ACTIVITY
+    // =========================================================================
+    console.log('\n--- TC-23: Project Activity History & Timeline ---');
+    const fuProjRes = await fetch(`${baseUrl}/api/follow-ups`, {
+      method: 'POST',
+      headers: headersA,
+      body: JSON.stringify({
+        customerId: custAId,
+        typeId: defaultTypeA.id,
+        title: 'Follow-up for Project Alpha',
+        followUpDate: '2026-09-16',
+        relatedProjectId: projAId,
+        priority: 'MEDIUM'
+      })
+    });
+    const fuProjData = await fuProjRes.json();
+    assert(fuProjRes.status === 201 && fuProjData.data && fuProjData.data.id,
+      'TC-23.1', `Follow-up created for project: ${fuProjData.data?.id}`);
+    const projFuId = fuProjData.data?.id;
+    if (projFuId) cleanupFollowUps.push(projFuId);
+
+    const projTimelineRes = await fetch(`${baseUrl}/api/projects/${projAId}/timeline`, { headers: headersA });
+    const projTimelineData = await projTimelineRes.json();
+    const projEvents = projTimelineData.data || [];
+    const projCreatedEvent = projEvents.find((e) => e.eventType === 'FOLLOW_UP_CREATED');
+    assert(Boolean(projCreatedEvent),
+      'TC-23.2', 'Project timeline contains FOLLOW_UP_CREATED event');
+    assert(projCreatedEvent && projCreatedEvent.type === 'ACTIVITY',
+      'TC-23.3', 'Follow-up event in project timeline is categorized as type = "ACTIVITY"');
+
+    const projSummaryRes = await fetch(`${baseUrl}/api/projects/${projAId}/summary`, { headers: headersA });
+    const projSummaryData = await projSummaryRes.json();
+    assert(Array.isArray(projSummaryData.followups) && projSummaryData.followups.some((f) => f.id === projFuId),
+      'TC-23.4', 'Project summary returns follow-up with joined type info');
+
+    // =========================================================================
+    // TC-24: Task Activity History & Related Follow-ups with type=ACTIVITY
+    // =========================================================================
+    console.log('\n--- TC-24: Task Activity History & Follow-ups ---');
+    const fuTaskRes = await fetch(`${baseUrl}/api/follow-ups`, {
+      method: 'POST',
+      headers: headersA,
+      body: JSON.stringify({
+        customerId: custAId,
+        typeId: defaultTypeA.id,
+        title: 'Follow-up for Task Alpha',
+        followUpDate: '2026-09-17',
+        relatedTaskId: taskAId,
+        priority: 'URGENT'
+      })
+    });
+    const fuTaskData = await fuTaskRes.json();
+    assert(fuTaskRes.status === 201 && fuTaskData.data && fuTaskData.data.id,
+      'TC-24.1', `Follow-up created for task: ${fuTaskData.data?.id}`);
+    const taskFuId = fuTaskData.data?.id;
+    if (taskFuId) cleanupFollowUps.push(taskFuId);
+
+    const taskHistRes = await fetch(`${baseUrl}/api/tasks/${taskAId}/history`, { headers: headersA });
+    const taskHistData = await taskHistRes.json();
+    const taskCreatedEvent = Array.isArray(taskHistData) ? taskHistData.find((h) => h.action === 'FOLLOW_UP_CREATED') : null;
+    assert(Boolean(taskCreatedEvent),
+      'TC-24.2', 'Task history contains FOLLOW_UP_CREATED event');
+    assert(taskCreatedEvent && taskCreatedEvent.type === 'ACTIVITY',
+      'TC-24.3', 'Follow-up event in task history has type = "ACTIVITY"');
+
+    const taskFuListRes = await fetch(`${baseUrl}/api/tasks/${taskAId}/followups`, { headers: headersA });
+    const taskFuListData = await taskFuListRes.json();
+    assert(Array.isArray(taskFuListData) && taskFuListData.some((f) => f.id === taskFuId),
+      'TC-24.4', 'GET /api/tasks/:id/followups returns task follow-up');
+
+    // =========================================================================
+    // TC-25: Complete Follow-up with empty outcome stores NULL (outcome optional)
+    // =========================================================================
+    console.log('\n--- TC-25: Optional outcome on completion ---');
+    const validPngBuffer2 = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+      0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+      0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41,
+      0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+      0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00,
+      0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+      0x42, 0x60, 0x82
+    ]);
+    const validBlob2 = new Blob([validPngBuffer2], { type: 'image/png' });
+    const validForm2 = new FormData();
+    validForm2.append('file', validBlob2, 'valid_evidence_task.png');
+
+    const uploadRes2 = await fetch(`${baseUrl}/api/follow-ups/${taskFuId}/evidences`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${tokenTenantA}` },
+      body: validForm2
+    });
+    const uploadData2 = await uploadRes2.json();
+    assert(uploadRes2.status === 201 && uploadData2.data && uploadData2.data.id,
+      'TC-25.1', `Uploaded evidence for task follow-up: ${uploadData2.data?.id}`);
+    if (uploadData2.data?.id) cleanupEvidences.push(uploadData2.data?.id);
+
+    const compNullRes = await fetch(`${baseUrl}/api/follow-ups/${taskFuId}/complete`, {
+      method: 'POST',
+      headers: headersA,
+      body: JSON.stringify({ outcome: '   ' })
+    });
+    assert(compNullRes.status === 200,
+      'TC-25.2', 'Complete succeeds with whitespace/empty outcome when evidence is present');
+
+    const [dbTaskFu] = await pool.query('SELECT status, outcome FROM follow_ups WHERE id = ?', [taskFuId]);
+    assert(dbTaskFu[0].status === 'COMPLETED' && dbTaskFu[0].outcome === null,
+      'TC-25.3', 'Empty outcome is stored as NULL in database');
+
+    // =========================================================================
+    // TC-26: Cross-tenant isolation on History & Followups
+    // =========================================================================
+    console.log('\n--- TC-26: Cross-tenant isolation on History & Followups ---');
+    const bVisitHist = await fetch(`${baseUrl}/api/visits/${visitAId}/history`, { headers: headersB });
+    const bVisitHistData = await bVisitHist.json();
+    assert(Array.isArray(bVisitHistData) && bVisitHistData.length === 0,
+      'TC-26.1', 'Tenant B cannot see Tenant A visit history (returns empty)');
+
+    const bTaskHist = await fetch(`${baseUrl}/api/tasks/${taskAId}/history`, { headers: headersB });
+    const bTaskHistData = await bTaskHist.json();
+    assert(Array.isArray(bTaskHistData) && bTaskHistData.length === 0,
+      'TC-26.2', 'Tenant B cannot see Tenant A task history (returns empty)');
+
+    const bTaskFu = await fetch(`${baseUrl}/api/tasks/${taskAId}/followups`, { headers: headersB });
+    const bTaskFuData = await bTaskFu.json();
+    assert(Array.isArray(bTaskFuData) && bTaskFuData.length === 0,
+      'TC-26.3', 'Tenant B cannot see Tenant A task followups (returns empty)');
+
   } catch (err) {
     console.error('\n[FATAL ERROR IN TEST SUITE]:', err);
     failed++;

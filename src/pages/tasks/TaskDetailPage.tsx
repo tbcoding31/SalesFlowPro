@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { Task, Activity, User } from '../../types';
 import { crmApi } from '../../services/crmApi';
 import { usersApi } from '../../services/usersApi';
+import { formatDate } from '../../utils/formatters';
 import { CreateFollowUpModal } from '../../components/followups/CreateFollowUpModal';
 
 export const TaskDetailPage: React.FC = () => {
@@ -14,6 +15,8 @@ export const TaskDetailPage: React.FC = () => {
 
   const [task, setTask] = useState<Task | null>(null);
   const [activities, setActivities] = useState<Activity[]>([]);
+  const [taskHistory, setTaskHistory] = useState<any[]>([]);
+  const [followups, setFollowups] = useState<any[]>([]);
   const [comment, setComment] = useState('');
   const [isFollowUpModalOpen, setIsFollowUpModalOpen] = useState(false);
 
@@ -29,16 +32,20 @@ export const TaskDetailPage: React.FC = () => {
 
   const loadData = async () => {
     if (!id) return;
-    const [taskData, taskList, userList, allActs] = await Promise.all([
+    const [taskData, taskList, userList, allActs, hist, fList] = await Promise.all([
       crmApi.fetchRecordById<Task>('tasks', id),
       crmApi.fetchCollection<Task>('tasks', tenantId),
       usersApi.fetchUsers(tenantId),
-      crmApi.fetchCollection<Activity>('activities', tenantId)
+      crmApi.fetchCollection<Activity>('activities', tenantId),
+      crmApi.fetchTaskHistory(id),
+      crmApi.fetchTaskFollowups(id)
     ]);
     if (taskData) setTask(taskData);
     setAllTasks(taskList);
     setUsers(userList);
     setActivities(allActs.filter(a => a.entityType === 'TASK' && a.entityId === id));
+    setTaskHistory(Array.isArray(hist) ? hist : []);
+    setFollowups(Array.isArray(fList) ? fList : []);
   };
 
   useEffect(() => {
@@ -214,35 +221,67 @@ export const TaskDetailPage: React.FC = () => {
       <div className="flex flex-col lg:flex-row gap-6">
         
         {/* MAIN CONTENT (LEFT) */}
-        <div className="flex-1 space-y-6">
+        {/* LEFT COLUMN - MAIN DETAILS */}
+        <div className="flex-1 w-full space-y-6">
           
-          {/* Details Card */}
-          <div className="bg-white rounded-2xl border border-[#E1E1E1] shadow-2xs overflow-hidden">
-            <div className="p-6">
-              <h3 className="text-sm font-bold text-[#1a1c1c] mb-4">Description</h3>
-              <p className="text-sm text-[#464555] leading-relaxed whitespace-pre-wrap">
-                {task.description || 'No description provided for this task.'}
+          {/* Header Card */}
+          <div className="bg-white rounded-2xl border border-[#E1E1E1] shadow-2xs p-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-5 mb-5">
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider border ${getTaskSourceBadgeClass(task.sourceType)}`}>
+                    {formatTaskSourceType(task.sourceType)}
+                  </span>
+                  <span className="text-xs text-[#767587]">Task ID: {task.id}</span>
+                </div>
+                <h1 className="text-xl font-extrabold text-[#1a1c1c] font-['Hanken_Grotesk'] leading-tight">
+                  {task.title}
+                </h1>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button 
+                  onClick={() => setIsFollowUpModalOpen(true)}
+                  className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[16px]">add_task</span>
+                  + Add Follow-up
+                </button>
+                <button 
+                  onClick={() => setShowReassignModal(true)}
+                  className="px-3.5 py-2 border border-[#E1E1E1] hover:bg-slate-50 text-[#1a1c1c] text-xs font-bold rounded-xl transition-colors flex items-center gap-1.5"
+                >
+                  <span className="material-symbols-outlined text-[16px]">person_add</span>
+                  Reassign
+                </button>
+                <button 
+                  onClick={() => navigate(`/tasks/${task.id}/edit`)}
+                  className="px-3.5 py-2 bg-[#4744e5] hover:bg-[#3b38c6] text-white text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center gap-1.5"
+                >
+                  <span className="material-symbols-outlined text-[16px]">edit</span>
+                  Edit Task
+                </button>
+              </div>
+            </div>
+
+            {/* Description */}
+            <div>
+              <h3 className="text-xs font-bold text-[#767587] uppercase tracking-wider mb-2">Description</h3>
+              <p className="text-sm text-[#464555] leading-relaxed whitespace-pre-wrap bg-slate-50 p-4 rounded-xl border border-slate-100">
+                {task.description || 'No description provided.'}
               </p>
             </div>
-            
+
+            {/* Context Relations */}
             {(task.customerId || task.relatedVisitId || task.relatedProjectId) && (
-              <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-5 pt-5 border-t border-slate-100">
                 {task.customerId && (
                   <div>
                     <span className="text-[10px] font-bold text-[#767587] uppercase tracking-wider block mb-1">Customer</span>
                     <Link to={`/customers/${task.customerId}`} className="text-sm font-medium text-[#4744e5] hover:underline flex items-center gap-1.5">
                       <span className="material-symbols-outlined text-[16px]">business</span>
-                      {task.customerName}
+                      {task.customerName || task.customerId}
                     </Link>
-                  </div>
-                )}
-                {task.taskType && (
-                  <div>
-                    <span className="text-[10px] font-bold text-[#767587] uppercase tracking-wider block mb-1">Task Type</span>
-                    <div className="text-sm font-medium text-[#1a1c1c] flex items-center gap-1.5">
-                      <span className="material-symbols-outlined text-[16px]">label</span>
-                      {task.taskType}
-                    </div>
                   </div>
                 )}
                 {task.relatedVisitId && (
@@ -328,18 +367,18 @@ export const TaskDetailPage: React.FC = () => {
             </h3>
             
             <div className="relative pl-4 border-l border-slate-200 space-y-6">
-              {activities.filter(a => a.type !== 'NOTE').map((activity) => (
-                <div key={activity.id} className="relative">
-                  <div className="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full bg-slate-300 ring-4 ring-white"></div>
+              {combinedHistory.map((item) => (
+                <div key={item.id} className="relative">
+                  <div className={`absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full ring-4 ring-white ${item.isFollowUp ? 'bg-purple-600' : 'bg-slate-300'}`}></div>
                   <div className="mb-0.5">
-                    <span className="text-xs font-bold text-[#1a1c1c] mr-1">{activity.subject}</span>
-                    <span className="text-xs text-[#464555]">{activity.description}</span>
+                    <span className="text-xs font-bold text-[#1a1c1c] mr-1">{item.title}</span>
+                    {item.description && <span className="text-xs text-[#464555]">{item.description}</span>}
                   </div>
                   <div className="text-[10px] text-[#767587] flex items-center gap-1">
                     <span className="material-symbols-outlined text-[10px]">schedule</span>
-                    {new Date(activity.occurredAt).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} 
+                    {new Date(item.timestamp).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} 
                     <span className="mx-1">•</span> 
-                    by {activity.userName}
+                    by {item.userName}
                   </div>
                 </div>
               ))}
@@ -447,6 +486,48 @@ export const TaskDetailPage: React.FC = () => {
               </div>
 
             </div>
+          </div>
+
+          {/* Related Follow-ups Card */}
+          <div className="bg-white p-5 rounded-2xl border border-[#E1E1E1] shadow-2xs space-y-3">
+            <div className="flex items-center justify-between border-b border-[#f0f0f4] pb-3">
+              <h3 className="font-extrabold text-xs text-[#1a1c1c] uppercase tracking-wider flex items-center gap-2">
+                <span className="material-symbols-outlined text-[#4744e5] text-[16px]">nest_clock_farsight_analog</span>
+                <span>Related Follow-ups</span>
+              </h3>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-[#555468]">
+                {followups.length}
+              </span>
+            </div>
+
+            {followups.length === 0 ? (
+              <div className="text-center py-4 text-xs text-[#767587]">
+                No follow-ups linked to this task
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {followups.map((f: any) => (
+                  <div key={f.id} className="p-3 border border-[#E1E1E1] rounded-xl hover:border-[#4744e5] transition-all text-xs space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-[#1a1c1c] truncate max-w-[170px]">
+                        {f.title}
+                      </span>
+                      <span className="text-[10px] text-[#4744e5] font-bold shrink-0">
+                        {formatDate(f.followUpDate)}
+                      </span>
+                    </div>
+                    {f.typeName && (
+                      <div className="text-[10px] text-slate-500 font-medium">
+                        Type: {f.typeName}
+                      </div>
+                    )}
+                    {(f.notes || f.outcome) && (
+                      <p className="text-[11px] text-[#767587] line-clamp-1">{f.notes || f.outcome}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
         </div>
@@ -637,12 +718,16 @@ export const TaskDetailPage: React.FC = () => {
         <CreateFollowUpModal
           isOpen={isFollowUpModalOpen}
           onClose={() => setIsFollowUpModalOpen(false)}
-          onSuccess={() => loadData()}
+          onSuccess={async () => {
+            setIsFollowUpModalOpen(false);
+            await loadData();
+          }}
           initialTaskId={task.id}
           initialTaskTitle={task.title}
           initialCustomerId={task.customerId}
           initialCustomerName={task.customerName}
           initialProjectId={task.relatedProjectId}
+          initialProjectName={task.projectName}
           sourceType="TASK"
         />
       )}

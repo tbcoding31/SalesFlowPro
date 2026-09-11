@@ -11,6 +11,7 @@ import { useAuth } from '../../context/AuthContext';
 import { masterDataApi } from '../../services/masterDataApi';
 import { Project, ProjectStage, ActivityType, Customer, FollowUpType, MasterDataItem } from '../../types';
 import { crmApi } from '../../services/crmApi';
+import { CreateFollowUpModal } from '../../components/followups/CreateFollowUpModal';
 
 type ViewMode = 'PIPELINE' | 'LIST';
 
@@ -18,6 +19,9 @@ export const ProjectsPage: React.FC = () => {
   const navigate = useNavigate();
   const { currentTenant, currentUser } = useAuth();
   const tenantId = currentTenant?.id ;
+
+  const [isFollowUpModalOpen, setIsFollowUpModalOpen] = useState(false);
+  const [selectedProjectForFollowUp, setSelectedProjectForFollowUp] = useState<Project | null>(null);
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [pipelineAggregates, setPipelineAggregates] = useState<any>({});
@@ -1236,8 +1240,44 @@ export const ProjectsPage: React.FC = () => {
             <span className="material-symbols-outlined text-[16px] text-indigo-500">swap_horiz</span>
             Change Stage
           </button>
+
+          <button
+            type="button"
+            role="menuitem"
+            tabIndex={0}
+            onClick={() => {
+              const proj = activeMenuProject;
+              handleCloseMenu();
+              setSelectedProjectForFollowUp(proj);
+              setIsFollowUpModalOpen(true);
+            }}
+            className="w-full px-3.5 py-2 text-xs font-semibold text-[#4744e5] hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors border-t border-slate-100"
+          >
+            <span className="material-symbols-outlined text-[16px] text-[#4744e5]">add_task</span>
+            Add Follow-up
+          </button>
         </div>,
         document.body
+      )}
+
+      {isFollowUpModalOpen && selectedProjectForFollowUp && (
+        <CreateFollowUpModal
+          isOpen={isFollowUpModalOpen}
+          onClose={() => {
+            setIsFollowUpModalOpen(false);
+            setSelectedProjectForFollowUp(null);
+          }}
+          onSuccess={async () => {
+            setIsFollowUpModalOpen(false);
+            setSelectedProjectForFollowUp(null);
+            await loadData(currentPage);
+          }}
+          initialProjectId={selectedProjectForFollowUp.id}
+          initialProjectName={selectedProjectForFollowUp.name || (selectedProjectForFollowUp as any).title}
+          initialCustomerId={selectedProjectForFollowUp.customerId}
+          initialCustomerName={selectedProjectForFollowUp.customerName}
+          sourceType="PROJECT"
+        />
       )}
 
       {/* Change Stage Modal */}

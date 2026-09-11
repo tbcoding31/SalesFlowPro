@@ -480,7 +480,7 @@ followupsRoutes.post('/', async (req: any, res: any) => {
     await logAudit(
       targetTenant,
       actorUserId,
-      'CREATE',
+      'FOLLOW_UP_CREATED',
       'FOLLOW_UP',
       id,
       `Created follow-up '${cleanTitle}' for customer '${custRows[0].name}'`,
@@ -645,7 +645,7 @@ followupsRoutes.put('/:id', async (req: any, res: any) => {
     await logAudit(
       targetTenant,
       actorUserId,
-      'UPDATE',
+      'FOLLOW_UP_UPDATED',
       'FOLLOW_UP',
       id,
       `Updated follow-up '${updatedTitle}'`,
@@ -708,7 +708,8 @@ followupsRoutes.post('/:id/complete', async (req: any, res: any) => {
       });
     }
 
-    const outcome = (req.body.outcome || current.outcome || '').trim();
+    const rawOutcome = req.body.outcome !== undefined ? (typeof req.body.outcome === 'string' ? req.body.outcome.trim() : null) : (current.outcome || null);
+    const outcome = rawOutcome || null;
 
     await pool.query(
       `UPDATE follow_ups SET
@@ -718,13 +719,13 @@ followupsRoutes.post('/:id/complete', async (req: any, res: any) => {
         completedById = ?,
         updatedAt = NOW()
        WHERE id = ? AND tenantId = ?`,
-      [outcome || null, actorUserId, id, targetTenant]
+      [outcome, actorUserId, id, targetTenant]
     );
 
     await logAudit(
       targetTenant,
       actorUserId,
-      'COMPLETE',
+      'FOLLOW_UP_COMPLETED',
       'FOLLOW_UP',
       id,
       `Completed follow-up '${current.title}' with ${evidenceCount} evidence file(s).`,
@@ -803,7 +804,7 @@ followupsRoutes.post('/:id/cancel', async (req: any, res: any) => {
     await logAudit(
       targetTenant,
       actorUserId,
-      'CANCEL',
+      'FOLLOW_UP_CANCELLED',
       'FOLLOW_UP',
       id,
       `Cancelled follow-up '${current.title}'. Reason: ${reason}`,
@@ -971,7 +972,7 @@ followupsRoutes.post('/:id/evidences', (req: any, res: any, next: any) => {
     await logAudit(
       targetTenant,
       actorUserId,
-      'UPLOAD_EVIDENCE',
+      'FOLLOW_UP_EVIDENCE_UPLOADED',
       'FOLLOW_UP_EVIDENCE',
       evidenceId,
       `Uploaded evidence '${req.file.originalname}' for follow-up '${id}'`,
@@ -1129,7 +1130,7 @@ followupsRoutes.delete('/:id/evidences/:evidenceId', async (req: any, res: any) 
     await logAudit(
       targetTenant,
       actorUserId,
-      'DELETE_EVIDENCE',
+      'FOLLOW_UP_EVIDENCE_DELETED',
       'FOLLOW_UP_EVIDENCE',
       evidenceId,
       `Deleted evidence '${originalName}' from follow-up '${id}'`,

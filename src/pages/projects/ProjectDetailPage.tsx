@@ -939,24 +939,34 @@ const loadData = async () => {
             <div className="divide-y divide-slate-100">
               {followups.length > 0 ? followups.map(fu => (
                 <div key={fu.id} className="p-4 hover:bg-slate-50 transition-colors flex items-start gap-3">
-                   <div className="w-8 h-8 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+                   <div 
+                     className="w-8 h-8 rounded-full flex items-center justify-center shrink-0"
+                     style={{
+                       backgroundColor: fu.typeColor ? `${fu.typeColor}20` : '#eff6ff',
+                       color: fu.typeColor || '#2563eb'
+                     }}
+                   >
                     <span className="material-symbols-outlined text-[16px]">
-                      {fu.type === 'CALL' ? 'call' : fu.type === 'EMAIL' ? 'mail' : fu.type === 'MEETING' ? 'groups' : 'chat'}
+                      {fu.typeIcon || 'chat'}
                     </span>
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2 mb-1">
-                      <h4 className="text-sm font-bold text-slate-800 truncate">{fu.type} Follow-up</h4>
+                      <h4 className="text-sm font-bold text-slate-800 truncate">{fu.title || fu.typeName || 'Follow-up'}</h4>
                       <span className={`px-2 py-0.5 text-[10px] font-bold rounded uppercase tracking-wider shrink-0 ${
-                         fu.status === 'COMPLETED' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                         fu.status === 'COMPLETED' ? 'bg-emerald-100 text-emerald-700' : 
+                         fu.status === 'CANCELLED' ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-700'
                       }`}>{fu.status}</span>
                     </div>
-                    <div className="text-xs text-slate-600 mb-1 line-clamp-1">{fu.notes || 'No notes.'}</div>
+                    <div className="text-xs text-slate-600 mb-1 line-clamp-1">{fu.notes || fu.outcome || 'No notes.'}</div>
                     <div className="flex items-center gap-3 text-xs text-slate-500">
                       <span className="flex items-center gap-1">
                         <span className="material-symbols-outlined text-[14px]">event</span>
                         {new Date(fu.followUpDate).toLocaleDateString()}
                       </span>
+                      {fu.typeName && (
+                        <span className="font-medium text-slate-400">• {fu.typeName}</span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1082,12 +1092,14 @@ const loadData = async () => {
                      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 border-2 border-white z-10 ${
                         activity.type === 'PROJECT' ? 'bg-indigo-100 text-indigo-600' :
                         activity.type === 'CALL' ? 'bg-blue-100 text-blue-600' :
-                        activity.type === 'MEETING' ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-500'
+                        activity.type === 'MEETING' ? 'bg-emerald-100 text-emerald-600' : 
+                        activity.type === 'ACTIVITY' ? 'bg-purple-100 text-purple-600' : 'bg-slate-100 text-slate-500'
                      }`}>
                        <span className="material-symbols-outlined text-[14px]">
                           {activity.type === 'PROJECT' ? 'monitoring' : 
                            activity.type === 'CALL' ? 'call' : 
-                           activity.type === 'MEETING' ? 'groups' : 'history_edu'}
+                           activity.type === 'MEETING' ? 'groups' : 
+                           activity.type === 'ACTIVITY' ? 'event_repeat' : 'history_edu'}
                        </span>
                      </div>
                      <div className="flex-1 min-w-0 bg-slate-50 p-3 rounded-xl border border-slate-100">
@@ -1187,7 +1199,10 @@ const loadData = async () => {
         <CreateFollowUpModal
           isOpen={showFollowUpModal}
           onClose={() => setShowFollowUpModal(false)}
-          onSuccess={() => loadData()}
+          onSuccess={async () => {
+            setShowFollowUpModal(false);
+            await Promise.all([loadData(), loadTimeline(1, false)]);
+          }}
           initialProjectId={project.id}
           initialProjectName={project.name}
           initialCustomerId={project.customerId}

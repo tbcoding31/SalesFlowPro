@@ -1065,12 +1065,22 @@ visitsRoutes.get('/:id/history', async (req: any, res: any) => {
     const [rows]: any = await pool.query(`
       SELECT 
         a.id, a.action, a.description, a.timestamp, a.userId,
-        u.name as userName, u.email as userEmail, u.avatar as userAvatar
+        u.name as userName, u.email as userEmail, u.avatar as userAvatar,
+        'ACTIVITY' as type,
+        a.action as eventType
       FROM audit_logs a
       LEFT JOIN users u ON u.id = a.userId
-      WHERE a.tenantId = ? AND a.entity = 'Visit' AND a.entityId = ?
+      WHERE a.tenantId = ? AND (
+        (a.entity = 'Visit' AND a.entityId = ?)
+        OR (a.entity = 'FOLLOW_UP' AND a.entityId IN (SELECT id FROM follow_ups WHERE relatedVisitId = ? AND tenantId = ?))
+        OR (a.entity = 'FOLLOW_UP_EVIDENCE' AND a.entityId IN (
+          SELECT fe.id FROM follow_up_evidences fe 
+          JOIN follow_ups f ON f.id = fe.followUpId 
+          WHERE f.relatedVisitId = ? AND f.tenantId = ?
+        ))
+      )
       ORDER BY a.timestamp DESC
-    `, [targetTenant, id]);
+    `, [targetTenant, id, id, targetTenant, id, targetTenant]);
 
     res.json(rows);
   } catch (err: any) {

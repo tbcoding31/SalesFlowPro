@@ -6,6 +6,7 @@ import { Task, Customer, Project, MasterDataItem, User } from '../../types';
 import { crmApi } from '../../services/crmApi';
 import { usersApi } from '../../services/usersApi';
 import { formatDate } from '../../utils/formatters';
+import { CreateFollowUpModal } from '../../components/followups/CreateFollowUpModal';
 
 export function formatTaskSourceType(sourceType?: string | null): string {
   const s = String(sourceType || '').toUpperCase();
@@ -87,6 +88,10 @@ export const TasksPage: React.FC = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [assignableUsers, setAssignableUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Follow-up modal state
+  const [selectedTaskForFollowUp, setSelectedTaskForFollowUp] = useState<Task | null>(null);
+  const [isFollowUpModalOpen, setIsFollowUpModalOpen] = useState(false);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -827,11 +832,28 @@ export const TasksPage: React.FC = () => {
                       <td className="px-5 py-4 text-right">
                         <div className="flex items-center justify-end gap-1">
                           <button
+                            title="View Task Details"
+                            onClick={() => navigate(`/tasks/${t.id}`)}
+                            className="p-1.5 text-[#767587] hover:text-[#4744e5] hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">visibility</span>
+                          </button>
+                          <button
                             title="Edit Task"
                             onClick={() => navigate(`/tasks/${t.id}/edit`)}
                             className="p-1.5 text-[#767587] hover:text-[#4744e5] hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
                           >
                             <span className="material-symbols-outlined text-[18px]">edit</span>
+                          </button>
+                          <button
+                            title="Add Follow-up"
+                            onClick={() => {
+                              setSelectedTaskForFollowUp(t);
+                              setIsFollowUpModalOpen(true);
+                            }}
+                            className="p-1.5 text-[#4744e5] hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">add_task</span>
                           </button>
                           <button
                             title="Delete Task"
@@ -988,6 +1010,28 @@ export const TasksPage: React.FC = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {isFollowUpModalOpen && selectedTaskForFollowUp && (
+        <CreateFollowUpModal
+          isOpen={isFollowUpModalOpen}
+          onClose={() => {
+            setIsFollowUpModalOpen(false);
+            setSelectedTaskForFollowUp(null);
+          }}
+          onSuccess={async () => {
+            setIsFollowUpModalOpen(false);
+            setSelectedTaskForFollowUp(null);
+            await loadData(currentPage);
+          }}
+          initialTaskId={selectedTaskForFollowUp.id}
+          initialTaskTitle={selectedTaskForFollowUp.title}
+          initialCustomerId={selectedTaskForFollowUp.customerId}
+          initialCustomerName={selectedTaskForFollowUp.customerName}
+          initialProjectId={selectedTaskForFollowUp.relatedProjectId}
+          initialProjectName={selectedTaskForFollowUp.projectName}
+          sourceType="TASK"
+        />
       )}
     </div>
   );

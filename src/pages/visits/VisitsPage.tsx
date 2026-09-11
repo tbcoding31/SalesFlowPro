@@ -13,6 +13,7 @@ import {
   buildVisitEditUrl,
   buildScheduleVisitUrl,
 } from '../../utils/visitNavigation';
+import { CreateFollowUpModal } from '../../components/followups/CreateFollowUpModal';
 
 export const VisitsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -21,6 +22,8 @@ export const VisitsPage: React.FC = () => {
 
   // Action Menu State
   const [activeActionMenuId, setActiveActionMenuId] = useState<string | null>(null);
+  const [selectedVisitForFollowUp, setSelectedVisitForFollowUp] = useState<Visit | null>(null);
+  const [isFollowUpModalOpen, setIsFollowUpModalOpen] = useState(false);
 
   useEffect(() => {
     const handleOutsideClick = () => setActiveActionMenuId(null);
@@ -985,6 +988,19 @@ export const VisitsPage: React.FC = () => {
                                 </button>
                               )}
 
+                              {/* Add Follow-up */}
+                              <button
+                                onClick={() => {
+                                  setActiveActionMenuId(null);
+                                  setSelectedVisitForFollowUp(v);
+                                  setIsFollowUpModalOpen(true);
+                                }}
+                                className="w-full px-3 py-1.5 flex items-center gap-2 hover:bg-slate-50 text-[#4744e5] border-t border-slate-100 cursor-pointer"
+                              >
+                                <span className="material-symbols-outlined text-[16px] text-[#4744e5]">add_task</span>
+                                <span>Add Follow-up</span>
+                              </button>
+
                               {/* Cancel */}
                               {v.status !== 'CANCELLED' && v.status !== 'COMPLETED' && v.statusCode !== 'CANCELLED' && v.statusCode !== 'COMPLETED' && (
                                 <button
@@ -1790,6 +1806,28 @@ export const VisitsPage: React.FC = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {isFollowUpModalOpen && selectedVisitForFollowUp && (
+        <CreateFollowUpModal
+          isOpen={isFollowUpModalOpen}
+          onClose={() => {
+            setIsFollowUpModalOpen(false);
+            setSelectedVisitForFollowUp(null);
+          }}
+          onSuccess={async () => {
+            setIsFollowUpModalOpen(false);
+            setSelectedVisitForFollowUp(null);
+            await loadData();
+          }}
+          initialVisitId={selectedVisitForFollowUp.id}
+          initialVisitTitle={selectedVisitForFollowUp.title}
+          initialCustomerId={selectedVisitForFollowUp.customerId}
+          initialCustomerName={selectedVisitForFollowUp.customerName}
+          initialProjectId={selectedVisitForFollowUp.relatedProjectId || (selectedVisitForFollowUp as any).projectId}
+          initialProjectName={selectedVisitForFollowUp.projectName}
+          sourceType="VISIT"
+        />
       )}
     </div>
   );

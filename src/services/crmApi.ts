@@ -642,6 +642,30 @@ export const crmApi = {
     }
   },
 
+  fetchTaskHistory: async (id: string): Promise<any[]> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${id}/history`, { headers: getAuthHeaders() });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
+    } catch (err) {
+      console.error('[crmApi.fetchTaskHistory error]', err);
+      return [];
+    }
+  },
+
+  fetchTaskFollowups: async (id: string): Promise<any[]> => {
+    try {
+      const res = await fetch(`${API_BASE}/tasks/${id}/followups`, { headers: getAuthHeaders() });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
+    } catch (err) {
+      console.error('[crmApi.fetchTaskFollowups error]', err);
+      return [];
+    }
+  },
+
   fetchVisitById: async (id: string): Promise<any> => {
     try {
       const res = await fetch(`${API_BASE}/visits/${id}`, { headers: getAuthHeaders() });

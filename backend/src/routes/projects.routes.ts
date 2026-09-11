@@ -936,7 +936,42 @@ projectsRoutes.get('/:id/timeline', async (req: any, res: any) => {
       }
     }
 
-    // 6. Follow-ups (Created & Completed events)
+    // 6. Follow-up Audit Events (Created, Updated, Completed, Cancelled, Evidence Uploaded)
+    const [followUpAuditRows]: any = await pool.query(`
+      SELECT 
+        a.id, a.action, a.description, a.timestamp, a.userId, a.entity, a.entityId,
+        u.name as userName, u.avatar as userAvatar
+      FROM audit_logs a
+      LEFT JOIN users u ON u.id = a.userId
+      WHERE a.tenantId = ? AND (
+        (a.entity = 'FOLLOW_UP' AND a.entityId IN (SELECT id FROM follow_ups WHERE relatedProjectId = ? AND tenantId = ?))
+        OR (a.entity = 'FOLLOW_UP_EVIDENCE' AND a.entityId IN (
+          SELECT fe.id FROM follow_up_evidences fe 
+          JOIN follow_ups f ON f.id = fe.followUpId 
+          WHERE f.relatedProjectId = ? AND f.tenantId = ?
+        ))
+      )
+    `, [targetTenant, id, targetTenant, id, targetTenant]);
+
+    for (const a of followUpAuditRows) {
+      events.push({
+        id: `AUDIT:${a.id}`,
+        stableEventKey: `AUDIT:${a.id}`,
+        eventType: a.action,
+        type: 'ACTIVITY',
+        title: a.description || `Follow-up: ${a.action}`,
+        subject: a.description || `Follow-up: ${a.action}`,
+        description: a.description || '',
+        details: a.description,
+        occurredAt: a.timestamp,
+        eventTimestamp: a.timestamp,
+        userId: a.userId,
+        userName: a.userName || 'System',
+        userAvatar: a.userAvatar
+      });
+    }
+
+    // Direct fallback from follow_ups table for legacy records without audit logs
     const [followUpRows]: any = await pool.query(`
       SELECT 
         f.id, f.title, f.notes, f.createdAt, f.completedAt, f.picId,
@@ -947,12 +982,13 @@ projectsRoutes.get('/:id/timeline', async (req: any, res: any) => {
     `, [targetTenant, id]);
 
     for (const f of followUpRows) {
-      if (f.createdAt) {
+      const hasAuditCreated = followUpAuditRows.some((ar: any) => ar.entity === 'FOLLOW_UP' && ar.entityId === f.id && ar.action === 'FOLLOW_UP_CREATED');
+      if (f.createdAt && !hasAuditCreated) {
         events.push({
           id: `FOLLOWUP:${f.id}:CREATED`,
           stableEventKey: `FOLLOWUP:${f.id}:CREATED`,
           eventType: 'FOLLOW_UP_CREATED',
-          type: 'FOLLOW_UP',
+          type: 'ACTIVITY',
           title: `Follow-up created: ${f.title}`,
           subject: `Follow-up: ${f.title}`,
           description: f.notes || 'Follow-up created',
@@ -964,12 +1000,13 @@ projectsRoutes.get('/:id/timeline', async (req: any, res: any) => {
           userAvatar: f.picAvatar
         });
       }
-      if (f.completedAt) {
+      const hasAuditCompleted = followUpAuditRows.some((ar: any) => ar.entity === 'FOLLOW_UP' && ar.entityId === f.id && ar.action === 'FOLLOW_UP_COMPLETED');
+      if (f.completedAt && !hasAuditCompleted) {
         events.push({
           id: `FOLLOWUP:${f.id}:COMPLETED`,
           stableEventKey: `FOLLOWUP:${f.id}:COMPLETED`,
           eventType: 'FOLLOW_UP_COMPLETED',
-          type: 'FOLLOW_UP',
+          type: 'ACTIVITY',
           title: `Follow-up completed: ${f.title}`,
           subject: `Follow-up completed: ${f.title}`,
           description: f.notes || 'Follow-up marked as completed',
@@ -1316,8 +1353,12 @@ projectsRoutes.get('/:id/summary', async (req: any, res: any) => {
 
     // Followups under this project
     const [followupRows]: any = await pool.query(`
-      SELECT f.*, u.name as picName
+      SELECT 
+        f.*,
+        ft.code as typeCode, ft.name as typeName, ft.icon as typeIcon, ft.color as typeColor,
+        u.name as picName
       FROM follow_ups f
+      LEFT JOIN follow_up_types ft ON ft.id = f.typeId AND ft.tenantId = f.tenantId
       LEFT JOIN users u ON u.id = f.picId
       WHERE f.tenantId = ? AND f.relatedProjectId = ?
       ORDER BY f.followUpDate DESC
