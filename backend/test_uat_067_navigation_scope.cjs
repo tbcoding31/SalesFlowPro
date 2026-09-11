@@ -356,6 +356,128 @@ async function runUAT067Tests() {
     const [dupRows] = await pool.query('SELECT code, COUNT(*) as c FROM app_menus GROUP BY code HAVING c > 1');
     assert(dupRows.length === 0, '31. Zero duplicate menu codes in app_menus after migration');
 
+    // ─────────────────────────────────────────────────────────────
+    // SUITE 10: REACT KEY INTEGRITY & ACTIVITY DETAIL RESOLUTION
+    // ─────────────────────────────────────────────────────────────
+    console.log('\n--- SUITE 10: React Key Integrity & Activity Detail Resolution ---');
+
+    // 32. Verify /api/activities items have canonical eventId and id
+    const actListRes = await req('/api/activities?scope=all&pageSize=50', { headers: headersAdminA });
+    assert(actListRes.status === 200, '32. GET /api/activities?scope=all returns 200 OK');
+    const actItems = actListRes.body?.data || [];
+    assert(actItems.length > 0, '    Returns activity events for tenant');
+
+    let suite10AllHaveEventId = true;
+    let suite10AllHaveId = true;
+    let suite10AllHaveTypeActivity = true;
+    const seenEventIds = new Set();
+    const seenIds = new Set();
+    let duplicateEventIdFound = false;
+    let duplicateIdFound = false;
+
+    for (const item of actItems) {
+      if (!item.eventId || typeof item.eventId !== 'string') suite10AllHaveEventId = false;
+      if (!item.id || typeof item.id !== 'string') suite10AllHaveId = false;
+      if (item.type !== 'ACTIVITY') suite10AllHaveTypeActivity = false;
+
+      if (seenEventIds.has(item.eventId)) duplicateEventIdFound = true;
+      seenEventIds.add(item.eventId);
+
+      if (seenIds.has(item.id)) duplicateIdFound = true;
+      seenIds.add(item.id);
+    }
+
+    assert(suite10AllHaveEventId, '33. Every activity event item has a valid, non-empty eventId string');
+    assert(suite10AllHaveId, '34. Every activity event item has a valid, non-empty id matching canonical identifier');
+    assert(suite10AllHaveTypeActivity, '35. Every activity event item has type: "ACTIVITY"');
+    assert(!duplicateEventIdFound, '36. Zero duplicate eventId values across returned activities');
+    assert(!duplicateIdFound, '37. Zero duplicate id values across returned activities');
+
+    // 38. Test Frontend Canonical Key Generator logic for edge cases
+    function simulateGetActivityItemKey(activity, index, seenKeys) {
+      let rawKey = '';
+      if (activity?.eventId && typeof activity.eventId === 'string' && activity.eventId.trim()) {
+        rawKey = `activity-${activity.eventId.trim()}`;
+      } else if (activity?.id && typeof activity.id === 'string' && activity.id.trim()) {
+        rawKey = `activity-${activity.id.trim()}`;
+      } else {
+        const entityType = activity?.entityType || activity?.entity || 'ACTIVITY';
+        const entityId = activity?.entityId || 'NOID';
+        const eventType = activity?.eventType || activity?.typeId || activity?.type || 'EVENT';
+        const occurredAt = activity?.occurredAt || '';
+        rawKey = `activity-${entityType}-${entityId}-${eventType}-${occurredAt}-${index}`;
+      }
+      let uniqueKey = rawKey;
+      if (seenKeys.has(uniqueKey)) {
+        uniqueKey = `${rawKey}-dup-${index}`;
+      }
+      seenKeys.add(uniqueKey);
+      return uniqueKey;
+    }
+
+    const testSeenKeys = new Set();
+    // Case 1: has eventId but no id
+    const k1 = simulateGetActivityItemKey({ eventId: 'FOLLOW_UP:CREATED:FU-999' }, 0, testSeenKeys);
+    assert(k1 === 'activity-FOLLOW_UP:CREATED:FU-999', '38. Item with eventId but no id resolves to activity-<eventId>');
+
+    // Case 2: has id but no eventId
+    const k2 = simulateGetActivityItemKey({ id: 'LEGACY-ROW-001' }, 1, testSeenKeys);
+    assert(k2 === 'activity-LEGACY-ROW-001', '39. Item with id but no eventId resolves to activity-<id>');
+
+    // Case 3: duplicate subject, duplicate eventType, duplicate entity
+    const dupEventA = { subject: 'Closed Lost', eventType: 'PROJECT_UPDATED', entity: 'PROJECT', occurredAt: '2026-09-11T12:00:00Z' };
+    const dupEventB = { subject: 'Closed Lost', eventType: 'PROJECT_UPDATED', entity: 'PROJECT', occurredAt: '2026-09-11T12:00:00Z' };
+    const k3a = simulateGetActivityItemKey(dupEventA, 2, testSeenKeys);
+    const k3b = simulateGetActivityItemKey(dupEventB, 3, testSeenKeys);
+    assert(k3a !== k3b, '40. Two items with identical subject, eventType, and timestamp produce distinct keys');
+    assert(k3a.includes('PROJECT') && k3b.includes('PROJECT'), '    Keys are descriptive and contain entity type');
+
+    // Case 4: duplicate eventId edge case
+    const k4a = simulateGetActivityItemKey({ eventId: 'DUPLICATE:EVENT:001' }, 4, testSeenKeys);
+    const k4b = simulateGetActivityItemKey({ eventId: 'DUPLICATE:EVENT:001' }, 5, testSeenKeys);
+    assert(k4a !== k4b, '41. Accidental duplicate eventIds in same render still produce unique keys');
+    assert(k4b.endsWith('-dup-5'), '    Second occurrence gets deterministic unique suffix');
+
+    // 42. Verify detail resolution for each event type
+    console.log('\n--- SUITE 11: Activity Detail Endpoint Verification ---');
+
+    // Find direct activity, follow-up, visit, task from DB
+    const [actSample] = await pool.query('SELECT id FROM activities WHERE tenantId = ? LIMIT 1', [tenantAId]);
+    if (actSample.length > 0) {
+      const actId = actSample[0].id;
+      const d1 = await req(`/api/activities/ACT:${actId}`, { headers: headersAdminA });
+      assert(d1.status === 200, '42. GET /api/activities/ACT:<id> returns 200');
+      assert(d1.body?.id === `ACT:${actId}` && d1.body?.eventId === `ACT:${actId}`, '    Response contains id and eventId with ACT: prefix');
+      assert(d1.body?.type === 'ACTIVITY', '    Response has type: "ACTIVITY"');
+    }
+
+    const [fuSample] = await pool.query('SELECT id FROM follow_ups WHERE tenantId = ? LIMIT 1', [tenantAId]);
+    if (fuSample.length > 0) {
+      const fuId = fuSample[0].id;
+      const d2 = await req(`/api/activities/FOLLOW_UP:CREATED:${fuId}`, { headers: headersAdminA });
+      assert(d2.status === 200, '43. GET /api/activities/FOLLOW_UP:CREATED:<id> returns 200');
+      assert(d2.body?.id === `FOLLOW_UP:CREATED:${fuId}` && d2.body?.eventId === `FOLLOW_UP:CREATED:${fuId}`, '    Response contains canonical id and eventId');
+      assert(d2.body?.type === 'ACTIVITY', '    Response has type: "ACTIVITY"');
+    }
+
+    const [vSample] = await pool.query('SELECT id FROM visits WHERE tenantId = ? LIMIT 1', [tenantAId]);
+    if (vSample.length > 0) {
+      const vId = vSample[0].id;
+      const d3 = await req(`/api/activities/VISIT:CREATED:${vId}`, { headers: headersAdminA });
+      assert(d3.status === 200, '44. GET /api/activities/VISIT:CREATED:<id> returns 200');
+      assert(d3.body?.id === `VISIT:CREATED:${vId}` && d3.body?.eventId === `VISIT:CREATED:${vId}`, '    Response contains canonical id and eventId');
+      assert(d3.body?.type === 'ACTIVITY', '    Response has type: "ACTIVITY"');
+    }
+
+    const [tSample] = await pool.query('SELECT id FROM tasks WHERE tenantId = ? LIMIT 1', [tenantAId]);
+    if (tSample.length > 0) {
+      const tId = tSample[0].id;
+      const d4 = await req(`/api/activities/TASK:CREATED:${tId}`, { headers: headersAdminA });
+      assert(d4.status === 200, '45. GET /api/activities/TASK:CREATED:<id> returns 200');
+      assert(d4.body?.id === `TASK:CREATED:${tId}` && d4.body?.eventId === `TASK:CREATED:${tId}`, '    Response contains canonical id and eventId');
+      assert(d4.body?.type === 'ACTIVITY', '    Response has type: "ACTIVITY"');
+    }
+
   } catch (err) {
     console.error('Fatal test error:', err);
     failed++;

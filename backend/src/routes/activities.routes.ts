@@ -9,6 +9,7 @@ export { normalizeSemanticRole, canAccessAllScope };
 
 export interface CanonicalActivityEvent {
   eventId: string;
+  id?: string;
   tenantId: string;
   eventType: string;
   type: 'ACTIVITY';
@@ -24,9 +25,13 @@ export interface CanonicalActivityEvent {
   taskId: string | null;
   followUpId: string | null;
   title: string;
+  subject?: string;
   description: string | null;
   occurredAt: string;
   visibilityScope: 'ORGANIZATION' | 'TEAM' | 'OWN';
+  userId?: string | null;
+  userName?: string;
+  entityType?: string;
 }
 
 async function handleActivitiesList(req: any, res: any, forcedScope?: string) {
@@ -581,7 +586,14 @@ async function handleActivitiesList(req: any, res: any, forcedScope?: string) {
     const pNum = parseInt(page as string, 10) || 1;
     const pSize = parseInt(pageSize as string, 10) || 25;
     const totalPages = Math.ceil(totalItems / pSize) || (totalItems === 0 ? 0 : 1);
-    const paginatedRows = allFiltered.slice((pNum - 1) * pSize, pNum * pSize);
+    const paginatedRows = allFiltered.slice((pNum - 1) * pSize, pNum * pSize).map(ev => ({
+      ...ev,
+      id: ev.eventId,
+      subject: ev.title,
+      userName: ev.actorName,
+      userId: ev.actorUserId,
+      entityType: ev.entity
+    }));
 
     res.json({
       data: paginatedRows,
@@ -640,13 +652,53 @@ activitiesRoutes.get('/:id', async (req: any, res: any) => {
     `, [rawId, targetTenant]);
 
     if (rows.length > 0) {
-      return res.json(rows[0]);
+      const row = rows[0];
+      const canonicalId = id.startsWith('ACT:') ? id : `ACT:${row.id}`;
+      return res.json({
+        ...row,
+        id: canonicalId,
+        eventId: canonicalId,
+        type: 'ACTIVITY'
+      });
     }
 
     // Check synthetic event prefixes
+    if (id.startsWith('FOLLOW_UP:EVIDENCE:')) {
+      const parts = id.split(':');
+      const feId = parts.length > 2 ? parts[2] : parts[1];
+      const [feRows]: any = await pool.query(`
+        SELECT fue.*, f.title as followUpTitle, f.customerId, c.name as customerName, u.name as userName, u.avatar as userAvatar
+        FROM follow_up_evidences fue
+        JOIN follow_ups f ON f.id = fue.followUpId
+        LEFT JOIN users u ON u.id = fue.uploadedBy
+        LEFT JOIN customers c ON c.id = f.customerId
+        WHERE fue.id = ? AND fue.tenantId = ?
+      `, [feId, targetTenant]);
+      if (feRows.length > 0) {
+        const fe = feRows[0];
+        return res.json({
+          id,
+          eventId: id,
+          tenantId: targetTenant,
+          type: 'ACTIVITY',
+          subject: `Evidence: ${fe.caption || fe.fileName || 'Uploaded evidence'}`,
+          description: `Evidence file ${fe.fileName} uploaded for follow-up '${fe.followUpTitle}'`,
+          occurredAt: fe.uploadedAt,
+          userId: fe.uploadedBy,
+          userName: fe.userName,
+          userAvatar: fe.userAvatar,
+          customerId: fe.customerId,
+          customerName: fe.customerName,
+          entityType: 'FOLLOW_UP',
+          entityId: fe.followUpId,
+          metadata: { fileName: fe.fileName, caption: fe.caption }
+        });
+      }
+    }
+
     if (id.startsWith('FOLLOW_UP:')) {
       const parts = id.split(':');
-      const fuId = parts[2];
+      const fuId = parts.length > 2 ? parts[2] : parts[1];
       const [fRows]: any = await pool.query(`
         SELECT f.*, u.name as userName, u.avatar as userAvatar, c.name as customerName
         FROM follow_ups f
@@ -658,6 +710,7 @@ activitiesRoutes.get('/:id', async (req: any, res: any) => {
         const f = fRows[0];
         return res.json({
           id,
+          eventId: id,
           tenantId: targetTenant,
           type: 'ACTIVITY',
           subject: `Follow-up: ${f.title || 'Untitled'}`,
@@ -677,11 +730,11 @@ activitiesRoutes.get('/:id', async (req: any, res: any) => {
 
     if (id.startsWith('VISIT:')) {
       const parts = id.split(':');
-      const vId = parts[2];
+      const vId = parts.length > 2 ? parts[2] : parts[1];
       const [vRows]: any = await pool.query(`
         SELECT v.*, u.name as userName, u.avatar as userAvatar, c.name as customerName
         FROM visits v
-        LEFT JOIN users u ON u.id = v.userId
+        LEFT JOIN users u ON u.id = v.picId
         LEFT JOIN customers c ON c.id = v.customerId
         WHERE v.id = ? AND v.tenantId = ?
       `, [vId, targetTenant]);
@@ -689,12 +742,13 @@ activitiesRoutes.get('/:id', async (req: any, res: any) => {
         const v = vRows[0];
         return res.json({
           id,
+          eventId: id,
           tenantId: targetTenant,
           type: 'ACTIVITY',
           subject: `Visit: ${v.title || v.location || 'Client Visit'}`,
           description: v.notes || v.purpose || 'Client site visit',
           occurredAt: v.checkOutTime || v.checkInTime || v.createdAt,
-          userId: v.userId,
+          userId: v.picId,
           userName: v.userName,
           userAvatar: v.userAvatar,
           customerId: v.customerId,
@@ -708,7 +762,7 @@ activitiesRoutes.get('/:id', async (req: any, res: any) => {
 
     if (id.startsWith('TASK:')) {
       const parts = id.split(':');
-      const tId = parts[2];
+      const tId = parts.length > 2 ? parts[2] : parts[1];
       const [tRows]: any = await pool.query(`
         SELECT t.*, u.name as userName, u.avatar as userAvatar, c.name as customerName
         FROM tasks t
@@ -720,6 +774,7 @@ activitiesRoutes.get('/:id', async (req: any, res: any) => {
         const t = tRows[0];
         return res.json({
           id,
+          eventId: id,
           tenantId: targetTenant,
           type: 'ACTIVITY',
           subject: `Task: ${t.title || 'Untitled Task'}`,
@@ -733,6 +788,69 @@ activitiesRoutes.get('/:id', async (req: any, res: any) => {
           entityType: 'TASK',
           entityId: t.id,
           metadata: { status: t.statusId, priority: t.priorityId }
+        });
+      }
+    }
+
+    if (id.startsWith('PROJECT:')) {
+      const parts = id.split(':');
+      const pId = parts.length > 2 ? parts[2] : parts[1];
+      const [pRows]: any = await pool.query(`
+        SELECT p.*, u.name as userName, u.avatar as userAvatar, c.name as customerName
+        FROM projects p
+        LEFT JOIN users u ON u.id = p.picId
+        LEFT JOIN customers c ON c.id = p.customerId
+        WHERE p.id = ? AND p.tenantId = ?
+      `, [pId, targetTenant]);
+      if (pRows.length > 0) {
+        const p = pRows[0];
+        return res.json({
+          id,
+          eventId: id,
+          tenantId: targetTenant,
+          type: 'ACTIVITY',
+          subject: `Project: ${p.title || 'Project'}`,
+          description: p.description || 'Commercial project',
+          occurredAt: p.createdAt,
+          userId: p.picId,
+          userName: p.userName,
+          userAvatar: p.userAvatar,
+          customerId: p.customerId,
+          customerName: p.customerName,
+          entityType: 'PROJECT',
+          entityId: p.id,
+          metadata: { stage: p.stageId, status: p.status }
+        });
+      }
+    }
+
+    if (id.startsWith('CUSTOMER:')) {
+      const parts = id.split(':');
+      const cId = parts.length > 2 ? parts[2] : parts[1];
+      const [cRows]: any = await pool.query(`
+        SELECT c.*, u.name as userName, u.avatar as userAvatar
+        FROM customers c
+        LEFT JOIN users u ON u.id = c.picId
+        WHERE c.id = ? AND c.tenantId = ?
+      `, [cId, targetTenant]);
+      if (cRows.length > 0) {
+        const c = cRows[0];
+        return res.json({
+          id,
+          eventId: id,
+          tenantId: targetTenant,
+          type: 'ACTIVITY',
+          subject: `Customer: ${c.name || 'Customer'}`,
+          description: `Customer account registered: ${c.name}`,
+          occurredAt: c.createdAt,
+          userId: c.picId,
+          userName: c.userName,
+          userAvatar: c.userAvatar,
+          customerId: c.id,
+          customerName: c.name,
+          entityType: 'CUSTOMER',
+          entityId: c.id,
+          metadata: { status: c.status }
         });
       }
     }

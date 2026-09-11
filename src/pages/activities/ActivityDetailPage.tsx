@@ -109,7 +109,7 @@ export const ActivityDetailPage: React.FC = () => {
               {activity.changes && activity.changes.length > 0 ? (
                 <div className="space-y-4">
                   {activity.changes.map((change, idx) => (
-                    <div key={idx} className="flex flex-col">
+                    <div key={`change-${change.field}-${idx}`} className="flex flex-col">
                       <span className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">{change.field}</span>
                       <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
                         {/* Previous Value */}
@@ -235,14 +235,14 @@ export const ActivityDetailPage: React.FC = () => {
               <ul className="space-y-3">
                 <li className="flex justify-between items-center pb-3 border-b border-slate-100 last:border-0 last:pb-0">
                   <span className="text-xs font-semibold text-slate-500">Activity ID</span>
-                  <span className="text-xs font-mono font-medium text-slate-800">{activity.id}</span>
+                  <span className="text-xs font-mono font-medium text-slate-800">{(activity as any).eventId || activity.id}</span>
                 </li>
                 <li className="flex justify-between items-center pb-3 border-b border-slate-100 last:border-0 last:pb-0">
                   <span className="text-xs font-semibold text-slate-500">Tenant ID</span>
                   <span className="text-xs font-mono font-medium text-slate-800">{activity.tenantId}</span>
                 </li>
                 {activity.metadata && Object.entries(activity.metadata).map(([key, value]) => (
-                  <li key={key} className="flex justify-between items-center pb-3 border-b border-slate-100 last:border-0 last:pb-0">
+                  <li key={`meta-${key}`} className="flex justify-between items-center pb-3 border-b border-slate-100 last:border-0 last:pb-0">
                     <span className="text-xs font-semibold text-slate-500 capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}</span>
                     <span className="text-xs font-medium text-slate-800 max-w-[120px] text-right truncate" title={String(value)}>{String(value)}</span>
                   </li>

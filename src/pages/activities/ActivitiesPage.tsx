@@ -90,6 +90,26 @@ export const ActivitiesPage: React.FC = () => {
     'Comment Added'
   ];
 
+  const uniqueCustomers = useMemo(() => {
+    const seen = new Set<string>();
+    return customers.filter(c => {
+      const id = String(c.id || '');
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  }, [customers]);
+
+  const uniqueUsers = useMemo(() => {
+    const seen = new Set<string>();
+    return users.filter(u => {
+      const id = String(u.id || '');
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  }, [users]);
+
   const filteredActivities = useMemo(() => {
     return activities.filter(a => {
       if (selectedCustomer !== 'ALL' && a.customerId !== selectedCustomer) return false;
@@ -108,6 +128,24 @@ export const ActivitiesPage: React.FC = () => {
       return true;
     });
   }, [activities, selectedCustomer, selectedUser, selectedPic, activityType]);
+
+  // Canonical Activity Item Key Resolution
+  const getActivityItemKey = (activity: any, index: number): string => {
+    if (activity?.eventId && typeof activity.eventId === 'string' && activity.eventId.trim().length > 0) {
+      return activity.eventId.trim();
+    }
+    if (activity?.id && typeof activity.id === 'string' && activity.id.trim().length > 0) {
+      return activity.id.trim();
+    }
+    const entityType = activity?.entityType || activity?.entity || 'ACTIVITY';
+    const entityId = activity?.entityId || 'NOID';
+    const eventType = activity?.eventType || activity?.typeId || activity?.type || 'EVENT';
+    const occurredAt = activity?.occurredAt || '';
+    if (occurredAt || entityId !== 'NOID') {
+      return `${entityType}:${entityId}:${eventType}:${occurredAt}:${index}`;
+    }
+    return `activity-fallback-${index}`;
+  };
 
   // Helper to determine icon and color based on activity type or subject
   const getActivityStyling = (activity: any) => {
@@ -204,7 +242,7 @@ export const ActivitiesPage: React.FC = () => {
         >
           <option value="ALL">All Activity Types</option>
           {activityTypesList.map(type => (
-            <option key={type} value={type}>{type}</option>
+            <option key={`type-${type}`} value={type}>{type}</option>
           ))}
         </select>
 
@@ -215,8 +253,8 @@ export const ActivitiesPage: React.FC = () => {
           className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
         >
           <option value="ALL">All Customers</option>
-          {customers.map(c => (
-            <option key={c.id} value={c.id}>{c.name}</option>
+          {uniqueCustomers.map(c => (
+            <option key={`cust-${c.id}`} value={c.id}>{c.name}</option>
           ))}
         </select>
 
@@ -227,8 +265,8 @@ export const ActivitiesPage: React.FC = () => {
           className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
         >
           <option value="ALL">All Users</option>
-          {users.map(u => (
-            <option key={u.id} value={u.id}>{u.name}</option>
+          {uniqueUsers.map(u => (
+            <option key={`user-${u.id}`} value={u.id}>{u.name}</option>
           ))}
         </select>
         
@@ -239,7 +277,7 @@ export const ActivitiesPage: React.FC = () => {
           className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
         >
           <option value="ALL">All PICs</option>
-          {users.map(u => (
+          {uniqueUsers.map(u => (
             <option key={`pic-${u.id}`} value={u.id}>{u.name}</option>
           ))}
         </select>
@@ -253,11 +291,37 @@ export const ActivitiesPage: React.FC = () => {
             No activities found matching your filters.
           </div>
         ) : (
-          filteredActivities.map((activity) => {
-            const styling = getActivityStyling(activity);
+          (() => {
+            const seenTimelineKeys = new Set<string>();
+            return filteredActivities.map((activity, index) => {
+              // 1. eventId if available
+              // 2. id if available
+              // 3. deterministic fallback that is always unique and not index-only
+              let rawKey = '';
+              if (activity?.eventId && typeof activity.eventId === 'string' && activity.eventId.trim()) {
+                rawKey = `activity-${activity.eventId.trim()}`;
+              } else if (activity?.id && typeof activity.id === 'string' && activity.id.trim()) {
+                rawKey = `activity-${activity.id.trim()}`;
+              } else {
+                const entityType = activity?.entityType || activity?.entity || 'ACTIVITY';
+                const entityId = activity?.entityId || 'NOID';
+                const eventType = activity?.eventType || activity?.typeId || activity?.type || 'EVENT';
+                const occurredAt = activity?.occurredAt || '';
+                rawKey = `activity-${entityType}-${entityId}-${eventType}-${occurredAt}-${index}`;
+              }
+
+              // Guarantee uniqueness across duplicate events or edge cases
+              let uniqueKey = rawKey;
+              if (seenTimelineKeys.has(uniqueKey)) {
+                uniqueKey = `${rawKey}-dup-${index}`;
+              }
+              seenTimelineKeys.add(uniqueKey);
+
+              const targetDetailId = activity.eventId || activity.id;
+              const styling = getActivityStyling(activity);
             
-            return (
-              <div key={activity.id} className="relative flex items-start gap-6 mb-8 last:mb-0 group">
+              return (
+                <div key={uniqueKey} className="relative flex items-start gap-6 mb-8 last:mb-0 group">
                 
                 {/* Timeline Node */}
                 <div className={`absolute left-0 w-10 h-10 rounded-full border-4 border-[#F8F9FA] flex items-center justify-center shadow-sm z-10 transition-transform group-hover:scale-110 ${styling.color}`}>
@@ -267,7 +331,7 @@ export const ActivitiesPage: React.FC = () => {
                 {/* Content Card */}
                 <div 
                   className="flex-1 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md hover:border-indigo-300 transition-all ml-12 sm:ml-14 cursor-pointer"
-                  onClick={() => navigate(`/activities/${activity.id}`)}
+                  onClick={() => targetDetailId && navigate(`/activities/${encodeURIComponent(targetDetailId)}`)}
                 >
                   <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                     
@@ -275,17 +339,17 @@ export const ActivitiesPage: React.FC = () => {
                       {/* Header / Subject */}
                       <div className="flex items-center gap-2">
                         <span className={`px-2.5 py-1 ${styling.color.replace('text-', 'text-opacity-80 text-').replace('bg-', 'bg-opacity-50 bg-')} text-[10px] font-extrabold rounded-md uppercase tracking-wider`}>
-                          {activity.type}
+                          {activity.type || activity.eventType}
                         </span>
-                        <h3 className="text-sm font-extrabold text-slate-900 leading-tight">{activity.subject}</h3>
+                        <h3 className="text-sm font-extrabold text-slate-900 leading-tight">{activity.subject || activity.title || 'Activity Event'}</h3>
                       </div>
                       
                       {/* Entity & Customer Info */}
                       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs font-semibold">
-                        {activity.entityType && (
+                        {(activity.entityType || activity.entity) && (
                           <div className="flex items-center gap-1.5 text-slate-600">
                             <span className="text-slate-400">Entity:</span>
-                            <span className="text-slate-800">{activity.entityType} {activity.entityId ? `(#${activity.entityId.substring(0,6)})` : ''}</span>
+                            <span className="text-slate-800">{activity.entityType || activity.entity} {activity.entityId ? `(#${activity.entityId.substring(0,6)})` : ''}</span>
                           </div>
                         )}
                         {activity.customerName && (
@@ -301,7 +365,7 @@ export const ActivitiesPage: React.FC = () => {
 
                       {/* Description / Details Box */}
                       <div className="p-3.5 bg-slate-50 border border-slate-100 rounded-xl text-xs text-slate-700 leading-relaxed font-medium">
-                        {activity.description}
+                        {activity.description || 'No description provided.'}
                       </div>
                     </div>
 
@@ -316,13 +380,13 @@ export const ActivitiesPage: React.FC = () => {
                         <span className="text-[10px] text-slate-400 uppercase tracking-wider font-extrabold">Changed By</span>
                         <div className="flex items-center gap-2 bg-slate-50 px-2 py-1.5 rounded-lg border border-slate-100">
                           {activity.userAvatar ? (
-                            <img src={activity.userAvatar} alt={activity.userName || 'User'} className="w-6 h-6 rounded-full object-cover border border-slate-200" />
+                            <img src={activity.userAvatar} alt={activity.userName || activity.actorName || 'User'} className="w-6 h-6 rounded-full object-cover border border-slate-200" />
                           ) : (
                             <div className="w-6 h-6 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-[9px] font-bold border border-slate-300">
-                              {(activity.userName || '?').charAt(0)}
+                              {(activity.userName || activity.actorName || '?').charAt(0)}
                             </div>
                           )}
-                          <span className="font-semibold text-[#1a1c1c]">{activity.userName || 'Unknown User'}</span>
+                          <span className="font-semibold text-[#1a1c1c]">{activity.userName || activity.actorName || 'Unknown User'}</span>
                         </div>
                       </div>
                     </div>
@@ -331,8 +395,9 @@ export const ActivitiesPage: React.FC = () => {
                 </div>
               </div>
             );
-          })
-        )}
+          });
+        })()
+      )}
       </div>
 
       {/* Footer Pagination */}
@@ -352,7 +417,7 @@ export const ActivitiesPage: React.FC = () => {
 
           {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1).map((p) => (
             <button
-              key={p}
+              key={`page-${p}`}
               onClick={() => setCurrentPage(p)}
               className={`w-8 h-8 rounded text-xs font-bold flex items-center justify-center cursor-pointer ${
                 currentPage === p ? 'bg-[#4744e5] text-white shadow-2xs' : 'text-[#1a1c1c] hover:bg-[#f3f3f3]'
