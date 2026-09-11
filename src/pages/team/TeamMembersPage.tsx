@@ -15,6 +15,7 @@ export const TeamMembersPage: React.FC = () => {
 
   // Modals state
   const [showCreateTeamModal, setShowCreateTeamModal] = useState(false);
+  const [showEditTeamModal, setShowEditTeamModal] = useState(false);
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
   const [showChangeLeaderModal, setShowChangeLeaderModal] = useState(false);
 
@@ -22,6 +23,8 @@ export const TeamMembersPage: React.FC = () => {
   const [newTeamName, setNewTeamName] = useState('');
   const [newTeamDesc, setNewTeamDesc] = useState('');
   const [newTeamLeaderId, setNewTeamLeaderId] = useState('');
+  const [editTeamName, setEditTeamName] = useState('');
+  const [editTeamDesc, setEditTeamDesc] = useState('');
   const [candidateUsers, setCandidateUsers] = useState<User[]>([]);
 
   // Add member state
@@ -146,6 +149,34 @@ export const TeamMembersPage: React.FC = () => {
       await loadData();
     } else {
       alert(res.error || 'Failed to change team leader.');
+    }
+  };
+
+  const handleOpenEditTeam = () => {
+    if (!selectedTeam) return;
+    setEditTeamName(selectedTeam.name);
+    setEditTeamDesc(selectedTeam.description || '');
+    setShowEditTeamModal(true);
+  };
+
+  const handleUpdateTeam = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedTeam || !editTeamName.trim()) return;
+
+    const res = await teamsApi.updateTeam(selectedTeam.id, {
+      name: editTeamName.trim(),
+      description: editTeamDesc.trim()
+    });
+
+    if (res.success) {
+      setShowEditTeamModal(false);
+      await loadData();
+    } else {
+      if (res.code === 'DUPLICATE_TEAM_NAME') {
+        alert('A team with this name already exists in this organization.');
+      } else {
+        alert(res.error || 'Failed to update team.');
+      }
     }
   };
 
@@ -300,6 +331,14 @@ export const TeamMembersPage: React.FC = () => {
                   >
                     <span className="material-symbols-outlined text-[16px]">person_add</span>
                     <span>Add Member</span>
+                  </button>
+                  <button
+                    onClick={handleOpenEditTeam}
+                    title="Edit Team"
+                    className="p-1.5 text-[#464555] hover:bg-slate-100 rounded-lg border border-[#E1E1E1] transition-colors flex items-center gap-1 text-xs font-semibold"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">edit</span>
+                    <span>Edit</span>
                   </button>
                   <button
                     onClick={handleDeleteTeam}
@@ -597,6 +636,60 @@ export const TeamMembersPage: React.FC = () => {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT TEAM MODAL */}
+      {showEditTeamModal && selectedTeam && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl border border-[#E1E1E1] shadow-xl max-w-md w-full p-6 space-y-4 font-['Inter',sans-serif]">
+            <div className="flex justify-between items-center border-b border-[#E1E1E1] pb-3">
+              <h2 className="text-base font-bold text-[#1a1c1c] font-['Hanken_Grotesk']">Edit Team Details</h2>
+              <button onClick={() => setShowEditTeamModal(false)} className="text-[#767587] hover:text-[#1a1c1c]">
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateTeam} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Team Name *</label>
+                <input
+                  type="text"
+                  required
+                  value={editTeamName}
+                  onChange={(e) => setEditTeamName(e.target.value)}
+                  className="w-full px-3 py-2 border border-[#E1E1E1] rounded-lg text-xs bg-white focus:outline-hidden focus:border-[#4744e5]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[#1a1c1c] mb-1">Description</label>
+                <textarea
+                  rows={2}
+                  value={editTeamDesc}
+                  onChange={(e) => setEditTeamDesc(e.target.value)}
+                  className="w-full px-3 py-2 border border-[#E1E1E1] rounded-lg text-xs bg-white focus:outline-hidden focus:border-[#4744e5]"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-[#E1E1E1]">
+                <button
+                  type="button"
+                  onClick={() => setShowEditTeamModal(false)}
+                  className="px-4 py-2 border border-[#E1E1E1] text-[#1a1c1c] rounded-lg text-xs font-semibold hover:bg-[#f9f9f9]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!editTeamName.trim()}
+                  className="px-4 py-2 bg-[#4744e5] hover:bg-[#2c24ce] disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-all"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

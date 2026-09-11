@@ -102,15 +102,15 @@ async function handleFollowUpsList(req: any, res: any, forcedScope?: string) {
   const requestedScope = (forcedScope || req.query.scope || 'my').toLowerCase().trim();
 
   // Validate Scope Authorization
-  let effectiveScope: 'all' | 'my' = 'my';
-  if (requestedScope === 'all') {
+  let effectiveScope: 'all' | 'my' | 'team' = 'my';
+  if (requestedScope === 'all' || requestedScope === 'team') {
     if (semanticRole !== 'TENANT_ADMIN' && semanticRole !== 'SUPERVISOR' && semanticRole !== 'SUPER_ADMIN') {
       return res.status(403).json({
         error: 'Access denied: All Follow-ups scope is restricted to Tenant Admin and Supervisor',
         code: 'SCOPE_ACCESS_DENIED'
       });
     }
-    effectiveScope = 'all';
+    effectiveScope = requestedScope as any;
   } else {
     effectiveScope = 'my';
   }
@@ -119,8 +119,8 @@ async function handleFollowUpsList(req: any, res: any, forcedScope?: string) {
   let where: string;
   let params: any[];
 
-  if (effectiveScope === 'all') {
-    if (semanticRole === 'SUPER_ADMIN' || semanticRole === 'TENANT_ADMIN' || actorDataScope === 'ORGANIZATION' || actorPermissions.includes('ALL') || actorPermissions.includes('MANAGE_TENANT')) {
+  if (effectiveScope === 'all' || effectiveScope === 'team') {
+    if (effectiveScope === 'all' && (semanticRole === 'SUPER_ADMIN' || semanticRole === 'TENANT_ADMIN' || actorDataScope === 'ORGANIZATION' || actorPermissions.includes('ALL') || actorPermissions.includes('MANAGE_TENANT'))) {
       where = 'WHERE f.tenantId = ?';
       params = [targetTenant];
     } else {
