@@ -75,17 +75,8 @@ const checkPermission = (req: any, permissionCode: string): boolean => {
   return perms.includes(permissionCode) || perms.includes('ALL') || perms.includes('MANAGE_TENANT');
 };
 
-export function normalizeSemanticRole(role?: string | null, isPlatformUser?: boolean): string {
-  if (isPlatformUser) return 'SUPER_ADMIN';
-  if (!role) return 'SALES_REP';
-  const upper = String(role).toUpperCase();
-  if (upper === 'SUPER_ADMIN' || upper.endsWith('SUPER_ADMIN')) return 'SUPER_ADMIN';
-  if (upper === 'TENANT_ADMIN' || upper.endsWith('TENANT_ADMIN') || upper.startsWith('ROL-ADM') || upper.includes('ADMIN')) return 'TENANT_ADMIN';
-  if (upper === 'SUPERVISOR' || upper.endsWith('SUPERVISOR') || upper.startsWith('ROL-SUP')) return 'SUPERVISOR';
-  if (upper === 'SALES_MANAGER' || upper.endsWith('SALES_MANAGER') || upper.includes('MANAGER')) return 'SALES_MANAGER';
-  if (upper === 'SALES_REP' || upper === 'SALES_REPRESENTATIVE' || upper.endsWith('SALES_REP') || upper.startsWith('ROL-REP')) return 'SALES_REP';
-  return upper;
-}
+import { normalizeSemanticRole, canAccessAllScope } from './navigation.routes';
+export { normalizeSemanticRole, canAccessAllScope };
 
 // -------------------------------------------------------------------------
 // 1. GET /api/follow-ups - List follow-ups with filters & pagination

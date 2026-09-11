@@ -5,6 +5,7 @@ import { Visit, Customer, User, VisitStatus } from '../../types';
 import { crmApi } from '../../services/crmApi';
 import { usersApi } from '../../services/usersApi';
 import { formatDate, formatTime } from '../../utils/formatters';
+import { canAccessAllScope } from '../../utils/roleUtils';
 import {
   formatYearMonth,
   parseYearMonth,
@@ -50,7 +51,7 @@ export const VisitsPage: React.FC = () => {
   const urlMonth = sanitizeMonthParam(searchParams.get('month'));
 
   // Permissions & Scope
-  const canAccessAll = currentUser?.role === 'TENANT_ADMIN' || currentUser?.role === 'SUPERVISOR' || currentUser?.role === 'SUPER_ADMIN';
+  const canAccessAll = canAccessAllScope(currentUser?.role, (currentUser as any)?.isPlatformUser);
   const requestedScope = searchParams.get('scope') || 'my';
   const activeScope = (canAccessAll && requestedScope === 'all') ? 'all' : 'my';
 

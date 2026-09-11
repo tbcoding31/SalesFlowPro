@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { Customer, User } from '../../types';
 import { crmApi } from '../../services/crmApi';
 import { usersApi } from '../../services/usersApi';
+import { canAccessAllScope } from '../../utils/roleUtils';
 
 export const ActivitiesPage: React.FC = () => {
   const navigate = useNavigate();
@@ -11,8 +12,8 @@ export const ActivitiesPage: React.FC = () => {
   const { currentTenant, currentUser } = useAuth();
   const tenantId = currentTenant?.id;
 
-  // Scope Enforcement (All vs My)
-  const canAccessAll = currentUser?.role === 'TENANT_ADMIN' || currentUser?.role === 'SUPERVISOR' || currentUser?.role === 'SUPER_ADMIN';
+  // Scope Enforcement (All vs My) with resilient semantic role normalization
+  const canAccessAll = canAccessAllScope(currentUser?.role, (currentUser as any)?.isPlatformUser);
   const requestedScope = searchParams.get('scope') || 'my';
   const activeScope = (canAccessAll && requestedScope === 'all') ? 'all' : 'my';
 

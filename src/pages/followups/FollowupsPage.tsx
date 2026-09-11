@@ -7,14 +7,16 @@ import { CreateFollowUpModal } from '../../components/followups/CreateFollowUpMo
 import { CompleteFollowUpModal } from '../../components/followups/CompleteFollowUpModal';
 import { CancelFollowUpModal } from '../../components/followups/CancelFollowUpModal';
 
+import { canAccessAllScope } from '../../utils/roleUtils';
+
 export const FollowupsPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { currentTenant, currentUser } = useAuth();
   const tenantId = currentTenant?.id || '';
 
-  // Scope Enforcement (All vs My)
-  const canAccessAll = currentUser?.role === 'TENANT_ADMIN' || currentUser?.role === 'SUPERVISOR' || currentUser?.role === 'SUPER_ADMIN';
+  // Scope Enforcement (All vs My) with resilient semantic role normalization
+  const canAccessAll = canAccessAllScope(currentUser?.role, (currentUser as any)?.isPlatformUser);
   const requestedScope = searchParams.get('scope') || 'my';
   const activeScope = (canAccessAll && requestedScope === 'all') ? 'all' : 'my';
 

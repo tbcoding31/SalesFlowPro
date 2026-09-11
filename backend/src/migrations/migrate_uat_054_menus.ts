@@ -350,21 +350,45 @@ export const MENUS_SEED: MenuItemDef[] = [
     roles: ['TENANT_ADMIN', 'SUPERVISOR', 'SALES_MANAGER', 'SALES_REP']
   },
 
-  // Item: Follow-ups
+  // Submenu: Follow-ups
   {
     id: 'MENU-TNT-FOLLOWUPS',
     code: 'FOLLOW_UPS',
     label: 'Follow-ups',
-    route: '/followups',
+    route: '/follow-ups',
     iconKey: 'call',
     parentId: 'MENU-TNT-SALES',
     menuScope: 'TENANT',
-    menuType: 'ITEM',
+    menuType: 'SUBMENU',
     displayOrder: 250,
-    roles: ['TENANT_ADMIN', 'SUPERVISOR', 'SALES_MANAGER', 'SALES_REP']
+    roles: ['TENANT_ADMIN', 'SUPERVISOR', 'SALES_MANAGER', 'SALES_REP', 'SUPER_ADMIN']
+  },
+  {
+    id: 'MENU-TNT-MY-FOLLOWUPS',
+    code: 'MY_FOLLOWUPS',
+    label: 'My Follow-ups',
+    route: '/follow-ups?scope=my',
+    iconKey: 'call',
+    parentId: 'MENU-TNT-FOLLOWUPS',
+    menuScope: 'TENANT',
+    menuType: 'ITEM',
+    displayOrder: 251,
+    roles: ['TENANT_ADMIN', 'SUPERVISOR', 'SALES_MANAGER', 'SALES_REP', 'SUPER_ADMIN']
+  },
+  {
+    id: 'MENU-TNT-ALL-FOLLOWUPS',
+    code: 'ALL_FOLLOWUPS',
+    label: 'All Follow-ups',
+    route: '/follow-ups?scope=all',
+    iconKey: 'groups',
+    parentId: 'MENU-TNT-FOLLOWUPS',
+    menuScope: 'TENANT',
+    menuType: 'ITEM',
+    displayOrder: 252,
+    roles: ['TENANT_ADMIN', 'SUPERVISOR', 'SUPER_ADMIN']
   },
 
-  // Item: Activities
+  // Submenu: Activities
   {
     id: 'MENU-TNT-ACTIVITIES',
     code: 'ACTIVITIES',
@@ -373,9 +397,33 @@ export const MENUS_SEED: MenuItemDef[] = [
     iconKey: 'timeline',
     parentId: 'MENU-TNT-SALES',
     menuScope: 'TENANT',
-    menuType: 'ITEM',
+    menuType: 'SUBMENU',
     displayOrder: 260,
-    roles: ['TENANT_ADMIN', 'SUPERVISOR', 'SALES_MANAGER', 'SALES_REP']
+    roles: ['TENANT_ADMIN', 'SUPERVISOR', 'SALES_MANAGER', 'SALES_REP', 'SUPER_ADMIN']
+  },
+  {
+    id: 'MENU-TNT-MY-ACTIVITIES',
+    code: 'MY_ACTIVITIES',
+    label: 'My Activities',
+    route: '/activities?scope=my',
+    iconKey: 'timeline',
+    parentId: 'MENU-TNT-ACTIVITIES',
+    menuScope: 'TENANT',
+    menuType: 'ITEM',
+    displayOrder: 261,
+    roles: ['TENANT_ADMIN', 'SUPERVISOR', 'SALES_MANAGER', 'SALES_REP', 'SUPER_ADMIN']
+  },
+  {
+    id: 'MENU-TNT-ALL-ACTIVITIES',
+    code: 'ALL_ACTIVITIES',
+    label: 'All Activities',
+    route: '/activities?scope=all',
+    iconKey: 'analytics',
+    parentId: 'MENU-TNT-ACTIVITIES',
+    menuScope: 'TENANT',
+    menuType: 'ITEM',
+    displayOrder: 262,
+    roles: ['TENANT_ADMIN', 'SUPERVISOR', 'SUPER_ADMIN']
   },
 
   // Group: ADMINISTRATION
@@ -647,10 +695,10 @@ export async function runMenuMigration() {
       }
     }
 
-    // Explicitly ensure ALL_TASKS and ALL_VISITS are DENIED for SALES_MANAGER and SALES_REP
+    // Explicitly ensure ALL_TASKS, ALL_VISITS, ALL_FOLLOWUPS, and ALL_ACTIVITIES are DENIED for SALES_MANAGER and SALES_REP
     await conn.query(`
       DELETE FROM menu_role_access 
-      WHERE menuId IN ('MENU-TNT-ALL-TASKS', 'MENU-TNT-ALL-VISITS') 
+      WHERE menuId IN ('MENU-TNT-ALL-TASKS', 'MENU-TNT-ALL-VISITS', 'MENU-TNT-ALL-FOLLOWUPS', 'MENU-TNT-ALL-ACTIVITIES') 
       AND roleCode IN ('SALES_MANAGER', 'SALES_REP')
     `);
 

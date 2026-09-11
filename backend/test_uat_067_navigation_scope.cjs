@@ -257,6 +257,105 @@ async function runUAT067Tests() {
       assert(true, '24. Detail test passed (no activities available to test)');
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // SUITE 6: DATABASE NAVIGATION, ROLE VISIBILITY & IDEMPOTENCY
+    // ─────────────────────────────────────────────────────────────
+    console.log('\n--- SUITE 6: Database Navigation & Role Visibility ---');
+
+    // Helper to find a menu node recursively by code
+    function findMenuByCode(nodes, code) {
+      if (!Array.isArray(nodes)) return null;
+      for (const n of nodes) {
+        if (n.code === code) return n;
+        if (n.children && n.children.length > 0) {
+          const found = findMenuByCode(n.children, code);
+          if (found) return found;
+        }
+      }
+      return null;
+    }
+
+    // 25. Navigation for SALES_REP
+    const navRepRes = await req('/api/navigation/me', { headers: headersRepA1 });
+    assert(navRepRes.status === 200, '25. SALES_REP GET /api/navigation/me returns 200 OK');
+    const fuMenuRep = findMenuByCode(navRepRes.body?.data, 'FOLLOW_UPS');
+    assert(fuMenuRep !== null, '    Follow-ups submenu exists for SALES_REP');
+    const myFuRep = findMenuByCode(fuMenuRep?.children, 'MY_FOLLOWUPS');
+    const allFuRep = findMenuByCode(fuMenuRep?.children, 'ALL_FOLLOWUPS');
+    assert(myFuRep !== null, '    My Follow-ups is visible for SALES_REP (route: ' + myFuRep?.route + ')');
+    assert(myFuRep?.route === '/follow-ups?scope=my', '    My Follow-ups route matches /follow-ups?scope=my');
+    assert(allFuRep === null, '    All Follow-ups is NOT visible for SALES_REP');
+
+    const actMenuRep = findMenuByCode(navRepRes.body?.data, 'ACTIVITIES');
+    assert(actMenuRep !== null, '    Activities submenu exists for SALES_REP');
+    const myActRep = findMenuByCode(actMenuRep?.children, 'MY_ACTIVITIES');
+    const allActRep = findMenuByCode(actMenuRep?.children, 'ALL_ACTIVITIES');
+    assert(myActRep !== null, '    My Activities is visible for SALES_REP (route: ' + myActRep?.route + ')');
+    assert(myActRep?.route === '/activities?scope=my', '    My Activities route matches /activities?scope=my');
+    assert(allActRep === null, '    All Activities is NOT visible for SALES_REP');
+
+    // 26. Navigation for SALES_MANAGER
+    const navMgrRes = await req('/api/navigation/me', { headers: headersMgrA });
+    assert(navMgrRes.status === 200, '26. SALES_MANAGER GET /api/navigation/me returns 200 OK');
+    const fuMenuMgr = findMenuByCode(navMgrRes.body?.data, 'FOLLOW_UPS');
+    const actMenuMgr = findMenuByCode(navMgrRes.body?.data, 'ACTIVITIES');
+    assert(findMenuByCode(fuMenuMgr?.children, 'MY_FOLLOWUPS') !== null, '    My Follow-ups is visible for SALES_MANAGER');
+    assert(findMenuByCode(fuMenuMgr?.children, 'ALL_FOLLOWUPS') === null, '    All Follow-ups is NOT visible for SALES_MANAGER');
+    assert(findMenuByCode(actMenuMgr?.children, 'MY_ACTIVITIES') !== null, '    My Activities is visible for SALES_MANAGER');
+    assert(findMenuByCode(actMenuMgr?.children, 'ALL_ACTIVITIES') === null, '    All Activities is NOT visible for SALES_MANAGER');
+
+    // 27. Navigation for TENANT_ADMIN
+    const navAdminRes = await req('/api/navigation/me', { headers: headersAdminA });
+    assert(navAdminRes.status === 200, '27. TENANT_ADMIN GET /api/navigation/me returns 200 OK');
+    const fuMenuAdmin = findMenuByCode(navAdminRes.body?.data, 'FOLLOW_UPS');
+    const actMenuAdmin = findMenuByCode(navAdminRes.body?.data, 'ACTIVITIES');
+    assert(findMenuByCode(fuMenuAdmin?.children, 'MY_FOLLOWUPS') !== null, '    My Follow-ups is visible for TENANT_ADMIN');
+    assert(findMenuByCode(fuMenuAdmin?.children, 'ALL_FOLLOWUPS') !== null, '    All Follow-ups is visible for TENANT_ADMIN');
+    assert(findMenuByCode(actMenuAdmin?.children, 'MY_ACTIVITIES') !== null, '    My Activities is visible for TENANT_ADMIN');
+    assert(findMenuByCode(actMenuAdmin?.children, 'ALL_ACTIVITIES') !== null, '    All Activities is visible for TENANT_ADMIN');
+
+    // 28. Navigation for SUPERVISOR
+    const navSupRes = await req('/api/navigation/me', { headers: headersSupA });
+    assert(navSupRes.status === 200, '28. SUPERVISOR GET /api/navigation/me returns 200 OK');
+    const fuMenuSup = findMenuByCode(navSupRes.body?.data, 'FOLLOW_UPS');
+    const actMenuSup = findMenuByCode(navSupRes.body?.data, 'ACTIVITIES');
+    assert(findMenuByCode(fuMenuSup?.children, 'MY_FOLLOWUPS') !== null, '    My Follow-ups is visible for SUPERVISOR');
+    assert(findMenuByCode(fuMenuSup?.children, 'ALL_FOLLOWUPS') !== null, '    All Follow-ups is visible for SUPERVISOR');
+    assert(findMenuByCode(actMenuSup?.children, 'MY_ACTIVITIES') !== null, '    My Activities is visible for SUPERVISOR');
+    assert(findMenuByCode(actMenuSup?.children, 'ALL_ACTIVITIES') !== null, '    All Activities is visible for SUPERVISOR');
+
+    // 29. Route Compatibility Aliases
+    console.log('\n--- SUITE 7: Route Compatibility & Aliases ---');
+    const canFuRes = await req('/api/follow-ups?scope=my', { headers: headersRepA1 });
+    const aliasFuRes = await req('/api/followups?scope=my', { headers: headersRepA1 });
+    const aliasFu2Res = await req('/api/follow_ups?scope=my', { headers: headersRepA1 });
+    assert(canFuRes.status === 200, '29. Canonical GET /api/follow-ups returns 200');
+    assert(aliasFuRes.status === 200, '    Compatibility GET /api/followups returns 200');
+    assert(aliasFu2Res.status === 200, '    Compatibility GET /api/follow_ups returns 200');
+
+    // 30. Role Normalization Resilience
+    console.log('\n--- SUITE 8: Role Normalization Resilience ---');
+    const { normalizeSemanticRole, canAccessAllScope } = require('./dist/routes/navigation.routes.js');
+    assert(normalizeSemanticRole('ROLE_TENANT_ADMIN') === 'TENANT_ADMIN', '30. normalizeSemanticRole("ROLE_TENANT_ADMIN") === "TENANT_ADMIN"');
+    assert(normalizeSemanticRole('ROL-ADM-001') === 'TENANT_ADMIN', '    normalizeSemanticRole("ROL-ADM-001") === "TENANT_ADMIN"');
+    assert(normalizeSemanticRole('ROLE_SUPERVISOR') === 'SUPERVISOR', '    normalizeSemanticRole("ROLE_SUPERVISOR") === "SUPERVISOR"');
+    assert(normalizeSemanticRole('ROL-SUP-01') === 'SUPERVISOR', '    normalizeSemanticRole("ROL-SUP-01") === "SUPERVISOR"');
+    assert(normalizeSemanticRole('ROLE_SALES_MANAGER') === 'SALES_MANAGER', '    normalizeSemanticRole("ROLE_SALES_MANAGER") === "SALES_MANAGER"');
+    assert(normalizeSemanticRole('ROL-MGR-01') === 'SALES_MANAGER', '    normalizeSemanticRole("ROL-MGR-01") === "SALES_MANAGER"');
+    assert(normalizeSemanticRole('ROLE_SALES_REP') === 'SALES_REP', '    normalizeSemanticRole("ROLE_SALES_REP") === "SALES_REP"');
+    assert(normalizeSemanticRole('ROL-REP-01') === 'SALES_REP', '    normalizeSemanticRole("ROL-REP-01") === "SALES_REP"');
+    assert(normalizeSemanticRole('SUPER_ADMIN') === 'SUPER_ADMIN', '    normalizeSemanticRole("SUPER_ADMIN") === "SUPER_ADMIN"');
+
+    assert(canAccessAllScope('ROLE_TENANT_ADMIN') === true, '    canAccessAllScope("ROLE_TENANT_ADMIN") === true');
+    assert(canAccessAllScope('ROL-SUP-01') === true, '    canAccessAllScope("ROL-SUP-01") === true');
+    assert(canAccessAllScope('ROLE_SALES_MANAGER') === false, '    canAccessAllScope("ROLE_SALES_MANAGER") === false');
+    assert(canAccessAllScope('ROL-REP-01') === false, '    canAccessAllScope("ROL-REP-01") === false');
+
+    // 31. Idempotency Check in Database
+    console.log('\n--- SUITE 9: Database Menu Idempotency Check ---');
+    const [dupRows] = await pool.query('SELECT code, COUNT(*) as c FROM app_menus GROUP BY code HAVING c > 1');
+    assert(dupRows.length === 0, '31. Zero duplicate menu codes in app_menus after migration');
+
   } catch (err) {
     console.error('Fatal test error:', err);
     failed++;

@@ -7,6 +7,7 @@ import { crmApi } from '../../services/crmApi';
 import { usersApi } from '../../services/usersApi';
 import { formatDate } from '../../utils/formatters';
 import { CreateFollowUpModal } from '../../components/followups/CreateFollowUpModal';
+import { canAccessAllScope } from '../../utils/roleUtils';
 
 export function formatTaskSourceType(sourceType?: string | null): string {
   const s = String(sourceType || '').toUpperCase();
@@ -123,7 +124,7 @@ export const TasksPage: React.FC = () => {
   const activeProject = searchParams.get('project') || 'ALL';
 
   // Permissions & Scope
-  const canAccessAll = currentUser?.role === 'TENANT_ADMIN' || currentUser?.role === 'SUPERVISOR' || currentUser?.role === 'SUPER_ADMIN';
+  const canAccessAll = canAccessAllScope(currentUser?.role, (currentUser as any)?.isPlatformUser);
   const requestedScope = searchParams.get('scope') || 'my';
   const activeScope = (canAccessAll && requestedScope === 'all') ? 'all' : 'my';
 

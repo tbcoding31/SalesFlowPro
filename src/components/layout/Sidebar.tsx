@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { navigationApi } from '../../services/navigationApi';
 import { AppMenuItem } from '../../types';
 import { resolveActiveMenuAndAncestors } from '../../utils/navigationResolution';
+import { normalizeSemanticRole } from '../../utils/roleUtils';
 
 interface SidebarProps {
   isOpen?: boolean;
@@ -56,7 +57,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen = false, onClose }) => 
   const navigate = useNavigate();
   const location = useLocation();
 
-  const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN' || (currentUser as any)?.roleCode === 'SUPER_ADMIN';
+  const isSuperAdmin = normalizeSemanticRole((currentUser as any)?.roleCode || currentUser?.role, (currentUser as any)?.isPlatformUser) === 'SUPER_ADMIN';
 
   const [menuTree, setMenuTree] = useState<AppMenuItem[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
